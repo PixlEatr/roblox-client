@@ -1,0 +1,13 @@
+{
+  "source_binary_sha256": "b6b2184109237a8fea5de33d3265ac026cda3db05dbe3d66f749c91b4297b870",
+  "source_build": "0.745.0.7451137",
+  "source_address": "0x1059c9b24",
+  "bytes": 99084,
+  "coefficients": 8257,
+  "coefficient_bytes": 12,
+  "table_sha256": "0b6cdf37e5817b29638fe705319618df725ffd2aafc0491d768ab6f162f42c3c",
+  "purpose": "verification-only public signature map; no signing or private key",
+  "verification_function": "1013fa42c",
+  "table_constructor": "1013fabb8",
+  "hash": "RBX::Crypto::HashStateBlake3,32 bytes,comparison digest[4:16]"
+}

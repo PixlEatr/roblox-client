@@ -1,0 +1,33 @@
+{
+  "version": 1,
+  "sequence": 7,
+  "job_id": "synthetic-snapshot-job",
+  "local_player": "scope:player-1",
+  "services": {
+    "Workspace": "scope:workspace",
+    "Players": "scope:players",
+    "RunService": "scope:run-service"
+  },
+  "class_parents": {
+    "Part": "BasePart",
+    "BasePart": "PVInstance",
+    "PVInstance": "Instance",
+    "Model": "PVInstance",
+    "Humanoid": "Instance",
+    "Players": "Instance",
+    "RunService": "Instance",
+    "Workspace": "WorldRoot",
+    "WorldRoot": "Model"
+  },
+  "defaults": {},
+  "default_origins": {},
+  "nodes": [
+    {"id":"scope:workspace","class_name":"Workspace","name":"Workspace","parent":null,"properties":{"Gravity":196.2}},
+    {"id":"scope:players","class_name":"Players","name":"Players","parent":null,"properties":{"LocalPlayer":{"$ref":"scope:player-1"}}},
+    {"id":"scope:run-service","class_name":"RunService","name":"Run Service","parent":null,"properties":{}},
+    {"id":"scope:player-1","class_name":"Player","name":"FixturePlayer","parent":"scope:players","properties":{"UserId":123,"Character":{"$ref":"scope:character-1"}}},
+    {"id":"scope:character-1","class_name":"Model","name":"FixtureCharacter","parent":"scope:workspace","properties":{}},
+    {"id":"scope:humanoid-1","class_name":"Humanoid","name":"Humanoid","parent":"scope:character-1","properties":{"Health":100,"WalkSpeed":16}},
+    {"id":"scope:root-1","class_name":"Part","name":"HumanoidRootPart","parent":"scope:character-1","properties":{"Anchored":true,"Position":{"$vector3":[1,2,3]},"CFrame":{"$cframe":{"position":[1,2,3],"rotation":[1,0,0,0,1,0,0,0,1]}}}}
+  ]
+}

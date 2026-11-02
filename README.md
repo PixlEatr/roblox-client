@@ -1,0 +1,1 @@
+this is an unfinished custom roblox client with a luau runtime, packet handling, and world replication. it can run luau scripts and has spawned a character in a private test, but movement and a full renderer still need work.

@@ -1,0 +1,23 @@
+{
+  "source_snapshot": true,
+  "build": "passed using bundled source",
+  "project_tests": {
+    "run": 87,
+    "passed": 86,
+    "skipped": 1,
+    "skip_reason": "local proprietary binary and layout not bundled"
+  },
+  "bytecode_loader_tests": {
+    "run": 5,
+    "passed": 5
+  },
+  "random_fixture_assertions": 692,
+  "world_source_fixture": "passed; mutations are local only",
+  "private_data_scan": {
+    "personal_paths_found": 0,
+    "cookie_invite_or_ticket_matches": 0,
+    "raw_captures_included": false,
+    "private_setup_files_included": false
+  },
+  "live_session_retested": false
+}

@@ -1,0 +1,6 @@
+{
+  "mode": "offline",
+  "job_id": "offline-fixture-job",
+  "is_studio": true,
+  "services": ["Workspace", "Players", "RunService"]
+}

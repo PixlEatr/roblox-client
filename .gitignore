@@ -1,0 +1,17 @@
+# local stuff stays local
+/secrets/
+/outputs/
+/ida/
+/.venv/
+/runtime/build/
+__pycache__/
+*.py[cod]
+.DS_Store
+*.log
+*.pcap
+*.pcapng
+*.i64
+*.idb
+/inputs/*
+!/inputs/bytecode-signature-v1-public.bin
+!/inputs/bytecode-signature-v1-public.json
