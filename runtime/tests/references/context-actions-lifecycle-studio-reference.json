@@ -1,0 +1,120 @@
+{
+  "steps": [
+    {
+      "name": "initial",
+      "rows": [
+        {
+          "stack": 1,
+          "priority": 2000
+        },
+        {
+          "stack": 2,
+          "priority": 2000
+        },
+        {
+          "stack": 3,
+          "priority": 2000
+        }
+      ]
+    },
+    {
+      "name": "rebind",
+      "rows": [
+        {
+          "stack": 3,
+          "priority": 2000
+        },
+        {
+          "stack": 1,
+          "priority": 2000
+        },
+        {
+          "stack": 2,
+          "priority": 2000
+        }
+      ]
+    },
+    {
+      "name": "remove_middle",
+      "rows": [
+        {
+          "stack": 2,
+          "priority": 2000
+        },
+        [],
+        {
+          "stack": 1,
+          "priority": 2000
+        }
+      ]
+    },
+    {
+      "name": "readd",
+      "rows": [
+        {
+          "stack": 2,
+          "priority": 2000
+        },
+        {
+          "stack": 3,
+          "priority": 2000
+        },
+        {
+          "stack": 1,
+          "priority": 2000
+        }
+      ]
+    }
+  ],
+  "calls": [
+    {
+      "state": "Enum.UserInputState.Cancel",
+      "objectState": "Enum.UserInputState.Cancel",
+      "key": "Enum.KeyCode.None",
+      "label": "old1",
+      "inputType": "Enum.UserInputType.None"
+    },
+    {
+      "state": "Enum.UserInputState.Cancel",
+      "objectState": "Enum.UserInputState.Cancel",
+      "key": "Enum.KeyCode.None",
+      "label": "old2",
+      "inputType": "Enum.UserInputType.None"
+    },
+    {
+      "state": "Enum.UserInputState.Cancel",
+      "objectState": "Enum.UserInputState.Cancel",
+      "key": "Enum.KeyCode.None",
+      "label": "old1",
+      "inputType": "Enum.UserInputType.None"
+    },
+    {
+      "state": "Enum.UserInputState.Cancel",
+      "objectState": "Enum.UserInputState.Cancel",
+      "key": "Enum.KeyCode.None",
+      "label": "old2",
+      "inputType": "Enum.UserInputType.None"
+    },
+    {
+      "state": "Enum.UserInputState.Cancel",
+      "objectState": "Enum.UserInputState.Cancel",
+      "key": "Enum.KeyCode.None",
+      "label": "replacement",
+      "inputType": "Enum.UserInputType.None"
+    },
+    {
+      "state": "Enum.UserInputState.Cancel",
+      "objectState": "Enum.UserInputState.Cancel",
+      "key": "Enum.KeyCode.None",
+      "label": "new2",
+      "inputType": "Enum.UserInputType.None"
+    },
+    {
+      "state": "Enum.UserInputState.Cancel",
+      "objectState": "Enum.UserInputState.Cancel",
+      "key": "Enum.KeyCode.None",
+      "label": "old3",
+      "inputType": "Enum.UserInputType.None"
+    }
+  ]
+}

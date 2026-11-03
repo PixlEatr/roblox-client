@@ -1,4 +1,4 @@
-"""Small HTTPS helper. Keep the cookie local and out of the logs."""
+"""Small HTTPS client for the user's alt account; no credential logging."""
 import http.client
 import json
 import os
@@ -6,7 +6,10 @@ from pathlib import Path
 import stat
 
 ROOT = Path(__file__).resolve().parent.parent
-ALLOWED_HOSTS = {"users.roblox.com", "games.roblox.com", "gamejoin.roblox.com", "apis.roblox.com"}
+ALLOWED_HOSTS = {"users.roblox.com", "games.roblox.com", "gamejoin.roblox.com", "apis.roblox.com",
+                 "friends.roblox.com", "presence.roblox.com", "thumbnails.roblox.com",
+                 "avatar.roblox.com", "inventory.roblox.com", "privatemessages.roblox.com",
+                 "trades.roblox.com", "groups.roblox.com", "catalog.roblox.com", "economy.roblox.com"}
 
 
 class SessionError(Exception):
@@ -35,7 +38,7 @@ class RobloxSession:
     def request(self, host, path, method="GET", payload=None, csrf_retry=False):
         if host not in ALLOWED_HOSTS or not path.startswith("/") or any(ord(c) < 32 for c in path):
             raise SessionError("Request destination is not allowed")
-        if method not in {"GET", "POST"}:
+        if method not in {"GET", "POST"} and not (method == "DELETE" and host == "groups.roblox.com"):
             raise SessionError("Unsupported method")
         for attempt in range(2 if csrf_retry else 1):
             headers = {"Cookie": ".ROBLOSECURITY=" + self._cookie,
@@ -62,8 +65,8 @@ class RobloxSession:
             if len(raw) > 2 * 1024 * 1024:
                 raise SessionError("Response exceeded the size limit")
             if status == 403 and token and csrf_retry and attempt == 0 and not challenge:
-                # Retry once with the CSRF token Roblox sent back.
-                # Stop at account challenges or redirects.
+                # Honor the server-issued anti-CSRF token once. Never solve or
+                # evade an account challenge, and never follow a redirect.
                 self._csrf[host] = token
                 continue
             try:

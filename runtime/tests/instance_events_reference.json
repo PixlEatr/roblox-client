@@ -1,0 +1,23 @@
+{
+  "version": "0.745.0.7451137",
+  "expected": {
+    "propertyChangedOnce": true,
+    "eventsDeferred": true,
+    "attributeRefNotRemapped": false,
+    "spawnImmediate": true,
+    "destroyEventRan": true,
+    "waitEventValue": true,
+    "yieldingCallback": true,
+    "yieldResumed": true,
+    "attributeChangedTwice": true,
+    "delayCancelled": true,
+    "deferRan": true,
+    "manualDisconnect": true,
+    "disconnectedCancelled": true,
+    "destroyDisconnect": true,
+    "signalIdentity": true,
+    "onceCalledOnce": true,
+    "signalType": "RBXScriptSignal",
+    "threadType": "thread"
+  }
+}

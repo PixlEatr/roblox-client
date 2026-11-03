@@ -25,6 +25,8 @@ def main():
             raise SessionError('A fresh ready allocation was not issued')
     session = NativeSession(duration=args.duration)
     probe = TimeSyncProbe()
+    from session_wire_clock import SessionWireClock
+    wire_clock = SessionWireClock()
     session.report.update({'probe_service': 'DummyService', 'probe_application': APPLICATION,
                            'time_sync_clock_offset_estimated': False,
                            'time_sync_application_started': False, 'time_sync_channels_opened': False})
@@ -47,7 +49,7 @@ def main():
             client.report.update(probe.public_report())
 
     def tick(client, now):
-        payload = probe.due(now, time.monotonic_ns() // 1000)
+        payload = probe.due(now, wire_clock.microseconds())
         if payload is not None:
             client.send_unreliable(REQUEST_CHANNEL, payload, application=APPLICATION)
             client.report.update(probe.public_report())

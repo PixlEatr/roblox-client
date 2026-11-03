@@ -1,0 +1,57 @@
+{
+  "instances": [
+    {
+      "path": "ExportFixture",
+      "class": "Model"
+    },
+    {
+      "path": "ExportFixture/Probe",
+      "class": "Part",
+      "properties": {
+        "Anchored": true,
+        "CFrame": {
+          "position": [
+            1,
+            2,
+            3
+          ]
+        },
+        "size": [
+          3,
+          4,
+          5
+        ],
+        "Color3uint8": {
+          "$color3uint8": [
+            0.25,
+            0.5,
+            0.75
+          ]
+        }
+      }
+    },
+    {
+      "path": "ExportFixture/Link",
+      "class": "ObjectValue",
+      "properties": {
+        "Value": {
+          "ref_path": "ExportFixture/Probe"
+        }
+      }
+    },
+    {
+      "path": "ExportFixture/Label",
+      "class": "StringValue",
+      "properties": {
+        "Value": "hello <world> & café"
+      }
+    },
+    {
+      "path": "ExportFixture/SourceProbe",
+      "class": "ModuleScript",
+      "properties": {
+        "Source": "return 17"
+      }
+    }
+  ]
+}

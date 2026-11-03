@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run a Luau file against a local world snapshot."""
+"""Execute a user-authored Luau file against a decoded client world capture."""
 import argparse
 import json
 from pathlib import Path
@@ -13,7 +13,7 @@ def read_source(path):
     with Path(path).open('rb') as stream:
         data = stream.read(MAX_SOURCE_BYTES + 1)
     if len(data) > MAX_SOURCE_BYTES:
-        raise ValueError('script exceeds 128 KiB')
+        raise ValueError('script exceeds 100 MiB')
     return data.decode('utf-8')
 
 
@@ -29,7 +29,7 @@ def main():
     world = replay_world(args.report, user)
     snapshot = make_world_snapshot(world, user)
     result = run_source(read_source(args.script), timeout_ms=args.timeout_ms,
-                        memory_mb=64, world_snapshot=snapshot)
+                        memory_mb=512, world_snapshot=snapshot)
     print(json.dumps(result, ensure_ascii=True, indent=2))
     return 0 if result['ok'] else 2
 

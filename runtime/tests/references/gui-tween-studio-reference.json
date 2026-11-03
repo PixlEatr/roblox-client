@@ -1,0 +1,234 @@
+{
+  "classes": {
+    "ViewportFrame": {
+      "size": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    "ImageButton": {
+      "sliceScale": 1,
+      "sliceCenter": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "size": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    "VideoFrame": {
+      "size": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    "CanvasGroup": {
+      "size": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    "TextLabel": {
+      "size": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    "TextButton": {
+      "size": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    "TextBox": {
+      "size": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    "Frame": {
+      "size": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    "ScrollingFrame": {
+      "size": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    "ImageLabel": {
+      "sliceScale": 1,
+      "sliceCenter": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "size": [
+        0,
+        0,
+        0,
+        0
+      ]
+    }
+  },
+  "rect": {
+    "middle": [
+      3.3053457736968994,
+      6.610691547393799,
+      13.221383094787598,
+      16.526729583740234
+    ],
+    "final": [
+      10,
+      20,
+      40,
+      50
+    ]
+  },
+  "version": "0.745.0.7451137",
+  "booleans": [
+    {
+      "initial": false,
+      "late": true,
+      "final": true,
+      "early": false,
+      "immediate": false
+    },
+    {
+      "initial": true,
+      "late": true,
+      "final": false,
+      "early": true,
+      "immediate": true
+    }
+  ],
+  "booleanProgress": [
+    {
+      "initial": false,
+      "samples": [
+        {
+          "alpha": 0.11784899234771729,
+          "value": true
+        },
+        {
+          "alpha": 0.2223232388496399,
+          "value": true
+        },
+        {
+          "alpha": 0.3334987163543701,
+          "value": true
+        },
+        {
+          "alpha": 0.3334987163543701,
+          "value": true
+        },
+        {
+          "alpha": 0.4452863931655884,
+          "value": true
+        },
+        {
+          "alpha": 0.5563085675239563,
+          "value": true
+        },
+        {
+          "alpha": 0.6675839424133301,
+          "value": true
+        },
+        {
+          "alpha": 0.6675839424133301,
+          "value": true
+        },
+        {
+          "alpha": 0.7784851789474487,
+          "value": true
+        },
+        {
+          "alpha": 0.8889111280441284,
+          "value": true
+        },
+        {
+          "alpha": 1,
+          "value": true
+        }
+      ]
+    },
+    {
+      "initial": true,
+      "samples": [
+        {
+          "alpha": 0,
+          "value": true
+        },
+        {
+          "alpha": 0.10975122451782227,
+          "value": true
+        },
+        {
+          "alpha": 0.22184616327285767,
+          "value": true
+        },
+        {
+          "alpha": 0.3339923620223999,
+          "value": true
+        },
+        {
+          "alpha": 0.3339923620223999,
+          "value": true
+        },
+        {
+          "alpha": 0.4460071325302124,
+          "value": true
+        },
+        {
+          "alpha": 0.5540655255317688,
+          "value": true
+        },
+        {
+          "alpha": 0.6662880182266235,
+          "value": true
+        },
+        {
+          "alpha": 0.6662880182266235,
+          "value": true
+        },
+        {
+          "alpha": 0.7779130935668945,
+          "value": true
+        },
+        {
+          "alpha": 0.8880334496498108,
+          "value": true
+        },
+        {
+          "alpha": 1,
+          "value": false
+        }
+      ]
+    }
+  ],
+  "zeroRect": "0, 0, 0, 0"
+}

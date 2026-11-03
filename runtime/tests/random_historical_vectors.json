@@ -5,15 +5,15 @@
   "source_release": "user-supplied former runtime/release-729 source; independent captures are 0.742",
   "provenance": [
     {
-      "path": "local-fixtures/random-seed-studio-reference.json",
+      "path": "random-seed-studio-reference.json",
       "sha256": "4d8297a35369d44af973db8aa4ffa876a367922257d0253d8e4ff8f1b22bedba"
     },
     {
-      "path": "local-fixtures/random-wide-studio-reference.json",
+      "path": "random-wide-studio-reference.json",
       "sha256": "fc50bcf4c093b79a17914e8f0f6803de15400ec628a2521365fc01fff96fbdd2"
     },
     {
-      "path": "local-fixtures/random-wide-mixed-studio-reference.json",
+      "path": "random-wide-mixed-studio-reference.json",
       "sha256": "4b1d61d1ff677eeaf9ce3a382ef2aabe6b1d88f0d29c34059696e77dd28b46cb"
     }
   ],

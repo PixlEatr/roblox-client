@@ -1,21 +1,30 @@
 # roblox client
 
-an unfinished custom roblox client. real luau, packet handling, and world replication. still a work in progress.
+custom roblox client with a luau runtime, terminal, browser preview and mac app. still a wip.
 
-latest local progress — nov 2, 2026:
-
-- the alt spawns, falls, walks, and has visible walking animations in private-server tests.
-- the compatibility worker passed 83/83 UNC checks with no missing aliases, plus 215 regression tests.
-- regular script files allow 100 MiB and the VM defaults to a 512 MiB memory cap.
-- sUNC still gets stuck. the offline run hits missing TestService support, and the live pending-job issue is being investigated.
-
-this GitHub source snapshot is older than those local results. full engine support, all executor APIs, and a browser renderer still aren't done. UNC passing doesn't mean every game works.
-
-for the runner included here:
+needs Python 3.12+, CMake, a C++17 compiler, Rust and Node.js. macOS is the main dev platform.
 
 ```sh
-python3 runtime/build.py
-runtime/build/luau-host --source runtime/smoke.luau -- 2 5
+python3.12 -m venv .venv
+.venv/bin/python -m pip install -r requirements-session.txt
+python3.12 runtime/build.py
+cargo build --release --locked --manifest-path rust-client/Cargo.toml
+cargo build --release --locked --manifest-path animation-codec/Cargo.toml
+npm --prefix runtime/launcher ci
+npm --prefix runtime/launcher run build
+mkdir -p secrets
 ```
 
-[runner notes](runtime/README.md) · [dev notes](NOTES.md) · [credits](THIRD_PARTY.md)
+put your cookie in `secrets/roblox-cookie.txt`, then run `chmod 600 secrets/roblox-cookie.txt`. that folder stays out of git.
+
+```sh
+.venv/bin/python scripts/terminal_client.py
+```
+
+paste a place id or private server link. `:view` opens the game preview, `:quit` leaves. the terminal has no session time limit by default.
+
+for the browser launcher: `.venv/bin/python scripts/launcher.py`.
+
+rendering, physics and game scripts are incomplete. some games won't load and the reported disconnects aren't fixed yet. this isn't the official Roblox client.
+
+[runtime / optional tools](runtime/README.md) · [credits](THIRD_PARTY.md)

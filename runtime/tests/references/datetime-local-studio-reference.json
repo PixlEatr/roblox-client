@@ -1,0 +1,622 @@
+{
+  "studio_version": "0.745.0.7451137",
+  "timezone_note": "Studio observed current local offset UTC-08:00, including July dates",
+  "probes": [
+    {
+      "name": "datetime_probe_result",
+      "value": {
+        "local-1": {
+          "ok": true,
+          "value": {
+            "Day": 31,
+            "Year": 1969,
+            "Month": 12,
+            "Minute": 59,
+            "Millisecond": 999,
+            "Hour": 15,
+            "Second": 59
+          }
+        },
+        "iso": [
+          {
+            "input": "2020-01-02T03:04:05+00:00",
+            "millis": 1577934245000,
+            "ok": true
+          },
+          {
+            "input": "2020-01-02T03:04:05-07:30",
+            "millis": 1577961245000,
+            "ok": true
+          },
+          {
+            "input": "2020-01-02T03:04:05.123456Z",
+            "millis": 1577934245123,
+            "ok": true
+          },
+          {
+            "input": "2020-01-02T03:04:05.9999+05:45",
+            "millis": 1577913545999,
+            "ok": true
+          },
+          {
+            "input": "2020-01-02T03:04:05",
+            "millis": 1577934245000,
+            "ok": true
+          },
+          {
+            "input": "2020-01-02",
+            "millis": 1577923200000,
+            "ok": true
+          },
+          {
+            "input": "2020-01-02t03:04:05z",
+            "millis": 1577934245000,
+            "ok": true
+          },
+          {
+            "input": "2020-01-02T03:04:05+24:00",
+            "millis": false,
+            "ok": true
+          },
+          {
+            "input": "2020-01-02T03:04:05+01:60",
+            "millis": 1577927045000,
+            "ok": true
+          },
+          {
+            "input": "2020-01-02T24:00:00Z",
+            "millis": 1578009600000,
+            "ok": true
+          },
+          {
+            "input": "2020-01-02T03:04:60Z",
+            "millis": 1577934300000,
+            "ok": true
+          },
+          {
+            "input": "2020-01-02T03:04:05+0730",
+            "millis": false,
+            "ok": true
+          },
+          {
+            "input": "2020-01-02T03:04:05.1Z",
+            "millis": 1577934245100,
+            "ok": true
+          },
+          {
+            "input": "2020-01-02T03:04:05.Z",
+            "millis": 1577934245000,
+            "ok": true
+          },
+          {
+            "input": "2020-01-02T03:04:05Zextra",
+            "millis": 1577934245000,
+            "ok": true
+          },
+          {
+            "input": "1399-12-31T23:59:59-01:00",
+            "millis": false,
+            "ok": true
+          },
+          {
+            "input": "9999-12-31T23:59:59-01:00",
+            "millis": false,
+            "ok": true
+          }
+        ],
+        "version": "0.745.0.7451137",
+        "local253402300799999": {
+          "ok": true,
+          "value": {
+            "Day": 31,
+            "Year": 9999,
+            "Month": 12,
+            "Minute": 59,
+            "Millisecond": 999,
+            "Hour": 15,
+            "Second": 59
+          }
+        },
+        "local-17987443200000": {
+          "ok": false,
+          "value": "Below the min DateTime supported: 1400-01-01T00:00:00Z"
+        },
+        "local1793639017123": {
+          "ok": true,
+          "value": {
+            "Day": 2,
+            "Year": 2026,
+            "Month": 11,
+            "Minute": 3,
+            "Millisecond": 123,
+            "Hour": 9,
+            "Second": 37
+          }
+        },
+        "localTime": [
+          {
+            "ok": true,
+            "millis": 28800000,
+            "components": {
+              "Day": 1,
+              "Year": 1970,
+              "Month": 1,
+              "Minute": 0,
+              "Millisecond": 0,
+              "Hour": 0,
+              "Second": 0
+            },
+            "args": []
+          },
+          {
+            "ok": true,
+            "millis": 28800000,
+            "components": {
+              "Day": 1,
+              "Year": 1970,
+              "Month": 1,
+              "Minute": 0,
+              "Millisecond": 0,
+              "Hour": 0,
+              "Second": 0
+            },
+            "args": [
+              1970,
+              1,
+              1
+            ]
+          },
+          {
+            "ok": true,
+            "millis": 1768509296789,
+            "components": {
+              "Day": 15,
+              "Year": 2026,
+              "Month": 1,
+              "Minute": 34,
+              "Millisecond": 789,
+              "Hour": 12,
+              "Second": 56
+            },
+            "args": [
+              2026,
+              1,
+              15,
+              12,
+              34,
+              56,
+              789
+            ]
+          },
+          {
+            "ok": true,
+            "millis": 1784147696789,
+            "components": {
+              "Day": 15,
+              "Year": 2026,
+              "Month": 7,
+              "Minute": 34,
+              "Millisecond": 789,
+              "Hour": 12,
+              "Second": 56
+            },
+            "args": [
+              2026,
+              7,
+              15,
+              12,
+              34,
+              56,
+              789
+            ]
+          },
+          {
+            "ok": true,
+            "millis": 1772965800000,
+            "components": {
+              "Day": 8,
+              "Year": 2026,
+              "Month": 3,
+              "Minute": 30,
+              "Millisecond": 0,
+              "Hour": 2,
+              "Second": 0
+            },
+            "args": [
+              2026,
+              3,
+              8,
+              2,
+              30
+            ]
+          },
+          {
+            "ok": true,
+            "millis": 1793525400000,
+            "components": {
+              "Day": 1,
+              "Year": 2026,
+              "Month": 11,
+              "Minute": 30,
+              "Millisecond": 0,
+              "Hour": 1,
+              "Second": 0
+            },
+            "args": [
+              2026,
+              11,
+              1,
+              1,
+              30
+            ]
+          },
+          {
+            "ok": true,
+            "millis": 951719389999,
+            "components": {
+              "Day": 27,
+              "Year": 2000,
+              "Month": 2,
+              "Minute": 29,
+              "Millisecond": 999,
+              "Hour": 22,
+              "Second": 49
+            },
+            "args": [
+              2000,
+              2,
+              29,
+              24,
+              90,
+              -10,
+              -1
+            ]
+          },
+          {
+            "ok": false,
+            "millis": false,
+            "components": false,
+            "args": [
+              1900,
+              2,
+              29
+            ]
+          },
+          {
+            "ok": true,
+            "millis": -17987414400000,
+            "components": {
+              "Day": 1,
+              "Year": 1400,
+              "Month": 1,
+              "Minute": 0,
+              "Millisecond": 0,
+              "Hour": 0,
+              "Second": 0
+            },
+            "args": [
+              1400,
+              1,
+              1
+            ]
+          },
+          {
+            "ok": true,
+            "millis": 253402329599999,
+            "components": {
+              "Day": 31,
+              "Year": 9999,
+              "Month": 12,
+              "Minute": 59,
+              "Millisecond": 999,
+              "Hour": 23,
+              "Second": 59
+            },
+            "args": [
+              9999,
+              12,
+              31,
+              23,
+              59,
+              59,
+              999
+            ]
+          }
+        ],
+        "local0": {
+          "ok": true,
+          "value": {
+            "Day": 31,
+            "Year": 1969,
+            "Month": 12,
+            "Minute": 0,
+            "Millisecond": 0,
+            "Hour": 16,
+            "Second": 0
+          }
+        }
+      }
+    },
+    {
+      "name": "datetime_probe_extra",
+      "value": {
+        "cases": [
+          {
+            "fromUniversalTime": {
+              "ok": true,
+              "value": "2000-03-01T00:00:00Z"
+            },
+            "fromLocalTime": {
+              "ok": true,
+              "value": "2000-03-01T08:00:00Z"
+            },
+            "args": [
+              2000,
+              2,
+              29,
+              24
+            ]
+          },
+          {
+            "fromUniversalTime": {
+              "ok": true,
+              "value": "2000-02-29T01:30:00Z"
+            },
+            "fromLocalTime": {
+              "ok": true,
+              "value": "2000-02-29T09:30:00Z"
+            },
+            "args": [
+              2000,
+              2,
+              29,
+              0,
+              90
+            ]
+          },
+          {
+            "fromUniversalTime": {
+              "ok": true,
+              "value": "2000-02-28T23:59:50Z"
+            },
+            "fromLocalTime": {
+              "ok": true,
+              "value": "2000-02-29T07:59:50Z"
+            },
+            "args": [
+              2000,
+              2,
+              29,
+              0,
+              0,
+              -10
+            ]
+          },
+          {
+            "fromUniversalTime": {
+              "ok": true,
+              "value": "2000-02-28T23:59:59Z"
+            },
+            "fromLocalTime": {
+              "ok": true,
+              "value": "2000-02-29T07:59:59Z"
+            },
+            "args": [
+              2000,
+              2,
+              29,
+              0,
+              0,
+              0,
+              -1
+            ]
+          },
+          {
+            "fromUniversalTime": {
+              "ok": true,
+              "value": "2000-02-27T22:29:49Z"
+            },
+            "fromLocalTime": {
+              "ok": true,
+              "value": "2000-02-28T06:29:49Z"
+            },
+            "args": [
+              2000,
+              2,
+              29,
+              24,
+              90,
+              -10,
+              -1
+            ]
+          },
+          {
+            "fromUniversalTime": {
+              "ok": true,
+              "value": "2026-01-15T12:34:56Z"
+            },
+            "fromLocalTime": {
+              "ok": true,
+              "value": "2026-01-15T20:34:56Z"
+            },
+            "args": [
+              2026,
+              1,
+              15,
+              12.9,
+              34.9,
+              56.9,
+              789.9
+            ]
+          }
+        ],
+        "iso": [
+          {
+            "input": "2020",
+            "millis": 1577836800000,
+            "ok": true
+          },
+          {
+            "input": "2020-01",
+            "millis": 1577836800000,
+            "ok": true
+          },
+          {
+            "input": "2020-01-02junk",
+            "millis": false,
+            "ok": true
+          },
+          {
+            "input": "2020-01-02T03:04",
+            "millis": 1577934240000,
+            "ok": true
+          },
+          {
+            "input": "2020-01-02 03:04:05",
+            "millis": 1577934245000,
+            "ok": true
+          },
+          {
+            "input": "2020-01-02T03:04:05+01",
+            "millis": 1577930645000,
+            "ok": true
+          },
+          {
+            "input": "2020-01-02T03:04:05+01:99",
+            "millis": 1577924705000,
+            "ok": true
+          },
+          {
+            "input": "2020-01-02T03:04:05+23:59",
+            "millis": false,
+            "ok": true
+          },
+          {
+            "input": "2020-01-02T25:00:00Z",
+            "millis": 1578013200000,
+            "ok": true
+          },
+          {
+            "input": "2020-01-02T03:60:00Z",
+            "millis": 1577937600000,
+            "ok": true
+          },
+          {
+            "input": "2020-01-02T03:04:61Z",
+            "millis": 1577934301000,
+            "ok": true
+          },
+          {
+            "input": "2020-02-30T00:00:00Z",
+            "millis": false,
+            "ok": true
+          },
+          {
+            "input": "2020-01-02T03:04:05q",
+            "millis": 1577934245000,
+            "ok": true
+          },
+          {
+            "input": "2020-01-02T03:04:05+01:00junk",
+            "millis": false,
+            "ok": true
+          },
+          {
+            "input": "2020-01-02T03:04:05.12345678901234567890Z",
+            "millis": 1577934245123,
+            "ok": true
+          }
+        ]
+      }
+    },
+    {
+      "name": "datetime_probe_final",
+      "value": {
+        "values": [
+          {
+            "ms": -1,
+            "iso": "1969-12-31T23:59:59Z",
+            "text": "-1"
+          },
+          {
+            "ms": 1,
+            "iso": "1970-01-01T00:00:00Z",
+            "text": "1"
+          },
+          {
+            "ms": 123,
+            "iso": "1970-01-01T00:00:00Z",
+            "text": "123"
+          },
+          {
+            "ms": 999,
+            "iso": "1970-01-01T00:00:00Z",
+            "text": "999"
+          },
+          {
+            "ms": 1234,
+            "iso": "1970-01-01T00:00:01Z",
+            "text": "1234"
+          }
+        ],
+        "iso": [
+          {
+            "input": "2020-01-02T03:04:05+12:00",
+            "millis": 1577891045000,
+            "ok": true
+          },
+          {
+            "input": "2020-01-02T03:04:05+13:00",
+            "millis": 1577887445000,
+            "ok": true
+          },
+          {
+            "input": "2020-01-02T03:04:05+14:00",
+            "millis": 1577883845000,
+            "ok": true
+          },
+          {
+            "input": "2020-01-02T03:04:05-12:00",
+            "millis": 1577977445000,
+            "ok": true
+          },
+          {
+            "input": "2020-01-02T03:04:05-13:00",
+            "millis": false,
+            "ok": true
+          },
+          {
+            "input": "2020-01-02T03:04:05+11:99",
+            "millis": 1577888705000,
+            "ok": true
+          },
+          {
+            "input": "2020-01-02T03:04:05+12:99",
+            "millis": 1577885105000,
+            "ok": true
+          },
+          {
+            "input": "2020-01-02T03:04:05Zextra",
+            "millis": 1577934245000,
+            "ok": true
+          },
+          {
+            "input": "2020-01-02T03",
+            "millis": 1577934000000,
+            "ok": true
+          },
+          {
+            "input": "2020-01-02T",
+            "millis": 1577923200000,
+            "ok": true
+          },
+          {
+            "input": "2020-01-02T03:04:05.001Z",
+            "millis": 1577934245001,
+            "ok": true
+          }
+        ]
+      }
+    }
+  ]
+}

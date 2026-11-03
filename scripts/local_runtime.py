@@ -1,19 +1,29 @@
-"""Run real Luau in a fresh worker. Build the host first."""
+"""Bounded Luau worker interface for authored code and verified server programs.
+
+Each call launches a fresh process/VM. The module never reads cookies or
+captures itself. The live handler authenticates original server code before
+passing its converted representation here. Build runtime/build/luau-host first.
+"""
 
 import argparse
 import json
 import math
+import os
 from pathlib import Path
 import subprocess
 import tempfile
 import uuid
 
+from session_integrity import observe_runtime_oneshot_report
 
-HOST = Path(__file__).resolve().parents[1] / 'runtime' / 'build' / 'luau-host'
-MAX_SOURCE_BYTES = 128 * 1024
+HOST = Path(os.environ.get('ROBLOX_LUAU_HOST',
+                           Path(__file__).resolve().parents[1] / 'runtime' / 'build' / 'luau-host'))
+RUST_HOST = Path(os.environ.get('ROBLOX_LUAU_RUST_HOST',
+                                Path(__file__).resolve().parents[1] / 'rust-client' / 'target' / 'release' / 'headless-luau'))
+MAX_SOURCE_BYTES = 100 * 1024 * 1024
 
 
-def run_source(source, arguments=(), *, timeout_ms=250, memory_mb=32,
+def run_source(source, arguments=(), *, timeout_ms=250, memory_mb=512,
                model_context=None, world_snapshot=None):
     """Return the host's structured result for locally supplied source.
 
@@ -26,7 +36,7 @@ def run_source(source, arguments=(), *, timeout_ms=250, memory_mb=32,
                       memory_mb, model_context, world_snapshot=world_snapshot)
 
 
-def run_bytecode(bytecode, arguments=(), *, timeout_ms=250, memory_mb=32,
+def run_bytecode(bytecode, arguments=(), *, timeout_ms=250, memory_mb=512,
                  model_context=None, session_job_id=None):
     """Run trusted compiler-produced standard bytecode, not a Roblox envelope.
 
@@ -42,11 +52,11 @@ def run_bytecode(bytecode, arguments=(), *, timeout_ms=250, memory_mb=32,
 def _run_input(encoded, input_kind, arguments, timeout_ms, memory_mb, model_context,
                session_job_id=None, world_snapshot=None):
     if len(encoded) > MAX_SOURCE_BYTES:
-        raise ValueError('runtime input exceeds 128 KiB')
+        raise ValueError('runtime input exceeds 100 MiB')
     if type(timeout_ms) is not int or not 1 <= timeout_ms <= 2000:
         raise ValueError('timeout_ms must be an integer from 1 to 2000')
-    if type(memory_mb) is not int or not 8 <= memory_mb <= 128:
-        raise ValueError('memory_mb must be an integer from 8 to 128')
+    if type(memory_mb) is not int or not 8 <= memory_mb <= 512:
+        raise ValueError('memory_mb must be an integer from 8 to 512')
     arguments = tuple(arguments)
     if len(arguments) > 64:
         raise ValueError('at most 64 numeric arguments are supported')
@@ -98,7 +108,11 @@ def _run_input(encoded, input_kind, arguments, timeout_ms, memory_mb, model_cont
                 raise ValueError('services fixture must be a list of ASCII class names')
             lines.append('services=' + ','.join(services))
         context_text = '\n'.join(lines) + '\n'
-    if not HOST.is_file():
+    # The Rust supervisor directly links the pinned VM and source bindings.
+    # Keep fixture contexts and verified bytecode on their original host path.
+    host = (RUST_HOST if input_kind == 'source' and context_text is None
+            and RUST_HOST.is_file() else HOST)
+    if not host.is_file():
         raise RuntimeError('build the offline host with: python3 runtime/build.py')
 
     # TemporaryDirectory defaults to owner-only; the source file is also 0600.
@@ -106,7 +120,7 @@ def _run_input(encoded, input_kind, arguments, timeout_ms, memory_mb, model_cont
         path = Path(directory) / ('input.luau' if input_kind == 'source' else 'input.luac')
         path.write_bytes(encoded)
         path.chmod(0o600)
-        command = [str(HOST), '--' + input_kind, str(path), '--timeout-ms', str(timeout_ms),
+        command = [str(host), '--' + input_kind, str(path), '--timeout-ms', str(timeout_ms),
                    '--memory-mb', str(memory_mb)]
         if context_text is not None:
             context = Path(directory) / 'model-context.txt'
@@ -122,18 +136,29 @@ def _run_input(encoded, input_kind, arguments, timeout_ms, memory_mb, model_cont
         try:
             completed = subprocess.run(command, capture_output=True, timeout=3 + timeout_ms / 1000)
         except subprocess.TimeoutExpired:
+            observe_runtime_oneshot_report(None)
             return {'ok': False, 'values': [], 'error': 'host process wall timeout'}
+        except OSError:
+            observe_runtime_oneshot_report(None)
+            raise
     if len(completed.stdout) > 1024 * 1024:
+        observe_runtime_oneshot_report(None)
         raise RuntimeError('runtime output exceeded limit')
     try:
         result = json.loads(completed.stdout)
     except (UnicodeError, ValueError) as error:
+        observe_runtime_oneshot_report(None)
         raise RuntimeError(f'runtime did not return JSON (exit {completed.returncode})') from error
     if (not isinstance(result, dict) or type(result.get('ok')) is not bool
             or not isinstance(result.get('values'), list)):
+        observe_runtime_oneshot_report(None)
         raise RuntimeError('invalid runtime result')
     if completed.returncode and result['ok']:
+        observe_runtime_oneshot_report(None)
         raise RuntimeError('runtime exited unsuccessfully but reported success')
+    observe_runtime_oneshot_report(result)
+    if world_snapshot is not None:
+        result['runtime_backend'] = 'rust' if host == RUST_HOST else 'cpp'
     return result
 
 
@@ -143,16 +168,16 @@ def main():
     inputs.add_argument('--source', type=Path)
     inputs.add_argument('--bytecode', type=Path, help='Trusted standard compiler output only')
     parser.add_argument('--timeout-ms', type=int, default=250)
-    parser.add_argument('--memory-mb', type=int, default=32)
+    parser.add_argument('--memory-mb', type=int, default=512)
     parser.add_argument('--model-context', type=Path,
                         help='Optional JSON fixture selecting mode=offline (simulation only)')
     parser.add_argument('arguments', nargs='*', type=float)
     args = parser.parse_args()
-    # Check the size before loading a huge source file.
+    # Bounded read also rejects an oversized source before allocating it all.
     with (args.source or args.bytecode).open('rb') as stream:
         source = stream.read(MAX_SOURCE_BYTES + 1)
     if len(source) > MAX_SOURCE_BYTES:
-        parser.error('source exceeds 128 KiB')
+        parser.error('source exceeds 100 MiB')
     context = None
     if args.model_context is not None:
         with args.model_context.open('rb') as stream:

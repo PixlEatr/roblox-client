@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Check the saved session without printing the cookie."""
+"""Read-only session check against Roblox. Never print or save the cookie."""
 from datetime import datetime, timezone
 import http.client
 import json

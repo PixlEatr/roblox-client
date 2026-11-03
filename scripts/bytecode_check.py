@@ -1,4 +1,9 @@
-"""Handle signed server checks with a bounded Luau worker."""
+"""Native program-check framing and signature-verified runtime handling.
+
+The parser alone is data-only. BytecodeAuthHandler additionally validates the
+original signature, converts opcode headers, executes within a bounded worker,
+and formats the actual numeric return. Reports exclude identifiers and answers.
+"""
 from dataclasses import dataclass
 import struct
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Read a local capture without dumping player data."""
+"""Replay a private capture without exposing user IDs or property values."""
 import argparse
 import base64
 import collections

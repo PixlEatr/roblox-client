@@ -17,6 +17,13 @@ root.Anchored = false
 root.Parent = workspace
 assert(root.Anchored == false and root.Parent == workspace)
 assert(client.propertyOrigin(root, "Anchored") == "local")
+local folder = Instance.new("Folder", workspace)
+folder.Name = "LocalOnly"
+assert(workspace:FindFirstChild("LocalOnly") == folder)
+assert(folder.Parent == workspace and folder:IsA("Instance"))
+local vector = Vector3.new(4, 5, 6)
+local frame = CFrame.new(vector)
+assert(frame.Position == vector and frame:GetComponents() ~= nil)
 print("world local simulation", player.Name)
 warn("mutation is local only")
-return true, player, root, root.CFrame
+return true, player, root, root.CFrame, folder, frame.Position

@@ -1,0 +1,40 @@
+{
+  "source_css": "https://css.rbxcdn.com/221ade875d1e8b815363ae697e20ceef32c90fffec39186f59d1cdc43f9b25c0-StyleGuide.css",
+  "owner": "Roblox Corporation",
+  "assets": [
+    {
+      "file": "navigation.svg",
+      "url": "https://images.rbxcdn.com/f7fc53c4105dc9eb.svg",
+      "sha256": "6a108188e72186c403c9d2e649d7dd9142b8be12b5f3df2059b4c2bc5f38037c"
+    },
+    {
+      "file": "common.svg",
+      "url": "https://images.rbxcdn.com/93b2b986f95cbd3d.svg",
+      "sha256": "c747338013e2bc77752e08550f2de1666f02f8301d7df3049dd0757924febd5b"
+    },
+    {
+      "file": "games.svg",
+      "url": "https://images.rbxcdn.com/af78d942d302a0aa.svg",
+      "sha256": "9fbf3867a34e190c3e96b9b7f7b5558f5f70ba4b928946307a30750990943d7b"
+    },
+    {
+      "file": "actions.svg",
+      "url": "https://images.rbxcdn.com/0bcfca506b32337d.svg",
+      "sha256": "e05e3531180eab02290cc9cd0385c49f34945ef17f5ad2671d881b73bac6673f"
+    },
+    {
+      "file": "wordmark.svg",
+      "source": "dark-theme icon-default-logo in Roblox StyleGuide.css",
+      "sha256": "08aeaccafca25098eaa056f9d5ece597d640b106c0e4b82adf227ba5710ac443"
+    },
+    {
+      "file": "chevron.svg",
+      "source": "dark-theme icon-chevron-right in Roblox StyleGuide.css",
+      "sha256": "eb8e379465a52e6a7d114fee63ea3c441e981a5ecce0931330b0ee0d01c53641"
+    }
+  ],
+  "api_references": {
+    "purchases": "https://js.rbxcdn.com/10896dcc8b0f892dd5eda0d963f67234be7013fab2b30f56520148dc6fee15dc-ItemPurchase.js",
+    "avatarCdnRouting": "https://js.rbxcdn.com/5b25642da9464296a176fb0d965a4b27f21ae3a90af5c2db0841a877fc96d178-Thumbnails3d.js"
+  }
+}

@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""Ask for an allocation and save the connection details locally."""
+"""Request a normal join allocation for the selected playable test place.
+
+No game protocol packets are sent by this module. Reports contain structure and
+status only; any connection credentials remain in the private secrets directory.
+"""
 from datetime import datetime, timezone
 import json
 import os
@@ -37,8 +41,15 @@ def write_private(path, value):
             os.close(fd)
 
 
-def main():
-    target = json.loads((ROOT / "outputs/gamejoin/target-selection.json").read_text())
+def main(*, target=None):
+    # A caller may hold a verified target for its own session while another
+    # frontend changes the default selection. Never rewrite that shared choice.
+    if target is None:
+        target = json.loads((ROOT / "outputs/gamejoin/target-selection.json").read_text())
+    elif isinstance(target, dict):
+        target = target.copy()
+    else:
+        raise SessionError('Explicit allocation target must be an object')
     if target.get("is_playable") is not True or target.get("selection") not in ('alt_owned_public_place', 'user_selected_place', 'user_selected_private_server'):
         raise SessionError("This probe requires a verified playable place selected for this test")
     session = RobloxSession()

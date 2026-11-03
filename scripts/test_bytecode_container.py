@@ -62,7 +62,7 @@ return calc(t.sum)''')
                 pos = proto['code_offset'] + instruction['pc'] * 4
                 positions.append(pos)
                 encoded[pos] = (instruction['opcode'] * 227) & 255
-        # Fake suffix for this test. Keep it intact, but never run it.
+        # This is a synthetic suffix, preserved but never authenticated/executed.
         suffix = bytes([0xa5]) * 24
         converted, info = standardize_opcodes(bytes(encoded) + suffix, '203')
         self.assertEqual(converted, trusted + suffix)
@@ -71,7 +71,7 @@ return calc(t.sum)''')
         self.assertFalse(info['execution_safety_verified'])
         converted, _ = standardize_opcodes(unpack_container(container_fixture(bytes(encoded))), '203')
         self.assertEqual(converted, trusted)
-        # Only run our own compiler output, with no fake suffix.
+        # Execute only this known compiler-produced fixture, without any suffix.
         result = run_bytecode(converted, [2, 5])
         self.assertTrue(result['ok'], result)
         self.assertEqual(result['values'], [8 ^ 0x1234])

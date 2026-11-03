@@ -64,13 +64,18 @@ def certificate_pins(pins, report):
         tls.verify_certificate = original
 
 
-def allocation():
+def allocation(*, target=None):
     path = ROOT / "secrets/last-join.json"
     info = path.lstat()
     if not stat.S_ISREG(info.st_mode) or stat.S_IMODE(info.st_mode) & 0o077:
         raise SessionError("Join response must be a regular owner-only file")
     saved = json.loads(path.read_text())
-    target = json.loads((ROOT / "outputs/gamejoin/target-selection.json").read_text())
+    if target is None:
+        target = json.loads((ROOT / "outputs/gamejoin/target-selection.json").read_text())
+    elif isinstance(target, dict):
+        target = target.copy()
+    else:
+        raise SessionError('Explicit allocation target must be an object')
     if (target.get("selection") not in ('alt_owned_public_place', 'user_selected_place', 'user_selected_private_server')
         or target.get('is_playable') is not True or saved["place_id"] != target["place_id"]):
         raise SessionError("Allocation does not match the verified selected place")

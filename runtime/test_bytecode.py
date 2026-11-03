@@ -31,7 +31,11 @@ class BytecodeLoaderTests(unittest.TestCase):
             path = self.compile_fixture(directory)
             code, result = self.invoke(path, '--', '2', '5')
         self.assertEqual(code, 0)
-        self.assertEqual(result, {'ok': True, 'values': [7, None, True, 'fixture']})
+        self.assertEqual({key: result[key] for key in ('ok', 'values')},
+                         {'ok': True, 'values': [7, None, True, 'fixture']})
+        self.assertEqual(result['runtime_protected_integrity'],
+                         {'version': 1, 'constructions': 1, 'copies': 1, 'failures': 0})
+        self.assertNotIn('runtime_thread_integrity', result)
 
     def test_unknown_header_version_is_rejected(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -68,7 +72,10 @@ class BytecodeLoaderTests(unittest.TestCase):
                                'is_studio=false\nservices=Workspace,RunService\n', encoding='ascii')
             code, result = self.invoke(path, '--context-file', str(context))
         self.assertEqual(code, 0)
-        self.assertEqual(result, {'ok': True, 'values': [True, True, 'offline-fixture-job']})
+        self.assertEqual({key: result[key] for key in ('ok', 'values')},
+                         {'ok': True, 'values': [True, True, 'offline-fixture-job']})
+        self.assertEqual(result['runtime_protected_integrity'],
+                         {'version': 1, 'constructions': 1, 'copies': 1, 'failures': 0})
 
 
 if __name__ == '__main__':

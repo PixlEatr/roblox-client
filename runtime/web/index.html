@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="console-key" content="__CONSOLE_KEY__">
+  <title>Luau — Local console</title>
+  <link rel="stylesheet" href="/style.css">
+  <script src="/input.js" defer></script>
+  <script src="/app.js" defer></script>
+</head>
+<body>
+  <main>
+    <header>
+      <div class="brand"><span class="mark">L</span><h1>Luau<span>local console</span></h1></div>
+      <div id="connection" class="connection"><span class="dot"></span><span id="connection-label">Connecting</span></div>
+    </header>
+    <section class="workspace" aria-label="Luau console">
+      <section class="panel editor-panel" aria-label="Script editor">
+        <div class="toolbar"><span id="filename">script.luau</span><button id="load" class="quiet">Open file</button><input id="file" type="file" accept=".luau,.lua,.txt" hidden></div>
+        <div class="code"><pre id="gutter" aria-hidden="true">1</pre><textarea id="editor" aria-label="Luau script" spellcheck="false" autocapitalize="off" autocomplete="off" autocorrect="off"></textarea></div>
+        <div class="editor-footer"><span id="line-count">1 line</span><div class="run-actions"><kbd id="shortcut">⌘ Enter</kbd><button id="run" disabled>Run script <span aria-hidden="true">↗</span></button></div></div>
+        <div id="game-input" class="game-input" tabindex="0" role="group" aria-label="Game input controls" aria-describedby="input-hint">
+          <strong>Keyboard &amp; mouse</strong><span id="input-state">Waiting for runtime</span>
+          <span id="input-hint">Focused keys, mouse buttons and wheel go to Luau. Escape releases controls.</span>
+        </div>
+      </section>
+      <section class="panel output-panel" aria-label="Console output">
+        <div class="toolbar"><div class="output-title">Output <span id="result-state"></span></div><button id="clear" class="quiet">Clear</button></div>
+        <div id="output" role="log" aria-live="polite" tabindex="0"><div id="empty"><span class="empty-symbol">&gt;_</span><p>Ready when you are.</p><span>Run a script to see its output here.</span></div></div>
+        <form id="chat-form" class="chat-input" autocomplete="off">
+          <label for="chat-channel">Chat channel</label>
+          <select id="chat-channel" aria-label="Chat channel">
+            <option value="RBXGeneral">RBXGeneral</option>
+            <option value="RBXGlobal">RBXGlobal</option>
+          </select>
+          <div class="chat-row"><input id="chat-text" type="text" maxlength="400" placeholder="Type a chat message" aria-describedby="chat-hint"><button id="chat-send" type="button" disabled>Send</button></div>
+          <span id="chat-hint">Sends through Luau. Delivery waits for the server.</span>
+        </form>
+        <div class="output-footer"><span class="dot"></span> Only on this computer</div>
+      </section>
+    </section>
+  </main>
+</body>
+</html>

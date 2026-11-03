@@ -1,4 +1,10 @@
-"""Encode the capability mask. No account data needed."""
+"""Offline reconstruction of the observed RbxTransport capabilities text codec.
+
+Source build: Roblox 0.745.0.7451137 ARM64, SHA256 b6b21841...297b870.
+Encode: 0x10222690c -> 0x102c60c2c; decode: 0x1022269ac -> 0x102c609dc.
+Request path construction: 0x1021324f8. No meaning is assigned to individual bits.
+This module makes no network requests and does not read account credentials.
+"""
 import re
 
 

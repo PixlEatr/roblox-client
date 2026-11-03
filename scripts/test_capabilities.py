@@ -25,13 +25,12 @@ class CapabilitiesTests(unittest.TestCase):
             with self.subTest(value=value), self.assertRaises(ValueError):
                 decode_capabilities(value)
 
-    @unittest.skipUnless((Path(__file__).resolve().parent.parent / "inputs/RobloxPlayer-0.745-arm64").is_file()
-                         and (Path(__file__).resolve().parent.parent / "outputs/macho-layout.json").is_file(),
-                         "needs a local binary and layout; neither is bundled")
     def test_encoder_byte_order_against_binary_neon_constants(self):
         # Independent byte extraction modeled from the four loaded NEON vectors,
         # rather than testing encode/decode only against one another.
         root = Path(__file__).resolve().parent.parent
+        if not (root / 'inputs/RobloxPlayer-0.745-arm64').is_file() or not (root / 'outputs/macho-layout.json').is_file():
+            self.skipTest('local Roblox binary and layout are not bundled')
         layout = json.loads((root / "outputs/macho-layout.json").read_text())
         data = (root / "inputs/RobloxPlayer-0.745-arm64").read_bytes()
         shifts = []

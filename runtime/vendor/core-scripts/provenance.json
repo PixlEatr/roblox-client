@@ -1,0 +1,8 @@
+{
+  "repository": "https://github.com/Roblox/Core-Scripts",
+  "commit": "425d2d641bdc4b6c1104a9d5f6c53c9ea758c5cb",
+  "path": "CoreScriptsRoot/Modules/DevConsole/Constants.lua",
+  "sha256": "b200db37c2febb066d1f6c644019eb2a3d4b3e0f1c873eef31e5ba562617b2f0",
+  "license_path": "LICENSE.txt",
+  "usage": "Archived official module for offline runtime integration; not a claim of current client parity"
+}

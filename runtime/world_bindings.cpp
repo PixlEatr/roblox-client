@@ -1,12 +1,27 @@
 #include "world_bindings.hpp"
+#include <Luau/Compiler.h>
+#include "sha256.hpp"
+#include <class_registry_data.hpp>
+#include "source_scheduler.hpp"
+#include "authored_bindings.hpp"
+#include "movement_bindings.hpp"
+#include "json_bindings.hpp"
+#include "vector_math_compat.hpp"
+#include "vector2_bindings.hpp"
 
 #include <lualib.h>
 
 #include <algorithm>
 #include <array>
+#include <cassert>
 #include <cstring>
 #include <cmath>
 #include <memory>
+#include <limits>
+#include <deque>
+#include <fstream>
+#include <iomanip>
+#include <sstream>
 #include <set>
 #include <stdexcept>
 #include <unordered_set>
@@ -16,14 +31,129 @@ namespace {
 constexpr const char* kInstanceMeta = "WorldSnapshot.Instance";
 constexpr const char* kCFrameMeta = "WorldSnapshot.CFrame";
 constexpr const char* kSettingsId = "__world_snapshot_settings__";
-constexpr size_t kMaxNodes = 20000;
+constexpr const char* kSignalMeta = "WorldSnapshot.Signal";
+constexpr const char* kConnectionMeta = "WorldSnapshot.Connection";
+constexpr const char* kInstanceHandleMeta = "WorldSnapshot.InstanceHandle";
+constexpr const char* kChatStatusMeta = "WorldSnapshot.TextChatMessageStatus.Item";
+constexpr const char* kChatEnumMeta = "WorldSnapshot.TextChatMessageStatus.Enum";
+constexpr const char* kChatStatusNames[] = {"Unknown","Success","Sending","TextFilterFailed","Floodchecked","InvalidPrivacySettings","InvalidTextChannelPermissions","MessageTooLong","ModerationTimeout"};
+constexpr size_t kMaxNodes = 100000;
 constexpr size_t kMaxMutations = 10000;
 constexpr size_t kMaxMutationBytes = 128 * 1024;
 constexpr size_t kMaxPrinted = 128 * 1024;
+constexpr size_t kMaxMutationValue = 96 * 1024;
 constexpr int kMaxJsonDepth = 32;
+#include "input_capabilities.inc"
+
+const Json& constructors() {
+    static const Json classes = Json::parse(kConstructorJson).at("classes");
+    return classes;
+}
+
+const Json* property_descriptor(const Node& node, const std::string& key) {
+    if(node.class_name=="InputObject"&&(key=="KeyCode"||key=="UserInputType"||key=="UserInputState"||key=="Position"||key=="Delta")) {
+        static const Json enumeration{{"type","Enum"},{"writable",true}},vector{{"type","Vector3"},{"writable",true}};
+        return key=="Position"||key=="Delta"?&vector:&enumeration;
+    }
+    if(node.class_name=="UserInputService") {
+        static const Json enumeration{{"type","Enum"},{"writable",true}},boolean{{"type","boolean"},{"writable",true}};
+        if(key=="MouseBehavior")return &enumeration;
+        if(key=="MouseIconEnabled")return &boolean;
+        if(key=="MouseDeltaSensitivity"){static const Json number{{"type","number"},{"writable",true}};return &number;}
+    }
+
+    if(node.class_name=="VectorForce"&&key=="RelativeTo") {
+        static const Json relative{{"type","Enum"},{"writable",true}};return &relative;
+    }
+    if(node.class_name=="LinearVelocity") {
+        static const Json enumeration{{"type","Enum"},{"writable",true}},vector{{"type","Vector2"},{"writable",true}};
+        if(key=="RelativeTo"||key=="VelocityConstraintMode"||key=="ForceLimitMode")return &enumeration;
+        if(key=="PlaneVelocity"||key=="MaxPlanarAxesForce")return &vector;
+    }
+    // The constructor capture omits sequence-valued properties. The pinned
+    // API descriptor identifies these writable sequence/range properties;
+    // describing their type does not invent an unreceived initial value.
+    if(node.class_name=="Trail"||node.class_name=="ParticleEmitter") {
+        static const Json color{{"type","ColorSequence"},{"writable",true}};
+        static const Json sequence{{"type","NumberSequence"},{"writable",true}};
+        static const Json range{{"type","NumberRange"},{"writable",true}};
+        static const Json vector{{"type","Vector2"},{"writable",true}};
+        if(key=="Color")return &color;
+        if(key=="Transparency"||(node.class_name=="Trail"&&key=="WidthScale")||
+           (node.class_name=="ParticleEmitter"&&(key=="Size"||key=="Squash")))return &sequence;
+        if(node.class_name=="ParticleEmitter") {
+            if(key=="FlipbookFramerate"||key=="Lifetime"||key=="RotSpeed"||key=="Rotation"||key=="Speed")return &range;
+            if(key=="SpreadAngle")return &vector;
+        }
+    }
+    const auto& classes = constructors();
+    auto cls = classes.find(node.class_name);
+    if (cls == classes.end()) return nullptr;
+    const auto& properties = cls->at("properties");
+    auto property = properties.find(key);
+    return property == properties.end() ? nullptr : &*property;
+}
+
+// The wire schema calls BasePart.Color "Color3uint8" (type 20). The
+// snapshot encoder has already converted its bytes into a tagged Color3.
+// Do not substitute a constructor color when neither value was received.
+const Json* received_color_alias(const Node& node,const Json& fields) {
+    const Json* descriptor=property_descriptor(node,"Color");
+    auto value=fields.find("Color3uint8");
+    if(!descriptor||descriptor->value("type","")!="Color3"||value==fields.end())return nullptr;
+    if(!value->is_object()||!value->contains("$color3")||!(*value)["$color3"].is_array()||(*value)["$color3"].size()!=3)
+        throw std::runtime_error("received Color3uint8 must be a tagged Color3");
+    for(const auto& c:(*value)["$color3"])if(!c.is_number()||!std::isfinite(c.get<double>())||c.get<double>()<0||c.get<double>()>1)
+        throw std::runtime_error("received Color3uint8 component is out of range");
+    return &*value;
+}
+
+const Json* humanoid_health_default(const Node& node,const std::string& key) {
+    // Replicated Humanoids also begin with constructor health state. Missing
+    // snapshot fields do not mean that the engine property does not exist.
+    // Keep this separate from received values and use the pinned registry.
+    if(node.class_name!="Humanoid"||(key!="Health"&&key!="MaxHealth"))return nullptr;
+    const Json* descriptor=property_descriptor(node,key);
+    return descriptor?&descriptor->at("value"):nullptr;
+}
 
 struct Handle { World* world; Node* node; };
-struct CFrameValue { std::array<double, 3> p{}; std::array<double, 9> r{1,0,0,0,1,0,0,0,1}; };
+struct SignalHandle { Signal* signal; };
+struct ConnectionHandle { Connection* connection; };
+bool connection_compat_index(lua_State* L,Connection& connection,const char* key);
+void enforce_scriptability(lua_State* L,World& w,Node& n,std::string& key);
+struct InstanceHandleValue {World* world;std::string id;};
+void push_chat_status(lua_State* L,int value) {
+    if(value<1||value>9)throw std::runtime_error("unsupported TextChatMessageStatus");
+    auto* item=static_cast<int*>(lua_newuserdatatagged(L,sizeof(int),0));*item=value;
+    luaL_getmetatable(L,kChatStatusMeta);lua_setmetatable(L,-2);
+}
+int chat_readonly(lua_State* L){luaL_error(L,"chat enum values are read-only");return 0;}
+int chat_status_index(lua_State* L) {
+    int value=*static_cast<int*>(luaL_checkudata(L,1,kChatStatusMeta));const char* key=luaL_checkstring(L,2);
+    if(std::strcmp(key,"Name")==0)lua_pushstring(L,kChatStatusNames[value-1]);
+    else if(std::strcmp(key,"Value")==0)lua_pushinteger(L,value);
+    else if(std::strcmp(key,"EnumType")==0){lua_getfield(L,LUA_REGISTRYINDEX,"Headless.ChatStatusEnum");}
+    else {luaL_error(L,"unknown TextChatMessageStatus member");return 0;}
+    return 1;
+}
+int chat_status_string(lua_State* L){int v=*static_cast<int*>(luaL_checkudata(L,1,kChatStatusMeta));lua_pushfstring(L,"Enum.TextChatMessageStatus.%s",kChatStatusNames[v-1]);return 1;}
+int chat_status_equal(lua_State* L){auto* a=static_cast<int*>(luaL_checkudata(L,1,kChatStatusMeta));auto* b=static_cast<int*>(luaL_checkudata(L,2,kChatStatusMeta));lua_pushboolean(L,*a==*b);return 1;}
+int chat_enum_items(lua_State* L){luaL_checkudata(L,1,kChatEnumMeta);lua_createtable(L,9,0);for(int v=1;v<=9;v++){push_chat_status(L,v);lua_rawseti(L,-2,v);}return 1;}
+int chat_enum_index(lua_State* L){const char* key=luaL_checkstring(L,2);if(std::strcmp(key,"GetEnumItems")==0){lua_pushcfunction(L,chat_enum_items,"GetEnumItems");return 1;}for(int v=1;v<=9;v++)if(std::strcmp(key,kChatStatusNames[v-1])==0){push_chat_status(L,v);return 1;}luaL_error(L,"unknown TextChatMessageStatus item");return 0;}
+int chat_enum_string(lua_State* L){lua_pushliteral(L,"TextChatMessageStatus");return 1;}
+void destroy_instance_handle(lua_State*,void* value){static_cast<InstanceHandleValue*>(value)->~InstanceHandleValue();}
+void push_instance_handle(lua_State* L,World& world,const std::string& id) {
+    auto* h=static_cast<InstanceHandleValue*>(lua_newuserdatadtor(L,sizeof(InstanceHandleValue),destroy_instance_handle));
+    new(h)InstanceHandleValue{&world,id};luaL_getmetatable(L,kInstanceHandleMeta);lua_setmetatable(L,-2);
+}
+struct CFrameValue { std::array<double, 3> p{}; std::array<double, 9> r{1,0,0,0,1,0,0,0,1}; bool rotation_known=true; Json source=Json::object(); };
+void destroy_cframe(lua_State*, void* value) { static_cast<CFrameValue*>(value)->~CFrameValue(); }
+CFrameValue* new_cframe(lua_State* L) {
+    auto* value = static_cast<CFrameValue*>(lua_newuserdatadtor(L, sizeof(CFrameValue), destroy_cframe));
+    new(value) CFrameValue();
+    return value;
+}
 
 Handle* checked_handle(lua_State* L, int i) {
     return static_cast<Handle*>(luaL_checkudata(L, i, kInstanceMeta));
@@ -35,6 +165,13 @@ bool has_meta(lua_State* L, int i, const char* name) {
     lua_pop(L, 2);
     return same;
 }
+#include "geometry_enums.inc"
+#include "enum_root.inc"
+#include "export_enums.inc"
+#include "security_capabilities.inc"
+#include "tween_bindings.inc"
+#include "http_url_encode.inc"
+
 void push_node(lua_State* L, World& world, Node* node) {
     lua_pushlightuserdata(L, node);
     lua_rawget(L, LUA_REGISTRYINDEX);
@@ -55,6 +192,10 @@ const Json* local_value(World& world, const Node& node, const std::string& key) 
     auto p = it->second.find(key);
     return p == it->second.end() ? nullptr : &*p;
 }
+void clear_local_property(World& world,const std::string& id,const std::string& key) {
+    auto it=world.local_properties.find(id);
+    if(it!=world.local_properties.end()&&it->second.is_object())it->second.erase(key);
+}
 std::string parent_id(World& world, const Node& node) {
     if (const Json* v = local_value(world, node, "Parent")) {
         if (v->is_object() && v->contains("$ref") && (*v)["$ref"].is_string()) return (*v)["$ref"].get<std::string>();
@@ -62,25 +203,85 @@ std::string parent_id(World& world, const Node& node) {
     }
     return node.parent;
 }
+bool valid_utf8(const char* s,size_t n){
+    size_t i=0;while(i<n){unsigned char c=s[i];if(c<0x80){i++;continue;}size_t count=0;uint32_t code=0;
+        if((c&0xe0)==0xc0){count=1;code=c&0x1f;if(code<2)return false;}
+        else if((c&0xf0)==0xe0){count=2;code=c&0x0f;}
+        else if((c&0xf8)==0xf0){count=3;code=c&0x07;if(code>4)return false;}
+        else return false;
+        if(i+count>=n)return false;for(size_t j=1;j<=count;j++){unsigned char t=s[i+j];if((t&0xc0)!=0x80)return false;code=(code<<6)|(t&0x3f);}
+        if((count==2&&code<0x800)||(count==3&&code<0x10000)||code>0x10ffff||(code>=0xd800&&code<=0xdfff))return false;i+=count+1;
+    }return true;
+}
 std::string instance_name(World& world, const Node& node) {
     if (const Json* v = local_value(world, node, "Name"); v && v->is_string()) return v->get<std::string>();
     return node.name;
 }
+bool display_property(World& world,const Node& node,const std::string& key);
+const Json* gui_default_property(World& world,const Node& node,const std::string& key);
+std::string gui_property_type(World& world,const Node& node,const std::string& key);
+std::string part_transform_origin(World&,const Node&,const std::string&);
+bool part_transform_index(lua_State*,World&,Node&,const std::string&);
+std::string attachment_origin(World&,const Node&,const std::string&);
+bool attachment_index(lua_State*,World&,Node&,const std::string&);
+void watch_attachment_property(World&,Node&,const std::string&);
+std::string joint_origin(World&,const Node&,const std::string&);
+bool joint_index(lua_State*,World&,Node&,const std::string&);
+void watch_joint_property(World&,Node&,const std::string&);
+std::string assembly_root_origin(World&,const Node&,const std::string&);
+std::string part_mass_origin(World&,const Node&,const std::string&);
+bool part_mass_index(lua_State*,World&,Node&,const std::string&);
+const Json* part_mass_default(World&,const Node&,const std::string&);
+Json observed_part_mass(World&,Node&,const std::string&);
+void watch_part_mass(World&,Node&,const std::string&);
+bool assembly_root_index(lua_State*,World&,Node&,const std::string&);
+void watch_assembly_root(World&,Node&,const std::string&);
+void invalidate_joint_topology(World&,Node&,const std::string&);
 std::string origin(World& world, const Node& node, const std::string& key) {
+    if(key=="Source"&&(node.class_name=="LocalScript"||node.class_name=="ModuleScript"||node.class_name=="Script")) {
+        if(node.script_code.is_object()&&node.script_code.contains("source"))return node.script_code.value("authored_override",false)?"local":"received";
+        return "class_default";
+    }
+    if(auto derived=assembly_root_origin(world,node,key);!derived.empty())return derived;
+    if(auto derived=part_mass_origin(world,node,key);!derived.empty())return derived;
+    if(auto derived=joint_origin(world,node,key);!derived.empty())return derived;
+    if(auto derived=attachment_origin(world,node,key);!derived.empty())return derived;
+    if(auto derived=part_transform_origin(world,node,key);!derived.empty())return derived;
+    if (node.class_name == "UserInputService" && (input_capability_key(key)||key=="MouseBehavior"||key=="MouseIconEnabled"||key=="MouseDeltaSensitivity")) return "local_input";
+    if (node.class_name == "InputObject" && (key=="KeyCode"||key=="UserInputType"||key=="UserInputState"||key=="Position"||key=="Delta")) return "local_input";
+    if (display_property(world,node,key)) return "local_display";
+    if (node.class_name == "Camera" && key == "ViewportSize") return "local_viewport";
     if (local_value(world, node, key)) return "local";
-    if (key == "Name" || key == "ClassName" || key == "Parent") return "received";
+    auto explicit_origin = node.origins.find(key);
+    if(key=="Parent"&&!node.parent.empty()&&!find_node(world,node.parent))return "unresolved_reference";
+    if(key=="Parent"&&node.properties.contains(key)) {
+        const Json& parent=node.properties[key];
+        if(parent.is_object()&&parent.size()==1&&parent.contains("$ref")&&parent["$ref"].is_string()&&!find_node(world,parent["$ref"].get<std::string>()))return "unresolved_reference";
+    }
+    if(explicit_origin!=node.origins.end()&&explicit_origin->is_string()) {
+        const std::string tag=explicit_origin->get<std::string>();
+        if(tag=="received"||tag=="derived_received"||tag=="issued_session"||tag=="local"||tag=="class_default")return tag;
+    }
     if (node.properties.contains(key)) {
-        auto o=node.origins.find(key);
-        if(o!=node.origins.end()&&o->is_string()&&o->get<std::string>()=="class_default")return "class_default";
+        const Json&v=node.properties[key];
+        if(v.is_object()&&v.size()==1&&v.contains("$ref")&&v["$ref"].is_string()&&!find_node(world,v["$ref"].get<std::string>()))return "unresolved_reference";
         return "received";
     }
+    if (key == "Name" || key == "ClassName" || key == "Parent") return "received";
     auto d = world.defaults.find(node.class_name);
     auto o = world.default_origins.find(node.class_name);
     if (d != world.defaults.end() && d->is_object() && d->contains(key) && o != world.default_origins.end()
-        && o->is_object() && o->contains(key) && (*o)[key].is_string() && !(*o)[key].get<std::string>().empty())
-        return "class_default";
+        && o->is_object() && o->contains(key) && (*o)[key].is_string()) {
+        const std::string tag=(*o)[key].get<std::string>();
+        if(tag=="received"||tag=="derived_received"||tag=="issued_session"||tag=="local"||tag=="class_default")return tag;
+    }
+    if(humanoid_health_default(node,key))return "class_default";
+    if(node.class_name=="Humanoid"&&key=="Jump")return "local_default";
+    if(gui_default_property(world,node,key))return "class_default";
+    if(part_mass_default(world,node,key))return "class_default";
     return "unavailable";
 }
+const Json* input_default(const Node&,const std::string&);
 const Json* property_value(World& world, const Node& node, const std::string& key) {
     if (const Json* v = local_value(world, node, key)) return v;
     auto p = node.properties.find(key);
@@ -90,25 +291,35 @@ const Json* property_value(World& world, const Node& node, const std::string& ke
     if (d != world.defaults.end() && d->is_object() && d->contains(key) && o != world.default_origins.end()
         && o->is_object() && o->contains(key) && (*o)[key].is_string() && !(*o)[key].get<std::string>().empty())
         return &(*d)[key];
-    return nullptr;
+    if(const Json* value=humanoid_health_default(node,key))return value;
+    if(node.class_name=="Humanoid"&&key=="Jump"){static const Json idle=false;return &idle;}
+    if(const Json* value=part_mass_default(world,node,key))return value;
+    if(const Json* value=input_default(node,key))return value;
+    return gui_default_property(world,node,key);
 }
+double json_number(const Json&v){
+    if(v.is_number())return v.get<double>();
+    if(v.is_object()&&v.size()==1&&v.contains("$number")&&v["$number"].is_string()){
+        std::string s=v["$number"].get<std::string>();if(s=="inf")return INFINITY;if(s=="-inf")return -INFINITY;if(s=="nan")return NAN;
+    }
+    throw std::runtime_error("invalid numeric snapshot value");
+}
+Json encode_number(double n){if(std::isnan(n))return Json{{"$number","nan"}};if(std::isinf(n))return Json{{"$number",n>0?"inf":"-inf"}};return n;}
 
 void push_json(lua_State* L, World& world, const Json& v, int depth = 0);
 void push_vector(lua_State* L, const Json& v) {
     if (!v.is_array() || v.size() != 3) throw std::runtime_error("invalid Vector3 snapshot value");
     double a[3];
-    for (size_t i = 0; i < 3; ++i) {
-        if (!v[i].is_number() || !std::isfinite(a[i] = v[i].get<double>())) throw std::runtime_error("invalid Vector3 component");
-    }
+    for (size_t i = 0; i < 3; ++i) a[i]=json_number(v[i]);
     lua_pushvector(L, a[0], a[1], a[2]);
 }
 void push_cframe(lua_State* L, const Json& v) {
-    if (!v.is_object() || !v.contains("position") || !v.contains("rotation") || !v["position"].is_array()
-        || v["position"].size() != 3 || !v["rotation"].is_array() || v["rotation"].size() != 9)
+    if (!v.is_object() || !v.contains("position") || !v["position"].is_array() || v["position"].size() != 3)
         throw std::runtime_error("invalid CFrame snapshot value");
-    auto* cf = static_cast<CFrameValue*>(lua_newuserdatatagged(L, sizeof(CFrameValue), 0));
-    for (size_t i=0;i<3;i++) { if (!v["position"][i].is_number()) throw std::runtime_error("invalid CFrame position"); cf->p[i]=v["position"][i].get<double>(); }
-    for (size_t i=0;i<9;i++) { if (!v["rotation"][i].is_number()) throw std::runtime_error("invalid CFrame rotation"); cf->r[i]=v["rotation"][i].get<double>(); }
+    auto* cf = new_cframe(L);
+    cf->source=v;for (size_t i=0;i<3;i++) cf->p[i]=json_number(v["position"][i]);
+    if(v.contains("rotation")&&v["rotation"].is_array()&&v["rotation"].size()==9){for(size_t i=0;i<9;i++)cf->r[i]=json_number(v["rotation"][i]);}
+    else cf->rotation_known=false;
     luaL_getmetatable(L, kCFrameMeta); lua_setmetatable(L, -2);
 }
 void push_json(lua_State* L, World& world, const Json& v, int depth) {
@@ -124,22 +335,47 @@ void push_json(lua_State* L, World& world, const Json& v, int depth) {
         lua_createtable(L, static_cast<int>(v.size()), 0);
         for (size_t i=0;i<v.size();i++) { push_json(L, world, v[i], depth+1); lua_rawseti(L, -2, static_cast<int>(i+1)); }
     } else if (v.is_object()) {
-        if (v.size()==1 && v.contains("$ref")) {
+        if(v.size()==1&&v.contains("$remote_array")) {
+            const auto& items=v["$remote_array"];
+            if(!items.is_array()||items.size()>10000)throw std::runtime_error("invalid remote array");
+            lua_createtable(L,int(items.size()),0);int table=lua_gettop(L),i=1;
+            for(const auto& item:items){push_json(L,world,item,depth+1);lua_rawseti(L,table,i++);}
+        } else if(v.size()==1&&v.contains("$remote_map")) {
+            const auto& items=v["$remote_map"];
+            if(!items.is_array()||items.size()>10000)throw std::runtime_error("invalid remote dictionary");
+            lua_createtable(L,0,int(items.size()));int table=lua_gettop(L);
+            for(const auto& pair:items){
+                if(!pair.is_array()||pair.size()!=2)throw std::runtime_error("invalid remote dictionary entry");
+                push_json(L,world,pair[0],depth+1);push_json(L,world,pair[1],depth+1);lua_rawset(L,table);
+            }
+        } else if (v.size()==1 && v.contains("$ref")) {
             if (!v["$ref"].is_string()) throw std::runtime_error("invalid instance reference");
             Node* n = find_node(world, v["$ref"].get<std::string>());
-            if (!n) throw std::runtime_error("snapshot property references an unknown node");
-            push_node(L, world, n);
+            if (!n) lua_pushnil(L); else push_node(L, world, n);
+        } else if(v.size()==1&&v.contains("$chat_status")) {
+            push_chat_status(L,v["$chat_status"].get<int>());
+        } else if(v.size()==1&&v.contains("$instance_handle")) {
+            if(!v["$instance_handle"].is_null()&&!v["$instance_handle"].is_string())throw std::runtime_error("invalid InstanceHandle value");
+            push_instance_handle(L,world,v["$instance_handle"].is_null()?"":v["$instance_handle"].get<std::string>());
+        } else if(v.size()==1&&v.contains("$number")) {
+            lua_pushnumber(L,json_number(v));
         } else if (v.size()==1 && v.contains("$vector3")) push_vector(L, v["$vector3"]);
         else if (v.size()==1 && v.contains("$cframe")) push_cframe(L, v["$cframe"]);
-        else if (v.size()==1 && v.contains("$bytes_hex")) {
-            if(!v["$bytes_hex"].is_string())throw std::runtime_error("invalid byte-string value");
-            std::string hex=v["$bytes_hex"].get<std::string>();
+        else if (v.size()==1 && (v.contains("$bytes_hex")||v.contains("$buffer_hex"))) {
+            const bool buffer=v.contains("$buffer_hex");
+            const auto& encoded=v[buffer?"$buffer_hex":"$bytes_hex"];
+            if(!encoded.is_string())throw std::runtime_error("invalid byte-string value");
+            std::string hex=encoded.get<std::string>();
             if(hex.size()%2||hex.size()>2*1024*1024)throw std::runtime_error("invalid byte-string length");
             auto nib=[](char c)->int{if(c>='0'&&c<='9')return c-'0';if(c>='a'&&c<='f')return c-'a'+10;if(c>='A'&&c<='F')return c-'A'+10;return -1;};
             std::string bytes;bytes.reserve(hex.size()/2);
             for(size_t i=0;i<hex.size();i+=2){int a=nib(hex[i]),b=nib(hex[i+1]);if(a<0||b<0)throw std::runtime_error("invalid byte-string hex");bytes.push_back(char((a<<4)|b));}
-            lua_pushlstring(L,bytes.data(),bytes.size());
+            if(buffer){void* data=lua_newbuffer(L,bytes.size());if(!bytes.empty())std::memcpy(data,bytes.data(),bytes.size());}
+            else lua_pushlstring(L,bytes.data(),bytes.size());
         }
+        else if(push_ussi_export_enum_json(L,v)||push_ussi_security_capabilities_json(L,v)) {}
+        else if(push_geometry_enum_json(L,v)) {}
+        else if(push_authored_value(L,v)) {}
         else {
             if (v.size() > 10000) throw std::runtime_error("snapshot property table item limit exceeded");
             lua_createtable(L, 0, static_cast<int>(v.size()));
@@ -160,18 +396,24 @@ bool is_descendant_of(World& world, const Node& node, const std::string& ancesto
 }
 bool class_is_a(const World& world, const std::string& actual, const std::string& requested) {
     if (actual == requested || requested == "Instance" || requested == "Object") return true;
-    std::set<std::string> seen;
+    auto cached=world.class_ancestors.find(actual);
+    if(cached!=world.class_ancestors.end())return cached->second.count(requested)!=0;
+    std::unordered_set<std::string> seen;
     std::vector<std::string> todo{actual};
     while (!todo.empty()) {
-        std::string c=todo.back(); todo.pop_back();
+        std::string c=std::move(todo.back()); todo.pop_back();
         if (!seen.insert(c).second) continue;
         auto it=world.class_parents.find(c);
         if (it==world.class_parents.end()) continue;
-        if (it->is_string()) { std::string p=it->get<std::string>(); if(p==requested)return true; todo.push_back(p); }
-        else if (it->is_array()) for (const auto& p:*it) if (p.is_string()) { std::string s=p.get<std::string>(); if(s==requested)return true; todo.push_back(s); }
+        if (it->is_string()) todo.push_back(it->get<std::string>());
+        else if (it->is_array()) for (const auto& p:*it) if (p.is_string()) todo.push_back(p.get<std::string>());
     }
-    return false;
+    bool result=seen.count(requested)!=0;
+    world.class_ancestors.emplace(actual,std::move(seen));
+    return result;
 }
+std::string character_motion_root_id(World&,Node&);
+#include "physics_force_bindings.inc"
 void push_children(lua_State* L, World& world, const Node& parent, bool recursive) {
     lua_newtable(L); int idx=1;
     for (const std::string& id:world.order) {
@@ -200,6 +442,33 @@ int find_class(lua_State* L, bool which) {
 }
 int find_child_class(lua_State* L) { return find_class(L,false); }
 int find_child_which(lua_State* L) { return find_class(L,true); }
+enum class AncestorMatch { Name, Class, Inherits };
+int find_ancestor(lua_State* L, AncestorMatch mode) {
+    Handle* h=checked_handle(L,1);
+    size_t length=0;const char* value=luaL_checklstring(L,2,&length);
+    std::string requested(value,length);World& w=*h->world;
+    std::string id=parent_id(w,*h->node);
+    // Received snapshots can contain unresolved parents. Bound traversal even
+    // for malformed input; local parent writes already reject cycles.
+    std::set<std::string> seen{h->node->id};
+    while(!id.empty() && seen.insert(id).second) {
+        Node* n=find_node(w,id);if(!n)break;
+        bool match=mode==AncestorMatch::Name?instance_name(w,*n)==requested:
+            mode==AncestorMatch::Class?n->class_name==requested:
+            class_is_a(w,n->class_name,requested);
+        if(match){push_node(L,w,n);return 1;}
+        id=parent_id(w,*n);
+    }
+    lua_pushnil(L);return 1;
+}
+int find_ancestor_name(lua_State* L){return find_ancestor(L,AncestorMatch::Name);}
+int find_ancestor_class(lua_State* L){return find_ancestor(L,AncestorMatch::Class);}
+int find_ancestor_which(lua_State* L){return find_ancestor(L,AncestorMatch::Inherits);}
+int is_ancestor(lua_State* L) {
+    Handle* h=checked_handle(L,1);Handle* other=checked_handle(L,2);
+    lua_pushboolean(L,h->world==other->world && h->node!=other->node &&
+        is_descendant_of(*h->world,*other->node,h->node->id));return 1;
+}
 int is_descendant(lua_State* L) {
     Handle* h=checked_handle(L,1); Handle* other=checked_handle(L,2);
     lua_pushboolean(L,is_descendant_of(*h->world,*h->node,other->node->id)); return 1;
@@ -211,9 +480,25 @@ int get_full_name(lua_State* L) {
     std::string out; for(auto it=parts.rbegin();it!=parts.rend();++it){if(!out.empty())out+='.';out+=*it;}
     lua_pushlstring(L,out.data(),out.size()); return 1;
 }
+Node* ensure_http_service(World& world);
+Node* ensure_client_service(World& world,const std::string& service);
+bool local_service_supported(const std::string& service) {
+    return service=="RunService"||service=="HttpService"||service=="ServerStorage"||service=="ServerScriptService"||service=="GuiService"||service=="UserInputService"||service=="ContextActionService"||service=="Lighting"||service=="CoreGui"||service=="Debris"||service=="CollectionService"||service=="TweenService"||service=="TestService"||service=="Stats";
+}
+int gui_ten_foot_interface(lua_State* L) {
+    auto* h=checked_handle(L,1);
+    if(h->node->class_name!="GuiService"){luaL_error(L,"GuiService receiver required");return 0;}
+    // This host has a desktop console/web UI, not Roblox's console UI mode.
+    // This reports presentation mode; it is not an account/platform assertion.
+    lua_pushboolean(L,false);return 1;
+}
 int get_service(lua_State* L) {
     Handle* h=checked_handle(L,1); if(h->node->id!=h->world->game_id){luaL_error(L,"GetService requires DataModel");return 0;}
     std::string service=luaL_checkstring(L,2); auto it=h->world->services.find(service);
+    if(it==h->world->services.end()&&local_service_supported(service)) {
+        try {push_node(L,*h->world,ensure_client_service(*h->world,service));return 1;}
+        catch(const std::exception& error){luaL_error(L,"local service unavailable: %s",error.what());return 0;}
+    }
     if(it==h->world->services.end()){luaL_error(L,"service unavailable in snapshot: %s",service.c_str());return 0;}
     Node* n=find_node(*h->world,it->second); if(!n){luaL_error(L,"snapshot service reference is invalid");return 0;}
     push_node(L,*h->world,n); return 1;
@@ -227,131 +512,1573 @@ int make_user_settings(lua_State*L){
 int find_service(lua_State* L) {
     Handle* h=checked_handle(L,1); if(h->node->id!=h->world->game_id){luaL_error(L,"FindService requires DataModel");return 0;}
     std::string service=luaL_checkstring(L,2); auto it=h->world->services.find(service);
-    if(it==h->world->services.end())lua_pushnil(L);else {Node*n=find_node(*h->world,it->second);if(n)push_node(L,*h->world,n);else lua_pushnil(L);} return 1;
+    if(it==h->world->services.end()) {
+        Node* local=nullptr;
+        if(local_service_supported(service))for(auto& [id,node]:h->world->nodes)if(!node.server_owned&&!node.destroyed&&node.class_name==service){local=&node;break;}
+        if(local)push_node(L,*h->world,local);else lua_pushnil(L);
+    } else {Node*n=find_node(*h->world,it->second);if(n)push_node(L,*h->world,n);else lua_pushnil(L);} return 1;
 }
 
-int cframe_components(lua_State* L) { auto* c=static_cast<CFrameValue*>(luaL_checkudata(L,1,kCFrameMeta)); for(double v:c->p)lua_pushnumber(L,v);for(double v:c->r)lua_pushnumber(L,v);return 12; }
+int cframe_components(lua_State* L) { auto* c=static_cast<CFrameValue*>(luaL_checkudata(L,1,kCFrameMeta));if(!c->rotation_known){luaL_error(L,"CFrame rotation metadata is unavailable");return 0;}for(double v:c->p)lua_pushnumber(L,v);for(double v:c->r)lua_pushnumber(L,v);return 12; }
+int vector3_new(lua_State*L){
+    if(lua_gettop(L)>3){luaL_error(L,"Vector3.new expects at most three numbers");return 0;}
+    double x=lua_isnone(L,1)?0:luaL_checknumber(L,1),y=lua_isnone(L,2)?0:luaL_checknumber(L,2),z=lua_isnone(L,3)?0:luaL_checknumber(L,3);
+    if(!std::isfinite(x)||!std::isfinite(y)||!std::isfinite(z)){luaL_error(L,"Vector3 components must be finite");return 0;}
+    lua_pushvector(L,x,y,z);return 1;
+}
+#include "vector3_methods.inc"
+int cframe_look_at(lua_State* L);
+int cframe_quaternion_new(lua_State* L);
+int cframe_new(lua_State*L){
+    int n=lua_gettop(L);
+    if(n==2&&lua_isvector(L,1)&&lua_isvector(L,2))return cframe_look_at(L);
+    if(n==7)return cframe_quaternion_new(L);
+    auto*cf=new_cframe(L);
+    if(n==0){}
+    else if(n==1&&lua_isvector(L,1)){const auto*v=lua_tovector(L,1);for(int i=0;i<3;i++)cf->p[i]=v[i];}
+    else if(n==3){for(int i=0;i<3;i++){double v=luaL_checknumber(L,i+1);if(!std::isfinite(v)){luaL_error(L,"CFrame position must be finite");return 0;}cf->p[i]=v;}}
+    else if(n==12){for(int i=0;i<3;i++){double v=luaL_checknumber(L,i+1);if(!std::isfinite(v)){luaL_error(L,"CFrame component must be finite");return 0;}cf->p[i]=v;}for(int i=0;i<9;i++){double v=luaL_checknumber(L,i+4);if(!std::isfinite(v)){luaL_error(L,"CFrame component must be finite");return 0;}cf->r[i]=v;}}
+    else {luaL_error(L,"CFrame.new expects zero arguments, one or two Vector3 values, or three, seven, or twelve numbers");return 0;}
+    luaL_getmetatable(L,kCFrameMeta);lua_setmetatable(L,-2);return 1;
+}
+int cframe_from_matrix(lua_State*L){
+    int n=lua_gettop(L);if(n<3||n>4){luaL_error(L,"CFrame.fromMatrix expects position, xAxis, yAxis, and optional zAxis");return 0;}
+    if(!lua_isvector(L,1)||!lua_isvector(L,2)||!lua_isvector(L,3)){luaL_error(L,"CFrame.fromMatrix values must be Vector3");return 0;}
+    const auto*p=lua_tovector(L,1);const auto*x=lua_tovector(L,2);const auto*y=lua_tovector(L,3);double z[3];
+    if(n==4){if(!lua_isvector(L,4)){luaL_error(L,"CFrame.fromMatrix zAxis must be Vector3");return 0;}const auto*v=lua_tovector(L,4);for(int i=0;i<3;i++)z[i]=v[i];}
+    else {z[0]=double(x[1])*y[2]-double(x[2])*y[1];z[1]=double(x[2])*y[0]-double(x[0])*y[2];z[2]=double(x[0])*y[1]-double(x[1])*y[0];
+        double length=std::hypot(z[0],z[1],z[2]);if(!std::isfinite(length)||length==0){luaL_error(L,"CFrame.fromMatrix requires independent finite basis vectors");return 0;}for(double&v:z)v/=length;}
+    auto*cf=new_cframe(L);for(int i=0;i<3;i++)cf->p[i]=p[i];
+    cf->r={double(x[0]),double(y[0]),double(z[0]),double(x[1]),double(y[1]),double(z[1]),double(x[2]),double(y[2]),double(z[2])};
+    luaL_getmetatable(L,kCFrameMeta);lua_setmetatable(L,-2);return 1;
+}
+#include "cframe_transforms.inc"
+
+void set_vector_constant(lua_State*L,const char*name,double x,double y,double z){lua_pushvector(L,x,y,z);lua_setfield(L,-2,name);}
 int cframe_index(lua_State* L) {
     auto* c=static_cast<CFrameValue*>(luaL_checkudata(L,1,kCFrameMeta)); const char* k=luaL_checkstring(L,2);
     if(std::strcmp(k,"Position")==0)lua_pushvector(L,c->p[0],c->p[1],c->p[2]);
-    else if(std::strcmp(k,"XVector")==0)lua_pushvector(L,c->r[0],c->r[3],c->r[6]);
-    else if(std::strcmp(k,"YVector")==0)lua_pushvector(L,c->r[1],c->r[4],c->r[7]);
-    else if(std::strcmp(k,"ZVector")==0)lua_pushvector(L,c->r[2],c->r[5],c->r[8]);
-    else if(std::strcmp(k,"LookVector")==0)lua_pushvector(L,-c->r[2],-c->r[5],-c->r[8]);
+    else if(std::strcmp(k,"X")==0)lua_pushnumber(L,c->p[0]);
+    else if(std::strcmp(k,"Y")==0)lua_pushnumber(L,c->p[1]);
+    else if(std::strcmp(k,"Z")==0)lua_pushnumber(L,c->p[2]);
+    else if(std::strcmp(k,"Rotation")==0){checked_cframe(L,1);return push_frame_value(L,{},c->r);}
+    else if(std::strcmp(k,"XVector")==0||std::strcmp(k,"RightVector")==0||std::strcmp(k,"YVector")==0||std::strcmp(k,"UpVector")==0||std::strcmp(k,"ZVector")==0||std::strcmp(k,"LookVector")==0){if(!c->rotation_known){luaL_error(L,"CFrame rotation metadata is unavailable");return 0;}if(std::strcmp(k,"XVector")==0||std::strcmp(k,"RightVector")==0)lua_pushvector(L,c->r[0],c->r[3],c->r[6]);else if(std::strcmp(k,"YVector")==0||std::strcmp(k,"UpVector")==0)lua_pushvector(L,c->r[1],c->r[4],c->r[7]);else if(std::strcmp(k,"ZVector")==0)lua_pushvector(L,c->r[2],c->r[5],c->r[8]);else lua_pushvector(L,-c->r[2],-c->r[5],-c->r[8]);}
     else if(std::strcmp(k,"GetComponents")==0)lua_pushcfunction(L,cframe_components,"GetComponents");
-    else lua_pushnil(L); return 1;
+    else {luaL_getmetatable(L,kCFrameMeta);lua_pushvalue(L,2);lua_rawget(L,-2);lua_remove(L,-2);} return 1;
 }
+int run_service_true(lua_State* L) {
+    auto* h = checked_handle(L,1);
+    if (h->node->class_name != "RunService") { luaL_error(L,"RunService receiver required"); return 0; }
+    lua_pushboolean(L,true); return 1;
+}
+int run_service_false(lua_State* L) {
+    auto* h = checked_handle(L,1);
+    if (h->node->class_name != "RunService") { luaL_error(L,"RunService receiver required"); return 0; }
+    lua_pushboolean(L,false); return 1;
+}
+int clone_instance(lua_State* L);
+bool client_service_index(lua_State* L,World& world,Node& node,const std::string& key);
+int destroy_instance(lua_State* L);
+int clear_children(lua_State* L);
+int get_attribute(lua_State* L);
+int get_attributes(lua_State* L);
+int set_attribute(lua_State* L);
+int property_changed_signal(lua_State* L);
+int attribute_changed_signal(lua_State* L);
+int fire_bindable(lua_State* L);
+int fire_remote_server(lua_State* L);
+int invoke_remote_server(lua_State* L);
+int invoke_remote_server_continue(lua_State* L,int status);
+int invoke_bindable(lua_State* L);
+int invoke_bindable_continue(lua_State* L,int status);
+int wait_for_child(lua_State* L);
+int send_chat(lua_State* L);
+int send_chat_continue(lua_State* L,int status);
+int send_universe_chat(lua_State* L);
+int send_universe_chat_continue(lua_State* L,int status);
+Node* ensure_current_camera(World& w,Node& workspace);
+void set_current_camera(World& w,Node& workspace,Node* camera);
+void refresh_current_camera(World& w);
+void check_mutation_budget(World& w,const std::vector<Json>& entries);
+void append_mutations(World& w,std::vector<Json> entries);
+Signal& signal_for(World& w,Node& node,const std::string& key) {
+    if(key=="ChildAdded"||key=="ChildRemoved"||key=="DescendantAdded"||key=="DescendantRemoving"||key=="AncestryChanged")w.hierarchy_events_observed=true;
+    std::string id=Json::array({node.id,key}).dump();
+    auto it=w.signals.find(id);if(it!=w.signals.end())return *it->second;
+    if(w.signals.size()>=4096)throw std::runtime_error("local signal count limit exceeded");
+    auto signal=std::make_unique<Signal>();signal->world=&w;signal->node=&node;signal->key=key;
+    auto& ref=*signal;w.signals.emplace(id,std::move(signal));return ref;
+}
+void push_signal(lua_State* L,Signal& signal) {
+    lua_pushlightuserdata(L,&signal);lua_rawget(L,LUA_REGISTRYINDEX);
+    if(lua_isuserdata(L,-1))return;lua_pop(L,1);
+    auto* handle=static_cast<SignalHandle*>(lua_newuserdatatagged(L,sizeof(SignalHandle),0));handle->signal=&signal;
+    luaL_getmetatable(L,kSignalMeta);lua_setmetatable(L,-2);
+    lua_pushlightuserdata(L,&signal);lua_pushvalue(L,-2);lua_rawset(L,LUA_REGISTRYINDEX);
+}
+void emit(World& w,Node& node,const std::string& key,Json args=Json::array(),int argument_ref=LUA_NOREF,int argument_count=0) {
+    std::string id=Json::array({node.id,key}).dump();auto signal=w.signals.find(id);if(signal==w.signals.end())return;
+    if(w.events.size()>=10000){w.event_overflow=true;return;}
+    for(auto& connection:w.connections) {
+        auto& c=*connection;
+        if(c.signal==signal->second.get() && c.connected && (!c.once||!c.once_pending)) {
+            if(w.events.size()>=10000){w.event_overflow=true;return;}
+            w.events.push_back(PendingEvent{&c,nullptr,args,argument_ref,argument_count});if(c.once)c.once_pending=true;
+        }
+    }
+    auto waiters=w.waiters.find(signal->second.get());
+    if(waiters!=w.waiters.end()) {
+        for(auto waiter:waiters->second){if(w.events.size()>=10000){w.event_overflow=true;lua_unref(waiter.thread,waiter.reference);continue;}w.events.push_back(PendingEvent{nullptr,waiter.thread,args,argument_ref,argument_count,waiter.reference});}
+        waiters->second.clear();
+    }
+}
+void queue_context_input(World&,const std::string&,int,int,int,bool);
+void context_reserve(World&,size_t,size_t);
+#include "input_bindings.inc"
+#include "context_action_bindings.inc"
+#include "render_step_bindings.inc"
+#include "collection_bindings.inc"
+#include "service_lookup_events.inc"
+std::vector<Node*> ancestors(World& w,const std::string& parent) {
+    std::vector<Node*> result;std::string id=parent;
+    while(!id.empty()&&result.size()<=w.nodes.size()) {auto* p=find_node(w,id);if(!p)break;result.push_back(p);id=parent_id(w,*p);}
+    return result;
+}
+void parent_events(World& w,Node& node,const std::string& old_parent,const std::string& new_parent) {
+    if(old_parent==new_parent)return;
+    collection_parent_events(w,node,old_parent,new_parent);
+    player_membership_events(w,node,old_parent,new_parent);
+    invalidate_joint_topology(w,node,"Parent");
+    if(!w.hierarchy_events_observed) {
+        emit(w,node,"Changed",Json::array({"Parent"}));emit(w,node,"property:Parent");return;
+    }
+    std::vector<Node*> subtree{&node};for(auto& id:w.order)if(is_descendant_of(w,w.nodes.at(id),node.id))subtree.push_back(&w.nodes.at(id));
+    auto old=ancestors(w,old_parent),now=ancestors(w,new_parent);
+    for(auto* p:old)if(std::find(now.begin(),now.end(),p)==now.end())for(auto* n:subtree)emit(w,*p,"DescendantRemoving",Json::array({Json{{"$ref",n->id}}}));
+    if(auto* p=find_node(w,old_parent))emit(w,*p,"ChildRemoved",Json::array({Json{{"$ref",node.id}}}));
+    emit(w,node,"Changed",Json::array({"Parent"}));emit(w,node,"property:Parent");
+    for(auto* n:subtree) {
+        auto parent=n==&node?new_parent:parent_id(w,*n);
+        emit(w,*n,"AncestryChanged",Json::array({Json{{"$ref",n->id}},parent.empty()?Json(nullptr):Json{{"$ref",parent}}}));
+    }
+    if(auto* p=find_node(w,new_parent))emit(w,*p,"ChildAdded",Json::array({Json{{"$ref",node.id}}}));
+    for(auto* p:now)if(std::find(old.begin(),old.end(),p)==old.end())for(auto* n:subtree)emit(w,*p,"DescendantAdded",Json::array({Json{{"$ref",n->id}}}));
+}
+void property_events(World& w,Node& n,const std::string& key) {
+    invalidate_joint_topology(w,n,key);
+    // A direct received mass update already emits its signal here. Keep the
+    // derived-value watch in sync so the next scheduler tick does not emit it twice.
+    auto mass_watch=w.part_mass_watches.find(n.id);
+    if(mass_watch!=w.part_mass_watches.end()&&mass_watch->second.contains(key))
+        mass_watch->second[key]=observed_part_mass(w,n,key);
+    std::string canonical=key=="archivable"?"Archivable":key;
+    if(class_is_a(w,n.class_name,"ValueBase")) {
+        if(canonical=="Value"){auto* v=property_value(w,n,key);emit(w,n,"Changed",Json::array({v?*v:Json(nullptr)}));}
+    } else emit(w,n,"Changed",Json::array({canonical}));
+    emit(w,n,"property:"+canonical);
+}
+#include "camera_projection.inc"
+#include "model_pivots.inc"
+#include "gui_layout.inc"
+#include "animation_bindings.inc"
+// State helpers are authored by the character-state workstream.
+#include "humanoid_states.inc"
+int local_move(lua_State* L) {
+    auto* h=checked_handle(L,1);const char* method=lua_tostring(L,lua_upvalueindex(1));
+    if(h->node->destroyed){luaL_error(L,"movement receiver is destroyed");return 0;}
+    if(!class_is_a(*h->world,h->node->class_name,"Humanoid")&&
+       !(h->node->class_name=="Player"&&std::strcmp(method,"Move")==0)) {
+        luaL_error(L,"movement method requires a Humanoid or Player receiver");return 0;
+    }
+    movement_bindings::enqueue(L,method,h->node->id,[L,h]() {
+        World& w=*h->world;
+        auto service=w.services.find("Workspace");
+        if(service==w.services.end())return std::string("{}");
+        auto* workspace=find_node(w,service->second);
+        if(!workspace||workspace->destroyed)return std::string("{}");
+        auto* camera=ensure_current_camera(w,*workspace);
+        if(!camera)return std::string("{}");
+        const auto* value=property_value(w,*camera,"CFrame");
+        if(!value)return std::string("{}");
+        push_json(L,w,*value);
+        auto* frame=checked_cframe(L,-1,false);
+        const bool known=frame->rotation_known;
+        const auto rotation=frame->r;
+        lua_pop(L,1);
+        if(!known)return std::string("{}");
+        for(double v:rotation)if(!std::isfinite(v))
+            return std::string("{\"error\":\"camera_transform_invalid\"}");
+        return Json{{"instance_id",camera->id},{"rotation",rotation},
+                    {"origin",origin(w,*camera,"CFrame")}}.dump();
+    });movement_bindings::tag_latest_mutation_cursor(L,static_cast<int>(h->world->mutations.size()));return 0;
+}
+int local_json(lua_State* L) {
+    auto* h=checked_handle(L,1);
+    if(h->node->class_name!="HttpService"){luaL_error(L,"JSON method requires HttpService");return 0;}
+    const int count=lua_gettop(L);
+    if(!json_bindings::push_method(L,lua_tostring(L,lua_upvalueindex(1)))){luaL_error(L,"unknown JSON method");return 0;}
+    lua_insert(L,1);lua_call(L,count,1);return 1;
+}
+bool read_guid_entropy(std::array<unsigned char,16>& bytes) {
+    // Match Random's host-entropy policy: never substitute a clock or PRNG seed.
+    // The stream must be destroyed before raising any Luau error.
+    std::ifstream entropy("/dev/urandom",std::ios::in|std::ios::binary);
+    return bool(entropy.read(reinterpret_cast<char*>(bytes.data()),bytes.size()));
+}
+int generate_guid(lua_State* L) {
+    auto* h=checked_handle(L,1);
+    if(h->node->class_name!="HttpService") {luaL_error(L,"GenerateGUID requires HttpService");return 0;}
+    bool braces=true;
+    const int type=lua_type(L,2);
+    if(type==LUA_TBOOLEAN)braces=lua_toboolean(L,2)!=0;
+    else if(type==LUA_TNUMBER)braces=lua_tonumber(L,2)!=0;
+    else if(type==LUA_TSTRING) {
+        size_t length=0;const char* text=lua_tolstring(L,2,&length);
+        char lowered[5]{};
+        if(length==4||length==5)for(size_t i=0;i<length;++i)
+            lowered[i]=text[i]>='A'&&text[i]<='Z'?text[i]-'A'+'a':text[i];
+        if(length==4&&std::memcmp(lowered,"true",4)==0)braces=true;
+        else if(length==5&&std::memcmp(lowered,"false",5)==0)braces=false;
+        else {luaL_argerror(L,2,"unable to cast string to bool");return 0;}
+    } else if(type!=LUA_TNONE&&type!=LUA_TNIL) {
+        luaL_argerror(L,2,"unable to cast value to bool");return 0;
+    }
+    std::array<unsigned char,16> bytes{};
+    if(!read_guid_entropy(bytes)){luaL_error(L,"GenerateGUID could not read host entropy");return 0;}
+    bytes[6]=(bytes[6]&0x0f)|0x40;
+    bytes[8]=(bytes[8]&0x3f)|0x80;
+    static constexpr char hex[]="0123456789abcdef";
+    char result[38];size_t cursor=0;
+    if(braces)result[cursor++]='{';
+    for(size_t i=0;i<bytes.size();++i) {
+        if(i==4||i==6||i==8||i==10)result[cursor++]='-';
+        result[cursor++]=hex[bytes[i]>>4];result[cursor++]=hex[bytes[i]&0xf];
+    }
+    if(braces)result[cursor++]='}';
+    lua_pushlstring(L,result,cursor);return 1;
+}
+int is_loaded(lua_State* L) {
+    Handle* h=checked_handle(L,1);
+    if(h->node->id!=h->world->game_id){luaL_error(L,"IsLoaded requires DataModel");return 0;}
+    lua_pushboolean(L,h->world->initial_replication_complete);return 1;
+}
+int humanoid_take_damage(lua_State* L);
+int part_is_grounded(lua_State* L);
+int part_velocity_at_position(lua_State* L);
+int instance_newindex(lua_State* L);
+int remove_instance(lua_State* L);
+int instance_get_actor(lua_State* L) {
+    auto* handle=checked_handle(L,1);auto& world=*handle->world;Node* node=handle->node;
+    for(size_t depth=0;node&&depth<=world.nodes.size();++depth) {
+        if(class_is_a(world,node->class_name,"Actor")){push_node(L,world,node);return 1;}
+        node=find_node(world,parent_id(world,*node));
+    }
+    lua_pushnil(L);return 1;
+}
+// Unveil resolves deprecated Instance spellings before member dispatch. Keep
+// these aliases on the same implementations and property-change signals.
+std::string canonical_instance_member(std::string key) {
+    static const std::unordered_map<std::string,std::string> aliases={
+        {"className","ClassName"},{"archivable","Archivable"},
+        {"children","GetChildren"},{"getChildren","GetChildren"},
+        {"clone","Clone"},{"destroy","Destroy"},{"remove","Remove"},
+        {"findFirstChild","FindFirstChild"},{"waitForChild","WaitForChild"},
+        {"isA","IsA"},{"isDescendantOf","IsDescendantOf"},
+        {"childAdded","ChildAdded"},{"getFullName","GetFullName"}
+    };
+    auto found=aliases.find(key);return found==aliases.end()?key:found->second;
+}
+#include "http_instance.inc"
+#include "body_position_bindings.inc"
+#include "linear_velocity_bindings.inc"
+int body_velocity_last_force(lua_State* L) {
+    auto* h=checked_handle(L,1);
+    if(h->node->class_name!="BodyVelocity") {luaL_error(L,"GetLastForce requires BodyVelocity");return 0;}
+    // Roblox documents this legacy query as unimplemented, returning zero.
+    lua_pushvector(L,0,0,0);return 1;
+}
+bool tween_playback_index(lua_State*,World&,Node&,const std::string&);
 int instance_index(lua_State* L) {
-    Handle* h=checked_handle(L,1); World& w=*h->world; Node& n=*h->node; std::string key=luaL_checkstring(L,2);
+    Handle* h=checked_handle(L,1); World& w=*h->world; Node& n=*h->node; std::string key=canonical_instance_member(luaL_checkstring(L,2));
+    if(n.class_name=="BodyForce"&&key=="force")key="Force";
+    if(n.class_name=="BodyPosition") {
+        if(key=="position")key="Position";
+        if(key=="maxForce")key="MaxForce";
+        if(body_position_index(L,w,n,key))return 1;
+    }
+    if(n.class_name=="BodyVelocity") {
+        if(key=="velocity")key="Velocity";
+        if(key=="maxForce")key="MaxForce";
+        if(key=="GetLastForce"||key=="lastForce") {
+            lua_pushcfunction(L,body_velocity_last_force,"GetLastForce");return 1;
+        }
+    }
+    enforce_scriptability(L,w,n,key);
+    try{if(linear_velocity_index(L,w,n,key))return 1;}catch(const std::exception& e){luaL_error(L,"%s",e.what());return 0;}
+    if(n.class_name=="VectorForce"&&key=="RelativeTo") {
+        try {
+            const Json* value=property_value(w,n,key);
+            if(value&&value->is_object()&&value->contains("$enum")) {
+                const auto& item=(*value)["$enum"];
+                if(!item.is_object()||item.value("type","")!="ActuatorRelativeTo"||!item.contains("value"))throw std::runtime_error("invalid RelativeTo enum");
+                value=&item.at("value");
+            }
+            if(!value||!value->is_number_integer()||value->get<int>()<0||value->get<int>()>2)throw std::runtime_error("RelativeTo is unavailable");
+            push_geometry_item(L,kActuatorRelativeTo,value->get<int>());return 1;
+        }catch(const std::exception& e){luaL_error(L,"VectorForce: %s",e.what());return 0;}
+    }
+    if(n.class_name=="RunService"&&key=="BindToRenderStep"){lua_pushcfunction(L,run_service_bind_render,"BindToRenderStep");return 1;}
+    if(n.class_name=="RunService"&&key=="UnbindFromRenderStep"){lua_pushcfunction(L,run_service_unbind_render,"UnbindFromRenderStep");return 1;}
+    if(n.class_name=="DataModel"&&(key=="HttpGet"||key=="HttpGetAsync")){lua_pushcclosurek(L,instance_http_get,"HttpGet",0,instance_http_get_continue);return 1;}
+    try{if(context_action_index(L,w,n,key))return 1;}catch(const std::exception& e){luaL_error(L,"context action member: %s",e.what());return 0;}
+    try{if(input_index(L,w,n,key))return 1;}catch(const std::exception& e){luaL_error(L,"input member: %s",e.what());return 0;}
+    if(tween_playback_index(L,w,n,key))return 1;
+    if(n.id==w.game_id&&(key=="HttpGet"||key=="HttpGetAsync")) {
+        lua_getfield(L,LUA_REGISTRYINDEX,"Headless.HttpGet");
+        if(lua_isfunction(L,-1))return 1;
+        lua_pop(L,1);
+    }
+    if(key=="Source"&&(n.class_name=="LocalScript"||n.class_name=="ModuleScript"||n.class_name=="Script")) {
+        // A bytecode-only script has no replicated Source text. Preserve the
+        // constructor's empty text field; this does not decompile its bytecode.
+        if(!n.script_code.is_object()||!n.script_code.contains("source")){lua_pushliteral(L,"");return 1;}
+        auto& source=n.script_code["source"].get_ref<const std::string&>();lua_pushlstring(L,source.data(),source.size());return 1;
+    }
+    if(humanoid_state_index(L,w,n,key))return 1;
+    if(n.class_name=="Humanoid"&&(key=="Jumping"||key=="FreeFalling"||key=="Running"||key=="PlatformStanding"||key=="MoveToFinished")) {
+        try{push_signal(L,signal_for(w,n,key));}catch(const std::exception& e){luaL_error(L,"Humanoid state signal unavailable: %s",e.what());return 0;}
+        return 1;
+    }
+    if(n.class_name=="UserInputService"&&input_capability_key(key)) {
+        lua_pushboolean(L,input_capability(w,key));return 1;
+    }
+    if(int kind=gui_enum_kind(w,n,key);kind>=0) {
+        try{push_geometry_item(L,kind,gui_enum_value(w,n,key));return 1;}
+        catch(const std::exception& e){luaL_error(L,"GUI enum unavailable: %s",e.what());return 0;}
+    }
+    if(display_property(w,n,key)) {
+        try{GuiLayoutPass pass{w};push_json(L,w,pass.value(n,key));return 1;}
+        catch(const std::exception& e){luaL_error(L,"display layout unavailable: %s",e.what());return 0;}
+    }
+    if(n.class_name=="GuiService"&&key=="GetGuiInset"){lua_pushcfunction(L,gui_get_inset,"GetGuiInset");return 1;}
+    try{if(animation_index(L,w,n,key))return 1;}catch(const std::exception& e){luaL_error(L,"animation member unavailable: %s",e.what());return 0;}
     if(key=="Name"){auto s=instance_name(w,n);lua_pushlstring(L,s.data(),s.size());return 1;}
     if(key=="ClassName"){lua_pushlstring(L,n.class_name.data(),n.class_name.size());return 1;}
-    if(key=="Parent"){std::string p=parent_id(w,n);if(p.empty())lua_pushnil(L);else{Node* parent=find_node(w,p);if(!parent)throw std::runtime_error("snapshot parent is unavailable");push_node(L,w,parent);}return 1;}
+    if(key=="Parent"){std::string p=parent_id(w,n);if(p.empty())lua_pushnil(L);else{Node* parent=find_node(w,p);if(!parent)lua_pushnil(L);else push_node(L,w,parent);}return 1;}
+    if(camera_index(L,w,n,key))return 1;
+    try{if(model_pivot_index(L,w,n,key))return 1;}catch(const std::exception& e){luaL_error(L,"model pivot unavailable: %s",e.what());return 0;}
+    try{if(part_transform_index(L,w,n,key))return 1;}catch(const std::exception& e){luaL_error(L,"part transform unavailable: %s",e.what());return 0;}
+    try{if(attachment_index(L,w,n,key))return 1;}catch(const std::exception& e){luaL_error(L,"attachment transform unavailable: %s",e.what());return 0;}
+    try{if(joint_index(L,w,n,key))return 1;}catch(const std::exception& e){luaL_error(L,"joint state unavailable: %s",e.what());return 0;}
+    try{if(assembly_root_index(L,w,n,key))return 1;}catch(const std::exception& e){luaL_error(L,"assembly root unavailable: %s",e.what());return 0;}
+    try{if(part_mass_index(L,w,n,key))return 1;}catch(const std::exception& e){luaL_error(L,"part mass unavailable: %s",e.what());return 0;}
+    if(n.class_name=="Workspace"&&key=="CurrentCamera") {
+        try{push_node(L,w,ensure_current_camera(w,n));return 1;}
+        catch(const std::exception& e){luaL_error(L,"CurrentCamera unavailable: %s",e.what());return 0;}
+    }
     if(n.id==w.game_id && key=="JobId" && !n.properties.contains("JobId")){luaL_error(L,"JobId is unavailable in this snapshot");return 0;}
+    if(n.id==w.game_id && key=="IsLoaded"){lua_pushcfunction(L,is_loaded,"IsLoaded");return 1;}
+    if(n.id==w.game_id && key=="Loaded"){push_signal(L,signal_for(w,n,"Loaded"));return 1;}
+    if(n.class_name=="Players"&&(key=="PlayerAdded"||key=="PlayerRemoving")){w.player_membership_events_observed=true;push_signal(L,signal_for(w,n,key));return 1;}
     if(n.class_name=="Players" && key=="LocalPlayer"){Node* player=find_node(w,w.local_player);if(player)push_node(L,w,player);else lua_pushnil(L);return 1;}
+    if(client_service_index(L,w,n,key)||collection_instance_index(L,w,n,key))return 1;
+    if(n.class_name=="TweenService"&&key=="GetValue"){lua_pushcfunction(L,tween_service_get_value,"GetValue");return 1;}
     if(key=="GetService"){lua_pushcfunction(L,get_service,"GetService");return 1;}
     if(key=="FindService"){lua_pushcfunction(L,find_service,"FindService");return 1;}
     if(key=="GetChildren"){lua_pushcfunction(L,get_children,"GetChildren");return 1;}
     if(key=="GetDescendants"){lua_pushcfunction(L,get_descendants,"GetDescendants");return 1;}
     if(key=="FindFirstChild"){lua_pushcfunction(L,find_child,"FindFirstChild");return 1;}
+    if(key=="WaitForChild"){lua_pushcfunction(L,wait_for_child,"WaitForChild");return 1;}
     if(key=="FindFirstChildOfClass"){lua_pushcfunction(L,find_child_class,"FindFirstChildOfClass");return 1;}
     if(key=="FindFirstChildWhichIsA"){lua_pushcfunction(L,find_child_which,"FindFirstChildWhichIsA");return 1;}
+    if(key=="FindFirstAncestor"){lua_pushcfunction(L,find_ancestor_name,"FindFirstAncestor");return 1;}
+    if(key=="FindFirstAncestorOfClass"){lua_pushcfunction(L,find_ancestor_class,"FindFirstAncestorOfClass");return 1;}
+    if(key=="FindFirstAncestorWhichIsA"){lua_pushcfunction(L,find_ancestor_which,"FindFirstAncestorWhichIsA");return 1;}
+    if(key=="IsAncestorOf"){lua_pushcfunction(L,is_ancestor,"IsAncestorOf");return 1;}
     if(key=="IsA"){lua_pushcfunction(L,is_a,"IsA");return 1;}
     if(key=="IsDescendantOf"){lua_pushcfunction(L,is_descendant,"IsDescendantOf");return 1;}
     if(key=="GetFullName"){lua_pushcfunction(L,get_full_name,"GetFullName");return 1;}
-    if(n.class_name=="RunService" && key=="IsStudio"){lua_pushboolean(L,false);return 1;}
-    if(n.class_name=="RunService" && key=="IsRunning"){lua_pushboolean(L,true);return 1;}
+    if(key=="GetActor"){lua_pushcfunction(L,instance_get_actor,"GetActor");return 1;}
+    if(key=="Remove"){lua_pushcfunction(L,remove_instance,"Remove");return 1;}
+    if(key=="Clone"||key=="clone"){lua_pushcfunction(L,clone_instance,"Clone");return 1;}
+    if(key=="Destroy"||key=="destroy"){lua_pushcfunction(L,destroy_instance,"Destroy");return 1;}
+    if(key=="ClearAllChildren"){lua_pushcfunction(L,clear_children,"ClearAllChildren");return 1;}
+    if(key=="GetAttribute"){lua_pushcfunction(L,get_attribute,"GetAttribute");return 1;}
+    if(key=="GetAttributes"){lua_pushcfunction(L,get_attributes,"GetAttributes");return 1;}
+    if(key=="SetAttribute"){lua_pushcfunction(L,set_attribute,"SetAttribute");return 1;}
+    if(key=="GetPropertyChangedSignal"){lua_pushcfunction(L,property_changed_signal,"GetPropertyChangedSignal");return 1;}
+    if(key=="GetAttributeChangedSignal"){lua_pushcfunction(L,attribute_changed_signal,"GetAttributeChangedSignal");return 1;}
+    if((class_is_a(w,n.class_name,"Humanoid")&&(key=="Move"||key=="MoveTo"))||
+       (n.class_name=="Player"&&key=="Move")) {
+        lua_pushlstring(L,key.data(),key.size());lua_pushcclosurek(L,local_move,key.c_str(),1,nullptr);return 1;
+    }
+    if(class_is_a(w,n.class_name,"BasePart")&&
+       (key=="ApplyImpulse"||key=="ApplyImpulseAtPosition")) {
+        lua_pushlstring(L,key.data(),key.size());lua_pushcclosurek(L,local_apply_impulse,key.c_str(),1,nullptr);return 1;
+    }
+    if(class_is_a(w,n.class_name,"BasePart")&&key=="IsGrounded") {
+        lua_pushcfunction(L,part_is_grounded,"IsGrounded");return 1;
+    }
+    if(class_is_a(w,n.class_name,"BasePart")&&key=="GetVelocityAtPosition") {
+        lua_pushcfunction(L,part_velocity_at_position,"GetVelocityAtPosition");return 1;
+    }
+    if(n.class_name=="Humanoid"&&(key=="TakeDamage"||key=="takeDamage")) {
+        lua_pushcfunction(L,humanoid_take_damage,"TakeDamage");return 1;
+    }
+    if(n.class_name=="Humanoid"&&(key=="HealthChanged"||key=="Died")) {
+        try{push_signal(L,signal_for(w,n,key));}catch(const std::exception& e){luaL_error(L,"health signal unavailable: %s",e.what());}return 1;
+    }
+    if(n.class_name=="HttpService"&&(key=="JSONEncode"||key=="JSONDecode")) {
+        lua_pushlstring(L,key.data(),key.size());lua_pushcclosurek(L,local_json,key.c_str(),1,nullptr);return 1;
+    }
+    if(n.class_name=="HttpService"&&key=="UrlEncode"){lua_pushcfunction(L,http_url_encode,"UrlEncode");return 1;}
+    if(n.class_name=="HttpService"&&key=="GenerateGUID"){lua_pushcfunction(L,generate_guid,"GenerateGUID");return 1;}
+    if(n.class_name=="GuiService"&&key=="IsTenFootInterface"){lua_pushcfunction(L,gui_ten_foot_interface,"IsTenFootInterface");return 1;}
+    if(n.class_name=="RunService" && (key=="Heartbeat"||key=="RenderStepped"||key=="PreRender")) {push_signal(L,signal_for(w,n,key));return 1;}
+    if(n.class_name=="ClickDetector" && (key=="MouseClick"||key=="RightMouseClick"||key=="MouseHoverEnter"||key=="MouseHoverLeave")) {push_signal(L,signal_for(w,n,key));return 1;}
+    if((class_is_a(w,n.class_name,"GuiButton")&&(key=="Activated"||key=="MouseButton1Click"||key=="MouseButton1Down"||key=="MouseButton1Up"))
+            ||(n.class_name=="TextBox"&&(key=="Focused"||key=="FocusLost"))) {push_signal(L,signal_for(w,n,key));return 1;}
+    if(n.class_name=="BindableEvent" && key=="Event") {push_signal(L,signal_for(w,n,"Event"));return 1;}
+    if(n.class_name=="BindableEvent" && key=="Fire") {lua_pushcfunction(L,fire_bindable,"Fire");return 1;}
+    if((n.class_name=="RemoteEvent"||n.class_name=="UnreliableRemoteEvent")&&key=="FireServer"){lua_pushcfunction(L,fire_remote_server,"FireServer");return 1;}
+    if(n.class_name=="RemoteFunction"&&key=="InvokeServer"){lua_pushcclosurek(L,invoke_remote_server,"InvokeServer",0,invoke_remote_server_continue);return 1;}
+    if(n.class_name=="BindableFunction"&&key=="Invoke"){lua_pushcclosurek(L,invoke_bindable,"Invoke",0,invoke_bindable_continue);return 1;}
+    if(n.class_name=="BindableFunction"&&key=="OnInvoke"){luaL_error(L,"OnInvoke is a write-only callback; use Invoke");return 0;}
+    if(n.class_name=="RemoteFunction"&&key=="OnClientInvoke"){luaL_error(L,"OnClientInvoke is a write-only callback");return 0;}
+    if(n.class_name=="TextChannel" && key=="SendAsync") {lua_pushcclosurek(L,send_chat,"SendAsync",0,send_chat_continue);return 1;}
+    if(n.class_name=="TextChatService" && key=="SendUniverseChatMessageAsync") {lua_pushcclosurek(L,send_universe_chat,"SendUniverseChatMessageAsync",0,send_universe_chat_continue);return 1;}
+    if(key=="Changed")for(const char* property:{"AbsoluteSize","AbsolutePosition","AbsoluteRotation"})watch_display_property(w,n,property);
+    if(key=="Changed")for(const char* property:{"WorldCFrame","WorldPosition","WorldOrientation","WorldRotation","WorldAxis","WorldSecondaryAxis","TransformedCFrame","TransformedWorldCFrame"})watch_attachment_property(w,n,property);
+    if(key=="Changed")watch_joint_property(w,n,"Active");
+    if(key=="Changed")watch_assembly_root(w,n,"AssemblyRootPart");
+    if(key=="Changed")watch_part_mass(w,n,"Changed");
+    bool schema_event=false;
+    auto class_events=w.class_events.find(n.class_name);
+    if(class_events!=w.class_events.end())for(const auto& event:*class_events)if(event.is_string()&&event.get<std::string>()==key)schema_event=true;
+    if((n.class_name=="Player"&&(key=="CharacterAdded"||key=="CharacterRemoving"))
+        ||((n.class_name=="TextChatService"||n.class_name=="TextChannel")&&key=="MessageReceived")
+        ||(n.class_name=="TextChatService"&&key=="UniverseChatMessageReceived")
+        ||((n.class_name=="RemoteEvent"||n.class_name=="UnreliableRemoteEvent")&&key=="OnClientEvent")||schema_event) {
+        try{push_signal(L,signal_for(w,n,key));}catch(const std::exception& e){luaL_error(L,"signal unavailable: %s",e.what());}return 1;
+    }
+    if(key=="Changed"||key=="AttributeChanged"||key=="ChildAdded"||key=="ChildRemoved"||key=="DescendantAdded"||key=="DescendantRemoving"||key=="AncestryChanged"||key=="Destroying") {
+        try{push_signal(L,signal_for(w,n,key));}catch(const std::exception& e){luaL_error(L,"signal unavailable: %s",e.what());}return 1;
+    }
+    if(n.class_name=="RunService" && (key=="IsStudio" || key=="IsServer" || key=="IsEdit" || key=="IsRunMode")){lua_pushcfunction(L,run_service_false,"RunService mode");return 1;}
+    if(n.class_name=="RunService" && (key=="IsRunning" || key=="IsClient")){lua_pushcfunction(L,run_service_true,"RunService mode");return 1;}
     const Json* value=property_value(w,n,key);
+    if(!value&&n.class_name=="TextSource"&&key=="UserId")value=property_value(w,n,"UserIdReplicated");
+    if(!value)for(const auto& id:w.order){Node& child=w.nodes.at(id);if(parent_id(w,child)==n.id&&instance_name(w,child)==key){push_node(L,w,&child);return 1;}}
     if(!value){luaL_error(L,"property '%s' unavailable in snapshot for %s (%s)",key.c_str(),n.name.c_str(),n.class_name.c_str());return 0;}
+    // The replication reader retains PhysicalProperties as a 5/6-scalar
+    // array. Expose the typed source value without altering received data.
+    if(const Json* descriptor=property_descriptor(n,key)) {
+        if(descriptor->value("type","")=="PhysicalProperties"&&value->is_array()) {
+            try {
+                Json fields=*value;
+                if(fields.size()==5)fields.push_back(0.0);
+                if(push_authored_value(L,Json{{"$physical_properties",std::move(fields)}}))return 1;
+            } catch(const std::exception& error) {
+                luaL_error(L,"invalid PhysicalProperties snapshot value: %s",error.what());return 0;
+            }
+        }
+    }
     push_json(L,w,*value);return 1;
 }
 
-Json vector_to_json(lua_State* L,int i){const LUA_VECTOR_TYPE* v=lua_tovector(L,i);if(!v)throw std::runtime_error("invalid vector");return Json{{"$vector3",Json::array({double(v[0]),double(v[1]),double(v[2])})}};}
+Json vector_to_json(lua_State* L,int i){const LUA_VECTOR_TYPE* v=lua_tovector(L,i);if(!v)throw std::runtime_error("invalid vector");return Json{{"$vector3",Json::array({encode_number(v[0]),encode_number(v[1]),encode_number(v[2])})}};}
 std::string bytes_hex(const char* data,size_t size){static const char*hex="0123456789abcdef";std::string out;out.reserve(size*2);for(size_t i=0;i<size;i++){unsigned char c=data[i];out.push_back(hex[c>>4]);out.push_back(hex[c&15]);}return out;}
-Json convert_lua_value(lua_State* L,World& w,int i,int depth=0,std::unordered_set<const void*>* seen=nullptr){
+Json convert_lua_value(lua_State* L,World& w,int i,int depth=0,std::unordered_set<const void*>* seen=nullptr,size_t* budget=nullptr){
     if(depth>kMaxJsonDepth)throw std::runtime_error("mutation nesting limit exceeded");
+    size_t local_budget=kMaxMutationValue;if(!budget)budget=&local_budget;
     switch(lua_type(L,i)){
     case LUA_TNIL:return nullptr;case LUA_TBOOLEAN:return lua_toboolean(L,i)!=0;
-    case LUA_TNUMBER:{double n=lua_tonumber(L,i);if(!std::isfinite(n))throw std::runtime_error("cannot save a nonfinite number");return n;}
-    case LUA_TSTRING:{size_t n;const char*s=lua_tolstring(L,i,&n);return Json{{"$bytes_hex",bytes_hex(s,n)}};}
+    case LUA_TNUMBER:{double n=lua_tonumber(L,i);return encode_number(n);}
+    case LUA_TSTRING:{size_t n;const char*s=lua_tolstring(L,i,&n);if(n>*budget)throw std::runtime_error("local value exceeds JSON size limit");*budget-=n;if(valid_utf8(s,n))return std::string(s,n);return Json{{"$bytes_hex",bytes_hex(s,n)}};}
     case LUA_TVECTOR:return vector_to_json(L,i);
     case LUA_TUSERDATA:
-        if(has_meta(L,i,kInstanceMeta)){auto*h=static_cast<Handle*>(lua_touserdata(L,i));return Json{{"$ref",h->node->id}};}
-        if(has_meta(L,i,kCFrameMeta)){auto*c=static_cast<CFrameValue*>(lua_touserdata(L,i));return Json{{"$cframe",{{"position",c->p},{"rotation",c->r}}}};}
+        {Json geometry;if(capture_ussi_export_enum(L,i,geometry)||capture_ussi_security_capabilities(L,i,geometry)||capture_geometry_enum(L,i,geometry))return geometry;}
+        {Json authored;if(capture_authored_value(L,i,authored))return authored;}
+        if(has_meta(L,i,kPriorityMeta)){int value=*static_cast<int*>(lua_touserdata(L,i));return Json{{"$enum",Json{{"type","AnimationPriority"},{"name",kPriorityNames[priority_index(value)]},{"value",value}}}};}
+        if(has_meta(L,i,kChatStatusMeta)){int value=*static_cast<int*>(lua_touserdata(L,i));return Json{{"$enum",Json{{"type","TextChatMessageStatus"},{"name",kChatStatusNames[value-1]},{"value",value}}}};}
+        if(has_meta(L,i,kInstanceHandleMeta)){auto* h=static_cast<InstanceHandleValue*>(lua_touserdata(L,i));if(h->world!=&w)throw std::runtime_error("InstanceHandle belongs to a different snapshot");return Json{{"$instance_handle",h->id.empty()?Json(nullptr):Json(h->id)}};}
+        if(has_meta(L,i,kInstanceMeta)){auto*h=static_cast<Handle*>(lua_touserdata(L,i));if(h->world!=&w)throw std::runtime_error("instance belongs to a different snapshot");return Json{{"$ref",h->node->id}};}
+        if(has_meta(L,i,kCFrameMeta)){auto*c=static_cast<CFrameValue*>(lua_touserdata(L,i));Json frame;if(c->rotation_known)frame={{"position",{encode_number(c->p[0]),encode_number(c->p[1]),encode_number(c->p[2])}},{"rotation",{encode_number(c->r[0]),encode_number(c->r[1]),encode_number(c->r[2]),encode_number(c->r[3]),encode_number(c->r[4]),encode_number(c->r[5]),encode_number(c->r[6]),encode_number(c->r[7]),encode_number(c->r[8])}}};else frame=c->source;return Json{{"$cframe",frame}};}
         throw std::runtime_error("unsupported userdata mutation");
     case LUA_TTABLE:{
-        const void* ptr=lua_topointer(L,i);std::unordered_set<const void*> local_seen;if(!seen)seen=&local_seen;if(!seen->insert(ptr).second)throw std::runtime_error("cyclic table mutation unsupported");
-        Json out=Json::object();size_t count=0;lua_pushnil(L);while(lua_next(L,i)){if(++count>5000){lua_pop(L,2);throw std::runtime_error("table mutation item limit exceeded");}std::string k;if(lua_type(L,-2)==LUA_TSTRING){size_t n;const char*s=lua_tolstring(L,-2,&n);k.assign(s,n);}else if(lua_type(L,-2)==LUA_TNUMBER){double n=lua_tonumber(L,-2);k=std::to_string(n);}else{lua_pop(L,2);throw std::runtime_error("table mutation keys must be strings or numbers");}out[k]=convert_lua_value(L,w,-1,depth+1,seen);lua_pop(L,1);}seen->erase(ptr);return out;
+        int table_index=lua_absindex(L,i);const void* ptr=lua_topointer(L,table_index);std::unordered_set<const void*> local_seen;if(!seen)seen=&local_seen;if(!seen->insert(ptr).second)throw std::runtime_error("cyclic table mutation unsupported");
+        Json out=Json::object();size_t count=0;lua_pushnil(L);while(lua_next(L,table_index)){if(++count>5000){lua_pop(L,2);throw std::runtime_error("table mutation item limit exceeded");}std::string k;if(lua_type(L,-2)==LUA_TSTRING){size_t n;const char*s=lua_tolstring(L,-2,&n);if(n>*budget){lua_pop(L,2);throw std::runtime_error("table key exceeds JSON size limit");}*budget-=n;k.assign(s,n);}else if(lua_type(L,-2)==LUA_TNUMBER){double n=lua_tonumber(L,-2);k=std::to_string(n);}else{lua_pop(L,2);throw std::runtime_error("table mutation keys must be strings or numbers");}out[k]=convert_lua_value(L,w,-1,depth+1,seen,budget);lua_pop(L,1);}seen->erase(ptr);return out;
     }
     default:throw std::runtime_error("unsupported local property value");
     }
 }
+void check_mutation_budget(World& w, const std::vector<Json>& entries) {
+    size_t bytes=0;
+    for(const auto& entry:entries)bytes+=entry.dump().size();
+    if(w.mutations.size()+entries.size()>kMaxMutations || bytes>kMaxMutationBytes-w.mutation_bytes)
+        throw std::runtime_error("local mutation output limit exceeded");
+}
+void append_mutations(World& w, std::vector<Json> entries) {
+    for(auto& entry:entries){w.mutation_bytes+=entry.dump().size();w.mutations.push_back(std::move(entry));}
+}
+#include "humanoid_health.inc"
+#include "humanoid_jump.inc"
+#include "part_transforms.inc"
+#include "engine_pose.inc"
+#include "attachment_transforms.inc"
+#include "joint_graph.inc"
+#include "joint_poses.inc"
+#include "part_mass_properties.inc"
+#include "part_motion_queries.inc"
+Json node_record(const Node& n) {
+    return Json{{"id",n.id},{"class_name",n.class_name},{"name",n.name},
+        {"parent",n.parent.empty()?Json(nullptr):Json(n.parent)},
+        {"properties",n.properties},{"origins",n.origins},
+        {"attributes",n.attributes},{"attributes_known",n.attributes_known},{"destroyed",n.destroyed},
+        {"collection_tags",n.collection_tags},{"collection_tags_known",n.collection_tags_known},
+        {"server_owned",n.server_owned},{"property_revisions",n.revisions}};
+}
+Node* ensure_client_service(World& w,const std::string& service) {
+    // Client-local services do not require a server-replicated service object.
+    // Preserve their identity in the usual local overlay.
+    for(auto& [id,node]:w.nodes)if(!node.server_owned&&!node.destroyed&&node.class_name==service) {
+        w.services[service]=id;return &node;
+    }
+    if(w.nodes.size()>=kMaxNodes)throw std::runtime_error("world node limit exceeded");
+    Node node;do{node.id="local:"+std::to_string(w.next_local_id++);}while(w.nodes.count(node.id));node.class_name=service;
+    node.name=service;node.parent=w.game_id;node.server_owned=false;node.attributes_known=true;node.collection_tags_known=true;
+    node.properties["Archivable"]=true;node.origins["Archivable"]="class_default";
+    node.origins=Json{{"Name","local"},{"ClassName","local"},{"Parent","local"}};
+    std::vector<Json> entries{Json{{"kind","create"},{"node",node_record(node)}}};check_mutation_budget(w,entries);
+    auto inserted=w.nodes.emplace(node.id,std::move(node));if(!inserted.second)throw std::runtime_error("local service ID collision");
+    auto& created=inserted.first->second;w.order.push_back(created.id);w.services[service]=created.id;
+    append_mutations(w,std::move(entries));parent_events(w,created,"",w.game_id);return &created;
+}
+Node* ensure_http_service(World& w){return ensure_client_service(w,"HttpService");}
+using Children = std::unordered_map<std::string,std::vector<std::string>>;
+Children children_index(World& w) {
+    Children children;
+    for(const auto& id:w.order) {const auto& node=w.nodes.at(id);auto p=parent_id(w,node);if(!p.empty())children[p].push_back(id);}
+    return children;
+}
+bool archivable(World& w,const Node& n) {
+    auto* value=property_value(w,n,"Archivable");
+    if(!value || !value->is_boolean())throw std::runtime_error("Archivable is unavailable; cannot faithfully clone this instance");
+    return value->get<bool>();
+}
+void remap_references(Json& value,const std::unordered_map<std::string,std::string>& ids,int depth=0) {
+    if(depth>kMaxJsonDepth)throw std::runtime_error("clone reference nesting limit exceeded");
+    if(value.is_object() && value.size()==1 && value.contains("$ref") && value["$ref"].is_string()) {
+        auto it=ids.find(value["$ref"].get<std::string>());
+        if(it!=ids.end())value["$ref"]=it->second;
+    } else if(value.is_object() && value.size()==1 && value.contains("$instance_handle") && value["$instance_handle"].is_string()) {
+        auto it=ids.find(value["$instance_handle"].get<std::string>());if(it!=ids.end())value["$instance_handle"]=it->second;
+    } else if(value.is_object()||value.is_array()) for(auto& item:value)remap_references(item,ids,depth+1);
+}
+thread_local bool cloning_client_template=false;
+int clone_instance(lua_State* L) {
+    Handle* h=checked_handle(L,1);World& w=*h->world;
+    try {
+        if(!archivable(w,*h->node)){lua_pushnil(L);return 1;}
+        const auto children=children_index(w);
+        std::deque<std::string> pending{h->node->id};std::vector<std::string> selected;
+        while(!pending.empty()) {
+            auto id=pending.front();pending.pop_front();const auto& node=w.nodes.at(id);
+            if(!archivable(w,node))continue;
+            selected.push_back(id);
+            auto child=children.find(id);if(child!=children.end())for(auto& value:child->second)pending.push_back(value);
+        }
+        if(selected.size()>kMaxNodes+1000-w.nodes.size())throw std::runtime_error("local instance limit exceeded");
+        std::unordered_map<std::string,std::string> ids;
+        uint64_t next=w.next_local_id;
+        for(const auto& id:selected) {std::string target;do{target="local:"+std::to_string(next++);}while(w.nodes.count(target));ids[id]=target;}
+        std::vector<Node> copies;std::vector<Json> mutations;
+        for(const auto& id:selected) {
+            const Node& original=w.nodes.at(id);Node copy=original;
+            if(copy.class_name=="LocalScript"||copy.class_name=="ModuleScript"||copy.class_name=="Script")copy.script_origin=id;
+            copy.id=ids.at(id);copy.name=instance_name(w,original);copy.destroyed=false;copy.server_owned=false;
+            auto parent=parent_id(w,original);copy.parent=id==h->node->id?"":ids.at(parent);
+            auto overrides=w.local_properties.find(id);
+            if(overrides!=w.local_properties.end())for(auto it=overrides->second.begin();it!=overrides->second.end();++it)copy.properties[it.key()]=it.value();
+            copy.properties.erase("Name");copy.properties.erase("Parent");
+            remap_references(copy.properties,ids);
+            // Instance-valued attributes are InstanceHandle values, not raw
+            // Instance userdata; their internal targets are remapped too.
+            remap_references(copy.attributes,ids);
+            copy.origins=Json::object();for(auto it=copy.properties.begin();it!=copy.properties.end();++it)copy.origins[it.key()]="local";
+            if(pivot_model(w,original)&&!local_value(w,original,"WorldPivot")&&origin(w,original,"WorldPivot")=="class_default")copy.origins["WorldPivot"]="class_default";
+            copy.origins["Name"]="local";copy.origins["Parent"]="local";
+            if(!cloning_client_template)mutations.push_back(Json{{"kind","create"},{"node",node_record(copy)}});
+            copies.push_back(std::move(copy));
+        }
+        if(cloning_client_template)mutations.push_back(Json{{"kind","template_clone"},{"id",ids.at(h->node->id)},{"nodes",selected.size()}});
+        check_mutation_budget(w,mutations);
+        for(auto& copy:copies){auto id=copy.id;w.nodes.emplace(id,std::move(copy));w.order.push_back(id);}
+        w.next_local_id=next;append_mutations(w,std::move(mutations));
+        push_node(L,w,find_node(w,ids.at(h->node->id)));return 1;
+    }catch(const std::exception& e){luaL_error(L,"Clone failed: %s",e.what());return 0;}
+}
+void destroy_roots(World& w,const std::vector<std::string>& roots) {
+    const auto children=children_index(w);
+    std::deque<std::string> pending(roots.begin(),roots.end());std::vector<std::string> selected;
+    std::unordered_set<std::string> seen;
+    while(!pending.empty()) {
+        auto id=pending.front();pending.pop_front();if(!seen.insert(id).second)continue;
+        selected.push_back(id);auto child=children.find(id);
+        if(child!=children.end())for(const auto& value:child->second)pending.push_back(value);
+    }
+    if(selected.empty())return;
+    std::vector<Json> mutations{Json{{"kind","destroy"},{"ids",selected}}};check_mutation_budget(w,mutations);
+    for(const auto& id:selected) {
+        Node& node=w.nodes.at(id);emit(w,node,"Destroying");
+        // AnimationTrack instances are VM handles outside the Instance tree.
+        // Preserve a final own-character Stop before destroying either the
+        // track handle or its Animator invalidates the ownership check.
+        for(auto& [track_id,track]:w.animation.tracks) {
+            if(track_id!=id&&track.animator!=id)continue;
+            auto* track_node=find_node(w,track_id);
+            if(track_node&&!track_node->destroyed&&track.playing)track_stop(w,*track_node,track,0);
+        }
+        w.locally_destroyed.insert(id);
+        parent_events(w,node,parent_id(w,node),"");
+        node.destroyed=true;node.parent.clear();node.origins["Parent"]="local";
+        w.pivot_caches.erase(id);
+        w.pending_motor_transforms.erase(id);w.motor_applied_transforms.erase(id);
+        w.local_properties[id]["Parent"]=nullptr;
+        for(auto& connection:w.connections)if(connection->signal->node==&node) {connection->connected=false;connection->auto_disconnected=true;}
+    }
+    // Keep tombstones alive for retained userdata/references. Erasing their
+    // unordered_map records here would leave dangling VM handles.
+    append_mutations(w,std::move(mutations));
+}
+#include "client_service_bindings.inc"
+void set_current_camera(World& w,Node& workspace,Node* camera) {
+    if(workspace.destroyed)throw std::runtime_error("Workspace is destroyed");
+    if(camera&&camera->class_name!="Camera")throw std::runtime_error("CurrentCamera must be a Camera or nil");
+    // CurrentCamera is client-owned, never a guessed server reference. A nil,
+    // destroyed, or detached camera requires a fresh local camera.
+    bool create=!camera||camera->destroyed||!is_descendant_of(w,*camera,workspace.id);
+    Node fresh;
+    std::vector<Json> entries;
+    if(create) {
+        if(w.nodes.size()>=kMaxNodes+1000)throw std::runtime_error("local instance limit exceeded");
+        fresh.class_name="Camera";fresh.name="Camera";fresh.parent=workspace.id;
+        fresh.server_owned=false;fresh.attributes_known=true;fresh.collection_tags_known=true;
+        do{fresh.id="local:"+std::to_string(w.next_local_id++);}while(w.nodes.count(fresh.id));
+        const auto& properties=constructors().at("Camera").at("properties");
+        for(auto p=properties.begin();p!=properties.end();++p) {
+            fresh.properties[p.key()]=p.value().at("value");fresh.origins[p.key()]="class_default";
+        }
+        fresh.origins["Name"]="local";fresh.origins["Parent"]="local";
+        entries.push_back(Json{{"kind","create"},{"node",node_record(fresh)}});
+    }
+    const std::string selected=create?fresh.id:camera->id;
+    const Json value{{"$ref",selected}};
+    const Json* previous=property_value(w,workspace,"CurrentCamera");
+    const bool changed=!previous||*previous!=value;
+    if(!changed&&!create)return;
+    entries.push_back(Json{{"kind","set"},{"id",workspace.id},{"property","CurrentCamera"},{"value",value}});
+    std::vector<std::string> obsolete;
+    bool reparent_selected=false;
+    for(const auto& id:w.order) {
+        const auto& node=w.nodes.at(id);
+        // Only direct Workspace cameras are discarded. Cameras stored in a
+        // Folder/Model remain available for subsequent selection.
+        if(id!=selected&&!node.destroyed&&node.class_name=="Camera"&&parent_id(w,node)==workspace.id) {
+            obsolete.push_back(id);
+            if(!create&&is_descendant_of(w,*camera,id))reparent_selected=true;
+        }
+    }
+    if(reparent_selected)entries.push_back(Json{{"kind","set"},{"id",selected},{"property","Parent"},{"value",{{"$ref",workspace.id}}}});
+    // Reserve the full replacement before changing the active reference.
+    auto budget_entries=entries;
+    if(!obsolete.empty()) {
+        auto children=children_index(w);
+        std::deque<std::string> pending(obsolete.begin(),obsolete.end());
+        std::vector<std::string> removed;std::unordered_set<std::string> seen;
+        while(!pending.empty()) {
+            auto id=pending.front();pending.pop_front();
+            if(id==selected||!seen.insert(id).second)continue;
+            removed.push_back(id);
+            auto child=children.find(id);if(child!=children.end())for(const auto& value:child->second)pending.push_back(value);
+        }
+        budget_entries.push_back(Json{{"kind","destroy"},{"ids",removed}});
+    }
+    check_mutation_budget(w,budget_entries);
+    if(create) {
+        w.nodes.emplace(selected,std::move(fresh));w.order.push_back(selected);
+        camera=find_node(w,selected);
+    }
+    // Publish the new reference before callbacks observe the old camera's
+    // destruction. Keep the same userdata identity on subsequent reads.
+    w.local_properties[workspace.id]["CurrentCamera"]=value;
+    sync_camera_viewport(w,*camera);
+    append_mutations(w,std::move(entries));
+    if(create)parent_events(w,*camera,"",workspace.id);
+    if(reparent_selected) {
+        auto parent=parent_id(w,*camera);
+        w.local_properties[selected]["Parent"]=Json{{"$ref",workspace.id}};
+        parent_events(w,*camera,parent,workspace.id);
+    }
+    destroy_roots(w,obsolete);
+    if(changed)property_events(w,workspace,"CurrentCamera");
+}
+Node* ensure_current_camera(World& w,Node& workspace) {
+    const Json* value=property_value(w,workspace,"CurrentCamera");
+    Node* camera=nullptr;
+    if(value&&value->is_object()&&value->contains("$ref")&&(*value)["$ref"].is_string())
+        camera=find_node(w,(*value)["$ref"].get<std::string>());
+    if(camera&&!camera->destroyed&&camera->class_name=="Camera"&&is_descendant_of(w,*camera,workspace.id)) {
+        sync_camera_viewport(w,*camera);return camera;
+    }
+    set_current_camera(w,workspace,nullptr);
+    return find_node(w,w.local_properties.at(workspace.id).at("CurrentCamera").at("$ref").get<std::string>());
+}
+void refresh_current_camera(World& w) {
+    auto service=w.services.find("Workspace");if(service==w.services.end())return;
+    auto* workspace=find_node(w,service->second);
+    if(workspace&&!workspace->destroyed)ensure_current_camera(w,*workspace);
+}
+int destroy_instance(lua_State* L) {
+    Handle* h=checked_handle(L,1);
+    try{destroy_roots(*h->world,{h->node->id});refresh_current_camera(*h->world);}catch(const std::exception& e){luaL_error(L,"Destroy failed: %s",e.what());}
+    return 0;
+}
+int clear_children(lua_State* L) {
+    Handle* h=checked_handle(L,1);std::vector<std::string> roots;
+    for(const auto& id:h->world->order)if(parent_id(*h->world,h->world->nodes.at(id))==h->node->id)roots.push_back(id);
+    try{destroy_roots(*h->world,roots);refresh_current_camera(*h->world);}catch(const std::exception& e){luaL_error(L,"ClearAllChildren failed: %s",e.what());}
+    return 0;
+}
+int remove_instance(lua_State* L) {
+    auto* h=checked_handle(L,1);auto& world=*h->world;if(h->node->destroyed)return 0;
+    auto children=children_index(world);std::vector<std::string> pending{h->node->id},order;
+    while(!pending.empty()) {
+        auto id=pending.back();pending.pop_back();order.push_back(id);
+        for(const auto& child:children[id])pending.push_back(child);
+    }
+    // Unveil's legacy Remove detaches the entire tree and preserves listeners,
+    // attributes and reparentability. It is deliberately distinct from Destroy.
+    for(const auto& id:order) {
+        auto* node=find_node(world,id);if(!node||node->destroyed)continue;
+        lua_pushcfunction(L,instance_newindex,"Instance.__newindex");push_node(L,world,node);
+        lua_pushliteral(L,"Parent");lua_pushnil(L);lua_call(L,3,0);
+    }
+    return 0;
+}
+int get_attribute(lua_State* L) {
+    Handle* h=checked_handle(L,1);size_t length;const char* raw=luaL_checklstring(L,2,&length);std::string name(raw,length);
+    auto value=h->node->attributes.find(name);
+    if(h->world->trace_attribute_reads) {
+        auto& world=*h->world;
+        const bool present=value!=h->node->attributes.end();
+        Json read{{"instance_id",h->node->id.substr(0,128)},
+                  {"attribute",name.substr(0,128)},{"attribute_truncated",name.size()>128},
+                  {"attributes_known",h->node->attributes_known},{"present",present},
+                  {"result_type",present?value->type_name():h->node->attributes_known?"nil":"unavailable"},
+                  {"sequence",++world.attribute_read_sequence}};
+        world.attribute_reads.emplace_back(L,std::move(read));
+        if(world.attribute_reads.size()>128)world.attribute_reads.pop_front();
+    }
+    if(value!=h->node->attributes.end())push_json(L,*h->world,*value);
+    else if(h->node->attributes_known)lua_pushnil(L);
+    else {luaL_error(L,"attribute data is unavailable in this received snapshot");return 0;}
+    return 1;
+}
+int get_attributes(lua_State* L) {
+    Handle* h=checked_handle(L,1);
+    if(!h->node->attributes_known){luaL_error(L,"complete attribute data is unavailable in this received snapshot");return 0;}
+    push_json(L,*h->world,h->node->attributes);return 1;
+}
+int set_attribute(lua_State* L) {
+    Handle* h=checked_handle(L,1);World& w=*h->world;size_t length;const char* raw=luaL_checklstring(L,2,&length);std::string name(raw,length);
+    try {
+        if(name.empty()||name.size()>100||name.rfind("RBX",0)==0)throw std::runtime_error("invalid or reserved attribute name");
+        for(unsigned char c:name)if(!((c>='a'&&c<='z')||(c>='A'&&c<='Z')||(c>='0'&&c<='9')||c=='_'||c=='.'||c=='/'||c=='-'))throw std::runtime_error("invalid attribute name");
+        int type=lua_type(L,3);
+        if(type!=LUA_TNIL && type!=LUA_TBOOLEAN && type!=LUA_TNUMBER && type!=LUA_TSTRING && type!=LUA_TVECTOR
+            && !(type==LUA_TUSERDATA&&(has_meta(L,3,kCFrameMeta)||has_meta(L,3,kInstanceMeta)||has_meta(L,3,kInstanceHandleMeta)||
+                (is_authored_value(L,3)&&std::string(luaL_typename(L,3))!="DateTime"&&std::string(luaL_typename(L,3))!="Ray"&&std::string(luaL_typename(L,3))!="TweenInfo"&&std::string(luaL_typename(L,3))!="Region3"&&std::string(luaL_typename(L,3))!="PhysicalProperties"&&std::string(luaL_typename(L,3)).find("Keypoint")==std::string::npos&&std::string(luaL_typename(L,3)).find("int16")==std::string::npos))))throw std::runtime_error("unsupported attribute value type");
+        if(!h->node->attributes.contains(name)&&h->node->attributes.size()>=1024)throw std::runtime_error("local attribute count limit exceeded");
+        Json value=convert_lua_value(L,w,3);
+        if(type==LUA_TUSERDATA&&has_meta(L,3,kInstanceMeta))value=Json{{"$instance_handle",value.at("$ref")}};
+        std::vector<Json> mutations{Json{{"kind","attribute"},{"id",h->node->id},{"name",name},{"value",value}}};
+        check_mutation_budget(w,mutations);
+        auto old=h->node->attributes.find(name);bool changed=old==h->node->attributes.end()?(!value.is_null()||!h->node->attributes_known):*old!=value;
+        if(value.is_null()&&h->node->attributes_known)h->node->attributes.erase(name);else h->node->attributes[name]=value;
+        append_mutations(w,std::move(mutations));
+        if(changed){emit(w,*h->node,"AttributeChanged",Json::array({name}));emit(w,*h->node,"attribute:"+name);}
+    }catch(const std::exception& e){luaL_error(L,"SetAttribute failed: %s",e.what());return 0;}
+    return 0;
+}
+int property_changed_signal(lua_State* L) {
+    auto* h=checked_handle(L,1);std::string name=canonical_instance_member(luaL_checkstring(L,2));
+    if(h->node->class_name=="BodyForce"&&name=="force")name="Force";
+    if(h->node->class_name=="BodyPosition") {
+        if(name=="position")name="Position";
+        if(name=="maxForce")name="MaxForce";
+    }
+    if(h->node->class_name=="BodyVelocity") {
+        if(name=="velocity")name="Velocity";
+        if(name=="maxForce")name="MaxForce";
+    }
+    if(name!="Name"&&name!="Parent"&&name!="ClassName"&&!(h->node->class_name=="Workspace"&&name=="CurrentCamera")&&!property_descriptor(*h->node,name)&&origin(*h->world,*h->node,name)=="unavailable"&&gui_property_type(*h->world,*h->node,name).empty()) {luaL_error(L,"unknown property for change signal");return 0;}
+    watch_display_property(*h->world,*h->node,name);
+    watch_attachment_property(*h->world,*h->node,name);
+    watch_joint_property(*h->world,*h->node,name);
+    watch_assembly_root(*h->world,*h->node,name);
+    watch_part_mass(*h->world,*h->node,name);
+    try{push_signal(L,signal_for(*h->world,*h->node,"property:"+name));}catch(const std::exception& e){luaL_error(L,"signal unavailable: %s",e.what());}return 1;
+}
+int attribute_changed_signal(lua_State* L) {
+    auto* h=checked_handle(L,1);size_t n;const char* name=luaL_checklstring(L,2,&n);
+    try{push_signal(L,signal_for(*h->world,*h->node,"attribute:"+std::string(name,n)));}catch(const std::exception& e){luaL_error(L,"signal unavailable: %s",e.what());}return 1;
+}
+int disconnect_connection(lua_State* L) {
+    auto* handle=static_cast<ConnectionHandle*>(luaL_checkudata(L,1,kConnectionMeta));
+    handle->connection->connected=false;handle->connection->manually_disconnected=true;return 0;
+}
+int connection_index(lua_State* L) {
+    auto* handle=static_cast<ConnectionHandle*>(luaL_checkudata(L,1,kConnectionMeta));const char* key=luaL_checkstring(L,2);
+    if(std::strcmp(key,"Connected")==0){lua_pushboolean(L,handle->connection->connected);return 1;}
+    if(connection_compat_index(L,*handle->connection,key))return 1;
+    if(std::strcmp(key,"Disconnect")==0||std::strcmp(key,"disconnect")==0){lua_pushcfunction(L,disconnect_connection,"Disconnect");return 1;}
+    luaL_error(L,"unknown RBXScriptConnection member");return 0;
+}
+int connect_signal(lua_State* L) {
+    auto* h=static_cast<SignalHandle*>(luaL_checkudata(L,1,kSignalMeta));luaL_checktype(L,2,LUA_TFUNCTION);
+    auto& w=*h->signal->world;
+    if(w.connections.size()>=2048){luaL_error(L,"local connection count limit exceeded");return 0;}
+    auto connection=std::make_unique<Connection>();connection->signal=h->signal;
+    lua_pushthread(L);connection->creator_ref=lua_ref(L,-1);lua_pop(L,1);
+    connection->callback=lua_ref(L,2);connection->once=lua_toboolean(L,lua_upvalueindex(1));
+    if(w.scheduler)connection->owner=w.scheduler->owner(L);
+    auto* pointer=connection.get();w.connections.push_back(std::move(connection));
+    auto* handle=static_cast<ConnectionHandle*>(lua_newuserdatatagged(L,sizeof(ConnectionHandle),0));handle->connection=pointer;
+    luaL_getmetatable(L,kConnectionMeta);lua_setmetatable(L,-2);return 1;
+}
+int wait_signal(lua_State* L) {
+    auto* h=static_cast<SignalHandle*>(luaL_checkudata(L,1,kSignalMeta));auto& w=*h->signal->world;
+    if(!w.scheduler||!lua_isyieldable(L)){luaL_error(L,"signal Wait requires a scheduled yieldable source thread");return 0;}
+    auto& waiters=w.waiters[h->signal];if(waiters.size()>=2048){luaL_error(L,"signal waiter limit exceeded");return 0;}
+    try{w.scheduler->wait_signal(L);}catch(const std::exception& e){luaL_error(L,"signal wait failed: %s",e.what());return 0;}
+    lua_pushthread(L);int reference=lua_ref(L,-1);lua_pop(L,1);waiters.push_back(SignalWaiter{L,reference});return lua_yield(L,0);
+}
+int wait_for_child(lua_State* L) {
+    auto* h=checked_handle(L,1);World& w=*h->world;std::string name=luaL_checkstring(L,2);
+    using Clock=std::chrono::steady_clock;
+    auto deadline=Clock::time_point::max();
+    if(!lua_isnoneornil(L,3)) {
+        double duration=luaL_checknumber(L,3);
+        if(std::isnan(duration)||duration<=0){luaL_error(L,"timeOut must be greater than 0");return 0;}
+        auto remaining=std::chrono::duration<double>(Clock::time_point::max()-Clock::now()).count();
+        if(duration<remaining)deadline=Clock::now()+std::chrono::duration_cast<Clock::duration>(std::chrono::duration<double>(duration));
+    }
+    for(const auto& id:w.order){Node& child=w.nodes.at(id);if(parent_id(w,child)==h->node->id&&instance_name(w,child)==name){push_node(L,w,&child);return 1;}}
+    if(!w.scheduler||!lua_isyieldable(L)){luaL_error(L,"WaitForChild requires a scheduled yieldable thread");return 0;}
+    if(w.child_waiters.size()>=2048){luaL_error(L,"WaitForChild waiter limit exceeded");return 0;}
+    try{w.scheduler->wait_signal(L);}catch(const std::exception& e){luaL_error(L,"WaitForChild failed: %s",e.what());return 0;}
+    lua_pushthread(L);int reference=lua_ref(L,-1);lua_pop(L,1);
+    w.child_waiters.push_back(ChildWaiter{L,reference,h->node->id,name,deadline});return lua_yield(L,0);
+}
+int chat_continue(lua_State* L,const char* method) {
+    if(lua_gettop(L)==1&&has_meta(L,1,kInstanceMeta)) {
+        auto* h=checked_handle(L,1);if(h->node->class_name=="TextChatMessage")return 1;
+    }
+    if(lua_gettop(L)==2&&lua_isnil(L,1)&&lua_type(L,2)==LUA_TSTRING){luaL_error(L,"%s failed: %s",method,lua_tostring(L,2));return 0;}
+    luaL_error(L,"%s resumed without a matching chat response",method);return 0;
+}
+int send_chat_continue(lua_State* L,int){return chat_continue(L,"SendAsync");}
+int send_universe_chat_continue(lua_State* L,int){return chat_continue(L,"SendUniverseChatMessageAsync");}
+int send_chat_request(lua_State* L,bool universe) {
+    auto* h=checked_handle(L,1);World& w=*h->world;
+    if(universe) {
+        if(h->node->class_name!="TextChatService"){luaL_error(L,"SendUniverseChatMessageAsync requires TextChatService");return 0;}
+    } else if(h->node->class_name!="TextChannel"){luaL_error(L,"SendAsync requires TextChannel");return 0;}
+    const char* method=universe?"SendUniverseChatMessageAsync":"SendAsync";
+    if(!w.persistent||!w.chat_enabled||!w.scheduler){luaL_error(L,"%s requires the persistent runtime with --chat-console enabled",method);return 0;}
+    if(!lua_isyieldable(L)){luaL_error(L,"%s requires a yieldable source thread",method);return 0;}
+    if(lua_gettop(L)<2||lua_gettop(L)>3){luaL_error(L,"%s expects message and optional metadata",method);return 0;}
+    try {
+        auto service=w.services.find("TextChatService");
+        if(universe) {
+            if(h->node->destroyed||!h->node->server_owned||service==w.services.end()
+               ||service->second!=h->node->id||find_node(w,h->node->id)!=h->node)
+                throw std::runtime_error("receiver must be the live server-replicated TextChatService");
+        } else {
+            if(h->node->destroyed||!h->node->server_owned)throw std::runtime_error("channel must be a live server-replicated TextChannel");
+            if(service==w.services.end()||!is_descendant_of(w,*h->node,service->second))throw std::runtime_error("TextChannel is not a descendant of TextChatService");
+        }
+        std::string values[2];
+        for(int i=0;i<2;i++) {
+            int arg=i+2;if(i==1&&lua_isnoneornil(L,arg))continue;
+            if(lua_type(L,arg)!=LUA_TSTRING)throw std::runtime_error("message and metadata must be strings");
+            size_t length=0;const char* data=lua_tolstring(L,arg,&length);size_t characters=0;
+            if(length>800||!valid_utf8(data,length)||std::memchr(data,0,length))throw std::runtime_error("message or metadata is not supported UTF-8 text");
+            for(size_t j=0;j<length;j++)if((static_cast<unsigned char>(data[j])&0xc0)!=0x80)++characters;
+            if(characters>200)throw std::runtime_error("message and metadata support at most 200 characters");
+            values[i].assign(data,length);
+        }
+        if(values[0].empty())throw std::runtime_error("message must not be empty");
+        if(w.chat_waiters.size()>=8||w.chat_messages+w.chat_waiters.size()>=256)throw std::runtime_error("chat request or message quota exceeded");
+        uint64_t request=w.next_chat_request++;
+        Json message{{"request_id",request},{"channel_id",h->node->id},{"text",values[0]},{"metadata",values[1]}};
+        if(universe)message["route"]="universe";
+        w.scheduler->wait_signal(L);
+        lua_pushthread(L);int reference=lua_ref(L,-1);lua_pop(L,1);
+        w.chat_waiters.push_back(ChatWaiter{L,reference,request,h->node->id,std::chrono::steady_clock::now()+std::chrono::seconds(20),universe});
+        w.chat_requests.push_back(std::move(message));
+    }catch(const std::exception& e){luaL_error(L,"%s failed: %s",method,e.what());return 0;}
+    lua_settop(L,0);return lua_yield(L,0);
+}
+int send_chat(lua_State* L){return send_chat_request(L,false);}
+int send_universe_chat(lua_State* L){return send_chat_request(L,true);}
+int signal_index(lua_State* L) {
+    luaL_checkudata(L,1,kSignalMeta);const char* key=luaL_checkstring(L,2);
+    if(std::strcmp(key,"Connect")==0||std::strcmp(key,"connect")==0||std::strcmp(key,"Once")==0) {
+        lua_pushboolean(L,std::strcmp(key,"Once")==0);lua_pushcclosurek(L,connect_signal,"Connect",1,nullptr);return 1;
+    }
+    if(std::strcmp(key,"Wait")==0||std::strcmp(key,"wait")==0){lua_pushcfunction(L,wait_signal,"Wait");return 1;}
+    luaL_error(L,"unknown RBXScriptSignal member");return 0;
+}
+void copy_bindable_value(lua_State* L,int index,std::unordered_set<const void*>& path,size_t& budget,int depth=0) {
+    if(depth>32||budget==0)throw std::runtime_error("BindableEvent table copy limit exceeded");
+    --budget;index=lua_absindex(L,index);int type=lua_type(L,index);
+    if(type==LUA_TTABLE) {
+        const void* identity=lua_topointer(L,index);
+        if(!path.insert(identity).second)throw std::runtime_error("cyclic BindableEvent tables are unsupported");
+        lua_newtable(L);int output=lua_gettop(L);
+        lua_rawgeti(L,index,1);bool array=!lua_isnil(L,-1);lua_pop(L,1);
+        if(array) {
+            for(int i=1;;i++) {
+                lua_rawgeti(L,index,i);if(lua_isnil(L,-1)){lua_pop(L,1);break;}
+                copy_bindable_value(L,-1,path,budget,depth+1);lua_rawseti(L,output,i);lua_pop(L,1);
+            }
+        } else {
+            lua_pushnil(L);
+            while(lua_next(L,index)) {
+                int value=lua_gettop(L);
+                if(lua_type(L,-2)==LUA_TSTRING)lua_pushvalue(L,-2);
+                else if(lua_type(L,-2)==LUA_TNUMBER) {
+                    double key=lua_tonumber(L,-2);
+                    if(!std::isfinite(key)||key<INT32_MIN||key>INT32_MAX)throw std::runtime_error("BindableEvent numeric key exceeds supported range");
+                    std::string text=std::to_string(static_cast<int32_t>(key));lua_pushlstring(L,text.data(),text.size());
+                } else throw std::runtime_error("invalid BindableEvent table key type");
+                copy_bindable_value(L,value,path,budget,depth+1);lua_rawset(L,output);lua_pop(L,1);
+            }
+        }
+        path.erase(identity);
+    } else if(type==LUA_TBUFFER) {
+        size_t size=0;const void* input=lua_tobuffer(L,index,&size);void* output=lua_newbuffer(L,size);
+        if(size)std::memcpy(output,input,size);
+    } else if(type==LUA_TTHREAD || (type==LUA_TUSERDATA&&!has_meta(L,index,kInstanceMeta)&&!has_meta(L,index,kCFrameMeta)&&!has_meta(L,index,kInstanceHandleMeta)&&!has_meta(L,index,kChatStatusMeta)&&!has_meta(L,index,kPriorityMeta)&&!has_meta(L,index,kGeometryItemMeta)&&!has_meta(L,index,kUsiExportItemMeta)&&!has_meta(L,index,kUsiSecurityCapabilitiesMeta)&&!has_meta(L,index,kHumanoidStateItemMeta)&&!is_authored_value(L,index)))lua_pushnil(L);
+    else lua_pushvalue(L,index);
+}
+#include "bindable_functions.inc"
+#include "remote_client_callbacks.inc"
+int fire_bindable(lua_State* L) {
+    auto* h=checked_handle(L,1);World& w=*h->world;
+    if(h->node->class_name!="BindableEvent"){luaL_error(L,"BindableEvent receiver required");return 0;}
+    int count=lua_gettop(L)-1;
+    if(count>256||w.event_argument_refs.size()>=10000){luaL_error(L,"local BindableEvent argument limit exceeded");return 0;}
+    // Table arguments are copied at Fire time, metatables are removed, and
+    // cycles are rejected. Functions and trailing nils remain valid values.
+    lua_createtable(L,count,0);
+    try {
+        size_t budget=10000;std::unordered_set<const void*> path;
+        for(int i=0;i<count;i++){copy_bindable_value(L,i+2,path,budget);lua_rawseti(L,-2,i+1);}
+    }catch(const std::exception& e){luaL_error(L,"BindableEvent Fire failed: %s",e.what());return 0;}
+    auto found=w.signals.find(Json::array({h->node->id,"Event"}).dump());if(found==w.signals.end())return 0;
+    auto* signal=found->second.get();bool listening=false;
+    for(const auto& c:w.connections)if(c->signal==signal&&c->connected&&(!c->once||!c->once_pending))listening=true;
+    auto waiters=w.waiters.find(signal);if(waiters!=w.waiters.end()&&!waiters->second.empty())listening=true;
+    if(!listening)return 0;
+    int reference=lua_ref(L,-1);lua_pop(L,1);w.event_argument_refs.push_back(reference);
+    emit(w,*h->node,"Event",Json::array(),reference,count);return 0;
+}
+int instance_handle_get(lua_State* L) {
+    auto* h=static_cast<InstanceHandleValue*>(luaL_checkudata(L,1,kInstanceHandleMeta));
+    auto* node=find_node(*h->world,h->id);if(node)push_node(L,*h->world,node);else lua_pushnil(L);return 1;
+}
+int instance_handle_wait(lua_State* L) {
+    auto* h=static_cast<InstanceHandleValue*>(luaL_checkudata(L,1,kInstanceHandleMeta));
+    using Clock=std::chrono::steady_clock;
+    auto deadline=Clock::time_point::max();
+    if(!lua_isnoneornil(L,2)) {
+        double timeout=luaL_checknumber(L,2);
+        if(!std::isfinite(timeout)||timeout<=0){luaL_error(L,"timeOut must be greater than 0");return 0;}
+        auto remaining=std::chrono::duration<double>(Clock::time_point::max()-Clock::now()).count();
+        if(timeout<remaining)deadline=Clock::now()+std::chrono::duration_cast<Clock::duration>(std::chrono::duration<double>(timeout));
+    }
+    if(h->id.empty()||find_node(*h->world,h->id))return instance_handle_get(L);
+    World& w=*h->world;
+    if(!w.scheduler||!lua_isyieldable(L)){luaL_error(L,"waiting for an unresolved InstanceHandle requires a scheduled yieldable thread");return 0;}
+    if(w.handle_waiters.size()>=2048){luaL_error(L,"InstanceHandle waiter limit exceeded");return 0;}
+    try{w.scheduler->wait_signal(L);}catch(const std::exception& e){luaL_error(L,"InstanceHandle wait failed: %s",e.what());return 0;}
+    lua_pushthread(L);int reference=lua_ref(L,-1);lua_pop(L,1);
+    w.handle_waiters.push_back(HandleWaiter{L,reference,h->id,deadline});return lua_yield(L,0);
+}
+int instance_handle_index(lua_State* L) {
+    luaL_checkudata(L,1,kInstanceHandleMeta);const char* key=luaL_checkstring(L,2);
+    if(std::strcmp(key,"Get")==0){lua_pushcfunction(L,instance_handle_get,"Get");return 1;}
+    if(std::strcmp(key,"Wait")==0){lua_pushcfunction(L,instance_handle_wait,"Wait");return 1;}
+    luaL_error(L,"unknown InstanceHandle member");return 0;
+}
+int instance_handle_new(lua_State* L) {
+    auto* w=static_cast<World*>(lua_touserdata(L,lua_upvalueindex(1)));
+    if(lua_isnoneornil(L,1))push_instance_handle(L,*w,"");
+    else{auto* h=checked_handle(L,1);if(h->world!=w){luaL_error(L,"Instance belongs to a different snapshot");return 0;}push_instance_handle(L,*w,h->node->id);}
+    return 1;
+}
+int instance_handle_equal(lua_State* L) {
+    bool a=has_meta(L,1,kInstanceHandleMeta),b=has_meta(L,2,kInstanceHandleMeta);
+    auto* x=static_cast<InstanceHandleValue*>(lua_touserdata(L,1));auto* y=static_cast<InstanceHandleValue*>(lua_touserdata(L,2));
+    lua_pushboolean(L,a&&b&&x->world==y->world&&x->id==y->id);return 1;
+}
+int instance_handle_tostring(lua_State* L) {
+    auto* h=static_cast<InstanceHandleValue*>(luaL_checkudata(L,1,kInstanceHandleMeta));auto* node=find_node(*h->world,h->id);
+    std::string text=node?instance_name(*h->world,*node):"nil";lua_pushlstring(L,text.data(),text.size());return 1;
+}
 int instance_newindex(lua_State* L){
-    Handle*h=checked_handle(L,1);World&w=*h->world;Node&n=*h->node;std::string key=luaL_checkstring(L,2);Json value;
-    if(key=="ClassName" || key=="JobId") {luaL_error(L,"property is read-only");return 0;}
+    Handle*h=checked_handle(L,1);World&w=*h->world;Node&n=*h->node;std::string key=canonical_instance_member(luaL_checkstring(L,2));Json value;
+    if(n.class_name=="BodyForce"&&key=="force")key="Force";
+    if(n.class_name=="BodyPosition") {
+        if(key=="position")key="Position";
+        if(key=="maxForce")key="MaxForce";
+    }
+    if(n.class_name=="BodyVelocity") {
+        if(key=="velocity")key="Velocity";
+        if(key=="maxForce")key="MaxForce";
+    }
+    enforce_scriptability(L,w,n,key);
+    if(n.class_name=="Tween"&&(key=="PlaybackState"||key=="Instance"||key=="TweenInfo")) {
+        luaL_error(L,"Tween property is read-only");return 0;
+    }
+    if(key=="Source"&&(n.class_name=="LocalScript"||n.class_name=="ModuleScript"||n.class_name=="Script")) {
+        size_t length=0;const char* source=luaL_checklstring(L,3,&length);
+        if(length>128*1024||n.destroyed){luaL_error(L,"invalid script source write");return 0;}
+        n.script_code=Json{{"source",std::string(source,length)},{"authored_override",true}};property_events(w,n,"Source");return 0;
+    }
+    if(display_property(w,n,key)){luaL_error(L,"display property is read-only");return 0;}
+    if(n.class_name=="UserInputService"&&input_capability_key(key)){luaL_error(L,"input capability is read-only");return 0;}
+    if(key=="ClassName" || key=="JobId" || (n.class_name=="TextChatMessage" && key!="Name" && key!="Parent")) {luaL_error(L,"property is read-only");return 0;}
     try{
+        if(n.class_name=="VectorForce"&&key=="RelativeTo")checked_geometry_value(L,3,kActuatorRelativeTo);
+        if(n.class_name=="LinearVelocity") {
+            int kind=linear_velocity_enum_kind(key);if(kind>=0)checked_geometry_value(L,3,kind);
+        }
+        if(n.class_name=="BindableFunction"&&key=="OnInvoke"){set_bindable_callback(L,w,n);return 0;}
+        if(n.class_name=="RemoteFunction"&&key=="OnClientInvoke"){set_bindable_callback(L,w,n);return 0;}
+        if(input_write(L,w,n,key))return 0;
+        if(humanoid_state_write(L,w,n,key))return 0;
+        if(humanoid_health_write(L,w,n,key))return 0;
+        if(humanoid_jump_write(L,w,n,key))return 0;
+        if(joint_pose_write(L,w,n,key))return 0;
+        if(joint_part_write(L,w,n,key))return 0;
+        validate_joint_assignment(L,w,n,key);
+        if(part_transform_write(L,w,n,key))return 0;
+        if(part_mass_enum_write(L,w,n,key))return 0;
+        if(attachment_write(L,w,n,key))return 0;
+        if(n.class_name=="Camera"&&key=="ViewportSize")throw std::runtime_error("ViewportSize is read-only");
+        if(pivot_model(w,n)&&key=="PrimaryPart"&&!lua_isnil(L,3)) {
+            auto* primary=checked_handle(L,3);
+            if(primary->world!=&w||!pivot_part(w,*primary->node))throw std::runtime_error("PrimaryPart must be a BasePart");
+        }
+        if(animation_newindex(L,w,n,key))return 0;
+        if(n.class_name=="Workspace"&&key=="CurrentCamera") {
+            Node* camera=nullptr;
+            if(!lua_isnil(L,3)) {
+                auto* selected=checked_handle(L,3);
+                if(selected->world!=&w)throw std::runtime_error("camera belongs to a different snapshot");
+                camera=selected->node;
+            }
+            set_current_camera(w,n,camera);return 0;
+        }
         if(key=="Parent"){
+            if(n.destroyed) {
+                if(lua_isnil(L,3)&&parent_id(w,n).empty())return 0;
+                throw std::runtime_error("Parent property is locked after Destroy");
+            }
             if(lua_isnil(L,3))value=nullptr;
             else {Handle*p=checked_handle(L,3);if(p->world!=&w)throw std::runtime_error("parent belongs to a different snapshot");if(p->node==&n||is_descendant_of(w,*p->node,n.id))throw std::runtime_error("parent change would create a cycle");value=Json{{"$ref",p->node->id}};}
         } else if(key=="Name") {size_t len;const char*s=luaL_checklstring(L,3,&len);if(len>256)throw std::runtime_error("Name exceeds 256 bytes");value=std::string(s,len);}
-        else {if(origin(w,n,key)=="unavailable")throw std::runtime_error("property absent from snapshot; local creation is unsupported");value=convert_lua_value(L,w,3);}
-        Json entry{{"node_id",n.id},{"property",key},{"value",value}};
-        size_t bytes=entry.dump().size();
-        if(w.mutations.size()>=kMaxMutations||bytes>kMaxMutationBytes-w.mutation_bytes)throw std::runtime_error("local mutation output limit exceeded");
+        else {
+            const bool gui_assignment=validate_gui_assignment(L,w,n,key);
+            const bool explicit_pivot=(pivot_model(w,n)&&(key=="WorldPivot"||key=="PrimaryPart"))||(pivot_part(w,n)&&key=="PivotOffset");
+            // A missing received value does not make a known engine property
+            // unwritable. Validate against the pinned descriptor below and
+            // store only a local override; unknown properties remain errors.
+            if(!property_descriptor(n,key)&&!gui_assignment&&!explicit_pivot&&!humanoid_jump_setting(n,key)&&!(n.class_name=="Humanoid"&&(key=="WalkSpeed"||key=="AutoRotate"))&&origin(w,n,key)=="unavailable")throw std::runtime_error("property absent from snapshot; local creation is unsupported");
+            if(const Json* descriptor=property_descriptor(n,key=="archivable"?"Archivable":key)) {
+                if(!descriptor->value("writable",false))throw std::runtime_error("property is read-only");
+                const std::string type=descriptor->value("type","");
+                if(type=="boolean" && lua_type(L,3)!=LUA_TBOOLEAN)throw std::runtime_error("property must be a boolean");
+                if(type=="string" && lua_type(L,3)!=LUA_TSTRING)throw std::runtime_error("property must be a string");
+                if(type=="number" && lua_type(L,3)!=LUA_TNUMBER)throw std::runtime_error("property must be a number");
+                if(type=="Vector3" && !lua_isvector(L,3))throw std::runtime_error("property must be a Vector3");
+                if(type=="CFrame" && !has_meta(L,3,kCFrameMeta))throw std::runtime_error("property must be a CFrame");
+                if((type=="Color3"||type=="Vector2"||type=="UDim"||type=="UDim2"||type=="NumberRange"||type=="Rect"||type=="BrickColor"||type=="NumberSequence"||type=="ColorSequence")&&
+                    (!is_authored_value(L,3)||type!=luaL_typename(L,3)))throw std::runtime_error("property has incorrect datatype");
+                if(type=="PhysicalProperties"&&!lua_isnil(L,3)&&(!is_authored_value(L,3)||std::string(luaL_typename(L,3))!="PhysicalProperties"))throw std::runtime_error("property must be PhysicalProperties or nil");
+                if(type=="Instance" && !lua_isnil(L,3) && !has_meta(L,3,kInstanceMeta))throw std::runtime_error("property must be an Instance or nil");
+            }
+            if(key=="Anchored"&&lua_type(L,3)!=LUA_TBOOLEAN)throw std::runtime_error("Anchored must be a boolean");
+            if((key=="Position"||key=="CFrame")&&class_is_a(w,n.class_name,"BasePart")) {
+                if(key=="Position"&&!lua_isvector(L,3))throw std::runtime_error("Position must be a Vector3");
+                if(key=="CFrame"&&!has_meta(L,3,kCFrameMeta))throw std::runtime_error("CFrame must be a CFrame");
+            }
+            value=convert_lua_value(L,w,3);
+            if(humanoid_jump_setting(n,key)&&key!="UseJumpPower") {
+                if(!value.is_number()||!std::isfinite(value.get<double>()))throw std::runtime_error("jump setting must be finite");
+                value=std::max(0.0,value.get<double>());
+                if(key=="JumpPower")value=std::min(1000.0,value.get<double>());
+            }
+            if(n.class_name=="Camera"&&key=="FieldOfView") {
+                if(!value.is_number()||!std::isfinite(value.get<double>()))throw std::runtime_error("FieldOfView must be finite");
+                value=std::clamp(value.get<double>(),1.0,120.0);
+            }
+        }
+        auto old_parent=parent_id(w,n);
+        Json old_value=key=="Name"?Json(instance_name(w,n)):property_value(w,n,key)?*property_value(w,n,key):Json(nullptr);
+        if(key=="WorldPivot"&&pivot_model(w,n)) {
+            try{old_value=pivot_encode(model_world_pivot(w,n));}catch(const std::exception&){} // Old geometry may be unavailable.
+        }
+        std::vector<Json> entries;
+        entries.push_back(Json{{"kind","set"},{"id",n.id},{"property",key},{"value",value}});
+        std::vector<std::pair<Node*,Json>> motion_members;
+        std::string motion_root_id;
+        if(key=="AssemblyLinearVelocity"&&pivot_part(w,n)) {
+            auto targets=character_velocity_write_targets(w,n);
+            if(!targets.empty())motion_root_id=targets.front()->id;
+            for(auto* member:targets)if(member!=&n) {
+                const auto* previous=property_value(w,*member,key);
+                motion_members.emplace_back(member,previous?*previous:Json(nullptr));
+                entries.push_back(Json{{"kind","set"},{"id",member->id},{"property",key},{"value",value}});
+            }
+        }
+        std::vector<std::pair<std::string,Json>> derived;
+        if(n.class_name=="ScreenGui"&&key=="IgnoreGuiInset") {
+            if(!value.is_boolean())throw std::runtime_error("IgnoreGuiInset must be a boolean");
+            auto* current=property_value(w,n,"ScreenInsets");int mode=current&&current->is_number_integer()?current->get<int>():2;
+            if(!value.get<bool>()||mode==2) {
+                Json inset=value.get<bool>()?1:2;
+                derived.emplace_back("ScreenInsets",inset);entries.push_back(Json{{"kind","set"},{"id",n.id},{"property","ScreenInsets"},{"value",inset}});
+            }
+        }
+        if(n.class_name=="Camera"&&(key=="CFrame"||key=="CoordinateFrame"||key=="Focus"||key=="focus")) {
+            std::string alias=key=="CFrame"?"CoordinateFrame":key=="CoordinateFrame"?"CFrame":key=="Focus"?"focus":"Focus";
+            derived.emplace_back(alias,value);entries.push_back(Json{{"kind","set"},{"id",n.id},{"property",alias},{"value",value}});
+        }
+        if((n.class_name=="LocalScript"||n.class_name=="Script")&&(key=="Enabled"||key=="Disabled")) {
+            std::string alias=key=="Enabled"?"Disabled":"Enabled";Json inverse=!value.get<bool>();
+            derived.emplace_back(alias,inverse);entries.push_back(Json{{"kind","set"},{"id",n.id},{"property",alias},{"value",inverse}});
+        }
+        if(key=="Archivable"||key=="archivable") {
+            std::string alias=key=="Archivable"?"archivable":"Archivable";
+            derived.emplace_back(alias,value);entries.push_back(Json{{"kind","set"},{"id",n.id},{"property",alias},{"value",value}});
+        }
+        size_t bytes=0;for(const auto&entry:entries)bytes+=entry.dump().size();
+        if(w.mutations.size()+entries.size()>kMaxMutations||bytes>kMaxMutationBytes-w.mutation_bytes)throw std::runtime_error("local mutation output limit exceeded");
+        if(key=="AssemblyLinearVelocity"&&class_is_a(w,n.class_name,"BasePart")) {
+            movement_bindings::enqueue_linear_velocity(L,n.id,3,motion_root_id);
+            movement_bindings::tag_latest_mutation_cursor(L,static_cast<int>(w.mutations.size()));
+        }
         w.local_properties[n.id][key]=value;
-        w.mutations.push_back(std::move(entry));w.mutation_bytes+=bytes;
-    }catch(const std::exception&e){luaL_error(L,"local property write failed: %s",e.what());return 0;}
+        for(const auto& [member,previous]:motion_members)w.local_properties[member->id][key]=value;
+        body_position_written(w,n,key);
+        for(auto&[derived_key,derived_value]:derived)w.local_properties[n.id][derived_key]=derived_value;
+        for(auto&entry:entries){w.mutation_bytes+=entry.dump().size();w.mutations.push_back(std::move(entry));}
+        if(key=="Parent")parent_events(w,n,old_parent,parent_id(w,n));
+        else if(old_value!=value)property_events(w,n,key);
+        for(const auto& [member,previous]:motion_members)if(previous!=value)property_events(w,*member,key);
+        for(auto&[derived_key,derived_value]:derived)if(derived_key!="archivable"&&derived_key!="Archivable")property_events(w,n,derived_key);
+        if(key=="Parent")refresh_current_camera(w);
+    }catch(const std::exception&e){luaL_error(L,"local property write failed for %s.%s: %s",n.class_name.c_str(),key.c_str(),e.what());return 0;}
     return 0;
 }
+#include "smooth_damp.inc"
+#include "tween_playback.inc"
+int instance_new(lua_State*L){
+    auto*w=static_cast<World*>(lua_touserdata(L,lua_upvalueindex(1)));
+    if(lua_gettop(L)<1||lua_gettop(L)>2){luaL_error(L,"Instance.new expects a class name and optional Parent");return 0;}
+    size_t class_len=0;const char*raw=luaL_checklstring(L,1,&class_len);std::string cls(raw,class_len);
+    const auto& classes=constructors();
+    auto constructor=classes.find(cls);
+    if(constructor==classes.end() || !constructor->value("creatable",false)){luaL_error(L,"class '%s' is not a supported creatable class",cls.c_str());return 0;}
+    Handle*parent=nullptr;
+    if(lua_gettop(L)==2&&!lua_isnil(L,2)){parent=checked_handle(L,2);if(parent->world!=w){luaL_error(L,"Parent belongs to a different world snapshot");return 0;}}
+    if(w->nodes.size()>=kMaxNodes+1000){luaL_error(L,"local instance limit exceeded");return 0;}
+    Node node;node.attributes_known=true;node.collection_tags_known=true;node.server_owned=false;do{node.id="local:"+std::to_string(w->next_local_id++);}while(w->nodes.count(node.id));node.class_name=cls;node.name=constructor->at("name").get<std::string>();
+    for(auto property=constructor->at("properties").begin();property!=constructor->at("properties").end();++property) {
+        node.properties[property.key()]=property.value().at("value");
+        node.origins[property.key()]="class_default";
+    }
+    std::string id=node.id;
+    if(cls=="VectorForce"){node.properties["RelativeTo"]=0;node.origins["RelativeTo"]="class_default";}
+    if(cls=="LinearVelocity") {
+        Json defaults={{"RelativeTo",2},{"VelocityConstraintMode",2},{"ForceLimitMode",0},
+            {"PlaneVelocity",{{"$vector2",{0,0}}}},{"MaxPlanarAxesForce",{{"$vector2",{1000,1000}}}}};
+        for(auto it=defaults.begin();it!=defaults.end();++it){node.properties[it.key()]=it.value();node.origins[it.key()]="class_default";}
+    }
+    auto [it,ok]=w->nodes.emplace(id,std::move(node));if(!ok){luaL_error(L,"local instance id collision");return 0;}
+    w->order.push_back(id);w->local_properties[id]["Name"]=it->second.name;w->local_properties[id]["Parent"]=nullptr;
+    Json created{{"kind","create"},{"node",node_record(it->second)}};
+    size_t create_bytes=created.dump().size(),parent_bytes=0;Json parent_entry;
+    if(parent){parent_entry=Json{{"kind","set"},{"id",id},{"property","Parent"},{"value",{{"$ref",parent->node->id}}}};parent_bytes=parent_entry.dump().size();}
+    size_t total_bytes=create_bytes+parent_bytes;
+    if(w->mutations.size()+(parent?2:1)>kMaxMutations||total_bytes>kMaxMutationBytes-w->mutation_bytes){w->nodes.erase(id);w->local_properties.erase(id);w->order.pop_back();luaL_error(L,"local mutation output limit exceeded");return 0;}
+    w->mutations.push_back(std::move(created));w->mutation_bytes+=create_bytes;
+    push_node(L,*w,&it->second);
+    if(parent){Json value{{"$ref",parent->node->id}};w->local_properties[id]["Parent"]=value;w->mutations.push_back(std::move(parent_entry));w->mutation_bytes+=parent_bytes;parent_events(*w,it->second,"",parent->node->id);}
+    return 1;
+}
 int instance_tostring(lua_State*L){Handle*h=checked_handle(L,1);auto s=instance_name(*h->world,*h->node);lua_pushlstring(L,s.data(),s.size());return 1;}
-int instance_equal(lua_State*L){auto*a=static_cast<Handle*>(lua_touserdata(L,1));auto*b=static_cast<Handle*>(lua_touserdata(L,2));bool aa=has_meta(L,1,kInstanceMeta),bb=has_meta(L,2,kInstanceMeta);lua_pushboolean(L,aa&&bb&&a&&b&&a->node==b->node);return 1;}
+int instance_equal(lua_State*L){auto*a=static_cast<Handle*>(lua_touserdata(L,1));auto*b=static_cast<Handle*>(lua_touserdata(L,2));bool aa=has_meta(L,1,kInstanceMeta),bb=has_meta(L,2,kInstanceMeta);lua_pushboolean(L,aa&&bb&&a&&b&&a==b);return 1;}
 int cframe_tostring(lua_State*L){auto*c=static_cast<CFrameValue*>(luaL_checkudata(L,1,kCFrameMeta));lua_pushfstring(L,"%f, %f, %f",c->p[0],c->p[1],c->p[2]);return 1;}
-int cframe_equal(lua_State*L){auto*a=static_cast<CFrameValue*>(lua_touserdata(L,1));auto*b=static_cast<CFrameValue*>(lua_touserdata(L,2));bool aa=has_meta(L,1,kCFrameMeta),bb=has_meta(L,2,kCFrameMeta);bool eq=aa&&bb&&a&&b&&a->p==b->p&&a->r==b->r;lua_pushboolean(L,eq);return 1;}
-int print_capture(lua_State*L){World*w=static_cast<World*>(lua_touserdata(L,lua_upvalueindex(1)));bool warn=lua_toboolean(L,lua_upvalueindex(2));std::string line;if(warn)line="WARN: ";for(int i=1;i<=lua_gettop(L);i++){if(i>1)line+='\t';size_t n=0;const char*s=luaL_tolstring(L,i,&n);line.append(s,n);lua_pop(L,1);}line+='\n';size_t room=w->output.size()<kMaxPrinted?kMaxPrinted-w->output.size():0;if(line.size()>room){w->output.append(line.data(),room);w->output_truncated=true;}else w->output+=line;return 0;}
+int cframe_equal(lua_State*L){auto*a=static_cast<CFrameValue*>(lua_touserdata(L,1));auto*b=static_cast<CFrameValue*>(lua_touserdata(L,2));bool aa=has_meta(L,1,kCFrameMeta),bb=has_meta(L,2,kCFrameMeta);bool eq=aa&&bb&&a&&b&&a->rotation_known==b->rotation_known&&a->p==b->p&&a->r==b->r;lua_pushboolean(L,eq);return 1;}
+int print_capture(lua_State*L){World*w=static_cast<World*>(lua_touserdata(L,lua_upvalueindex(1)));bool warn=lua_toboolean(L,lua_upvalueindex(2));size_t room=w->output.size()<kMaxPrinted?kMaxPrinted-w->output.size():0;auto append=[&](const char*s,size_t n){size_t take=std::min(n,room);if(take)w->output.append(s,take);room-=take;if(take<n)w->output_truncated=true;};if(warn)append("WARN: ",6);for(int i=1;i<=lua_gettop(L)&&room>0;i++){if(i>1)append("\t",1);size_t n=0;const char*s=luaL_tolstring(L,i,&n);append(s,n);lua_pop(L,1);}if(room>0)append("\n",1);else w->output_truncated=true;return 0;}
+#include "instance_compat.inc"
 int property_origin(lua_State*L){Handle*h=checked_handle(L,1);std::string k=luaL_checkstring(L,2);std::string s=origin(*h->world,*h->node,k);lua_pushlstring(L,s.data(),s.size());return 1;}
-int client_index(lua_State*L){World*w=static_cast<World*>(lua_touserdata(L,lua_upvalueindex(1)));const char*k=luaL_checkstring(L,2);if(std::strcmp(k,"snapshot")==0)lua_pushboolean(L,1);else if(std::strcmp(k,"sequence")==0){if(w->sequence>0)lua_pushnumber(L,w->sequence);else lua_pushnil(L);}else if(std::strcmp(k,"propertyOrigin")==0)lua_pushcfunction(L,property_origin,"propertyOrigin");else lua_pushnil(L);return 1;}
+int client_index(lua_State*L){World*w=static_cast<World*>(lua_touserdata(L,lua_upvalueindex(1)));const char*k=luaL_checkstring(L,2);if(std::strcmp(k,"snapshot")==0)lua_pushboolean(L,!w->persistent);else if(std::strcmp(k,"persistent")==0)lua_pushboolean(L,w->persistent);else if(std::strcmp(k,"sequence")==0){if(w->sequence>0)lua_pushnumber(L,w->sequence);else lua_pushnil(L);}else if(std::strcmp(k,"propertyOrigin")==0)lua_pushcfunction(L,property_origin,"propertyOrigin");else lua_pushnil(L);return 1;}
 
 } // namespace
 
+int push_translation_cframe(lua_State* L,double x,double y,double z) {
+    luaL_getmetatable(L,kCFrameMeta);
+    const bool installed=lua_istable(L,-1);lua_pop(L,1);
+    if(!installed){luaL_error(L,"Region3.CFrame requires world-source mode");return 0;}
+    auto* cf=new_cframe(L);cf->p={x,y,z};
+    luaL_getmetatable(L,kCFrameMeta);lua_setmetatable(L,-2);return 1;
+}
+
+bool is_tween_info(lua_State* L,int index) {
+    return lua_isuserdata(L,index)&&tween_info_is_value(L,index);
+}
+bool capture_tween_info(lua_State* L,int index,Json& value) {
+    if(!is_tween_info(L,index))return false;
+    double time,delay;int style,direction;lua_Integer repeats;bool reverses;
+    tween_info_capture_fields(L,index,time,style,direction,repeats,reverses,delay);
+    value=Json{{"$tween_info",Json::array({time,style,direction,repeats,reverses,delay})}};
+    return true;
+}
+bool push_tween_info_json(lua_State* L,const Json& value) {
+    if(!value.is_object()||value.size()!=1||!value.contains("$tween_info"))return false;
+    const auto& v=value.at("$tween_info");
+    if(!v.is_array()||v.size()!=6||!v[0].is_number()||!v[1].is_number_integer()
+        ||!v[2].is_number_integer()||!v[3].is_number_integer()||!v[4].is_boolean()||!v[5].is_number())
+        throw std::runtime_error("invalid TweenInfo components");
+    if(!std::isfinite(v[0].get<double>())||v[0]<0||!std::isfinite(v[5].get<double>())||v[5]<0
+        ||v[1]<0||v[1]>10||v[2]<0||v[2]>2||v[3]<-2147483648LL||v[3]>2147483647LL)
+        throw std::runtime_error("invalid TweenInfo component range");
+    luaL_getmetatable(L,kTweenInfoMeta);bool installed=lua_istable(L,-1);lua_pop(L,1);
+    if(!installed)throw std::runtime_error("TweenInfo requires the world runtime");
+    tween_info_push_fields(L,v[0].get<double>(),v[1].get<int>(),v[2].get<int>(),
+                          v[3].get<lua_Integer>(),v[4].get<bool>(),v[5].get<double>());
+    return true;
+}
+
+Json apply_engine_poses(World& world,const Json& poses) {
+    return apply_engine_poses_impl(world,poses);
+}
+
+namespace {
+void emit_humanoid_state_changed(lua_State* L, World& w, Node& humanoid,
+                                 int previous, int current) {
+    if (previous == current || !humanoid_state_name(previous) || !humanoid_state_name(current)) return;
+    const std::string signal_key = Json::array({humanoid.id, "StateChanged"}).dump();
+    auto signal = w.signals.find(signal_key);
+    if (signal == w.signals.end()) return;
+    bool listening = false;
+    for (const auto& connection : w.connections)
+        if (connection->signal == signal->second.get() && connection->connected &&
+            (!connection->once || !connection->once_pending)) { listening = true; break; }
+    auto waiters = w.waiters.find(signal->second.get());
+    if (!listening && waiters != w.waiters.end() && !waiters->second.empty()) listening = true;
+    if (!listening) return;
+    lua_createtable(L, 2, 0);
+    push_humanoid_state_item(L, previous); lua_rawseti(L, -2, 1);
+    push_humanoid_state_item(L, current); lua_rawseti(L, -2, 2);
+    const int reference = lua_ref(L, -1); lua_pop(L, 1);
+    w.event_argument_refs.push_back(reference);
+    emit(w, humanoid, "StateChanged", Json::array(), reference, 2);
+}
+
+int received_humanoid_state(World& w, Node& humanoid) {
+    const Json* received = property_value(w, humanoid, "HumanoidStateType");
+    if (!received) return -1;
+    if (received->is_number_integer()) {
+        const int value = received->get<int>();
+        return humanoid_state_name(value) ? value : -1;
+    }
+    if (received->is_object() && received->contains("$enum") &&
+        (*received)["$enum"].is_object() && (*received)["$enum"].contains("value") &&
+        (*received)["$enum"]["value"].is_number_integer()) {
+        const int value = (*received)["$enum"]["value"].get<int>();
+        return humanoid_state_name(value) ? value : -1;
+    }
+    return -1;
+}
+}
+
+void update_physics_feedback(lua_State* L, World& w, const Json& feedback) {
+    if (!feedback.is_object()) throw std::runtime_error("physics feedback must be an object");
+    const Json requested_id = feedback.value("humanoid_id", Json(nullptr));
+    if (requested_id.is_null()) {
+        if (feedback.contains("running_speed"))
+            throw std::runtime_error("physics feedback running_speed requires a Humanoid ID");
+        return;
+    }
+    if (!requested_id.is_string()) throw std::runtime_error("physics feedback Humanoid ID must be a string");
+    Node* player = find_node(w, w.local_player);
+    if (!player) return;
+    const Json* character_ref = property_value(w, *player, "Character");
+    if (!character_ref || !character_ref->is_object() || !character_ref->contains("$ref") ||
+        !(*character_ref)["$ref"].is_string()) return;
+    const std::string character_id = (*character_ref)["$ref"].get<std::string>();
+    Node* humanoid = find_node(w, requested_id.get<std::string>());
+    if (!humanoid || humanoid->class_name != "Humanoid" || parent_id(w, *humanoid) != character_id || humanoid->destroyed)
+        throw std::runtime_error("physics feedback Humanoid is not the current local character");
+    const Json move_to = feedback.value("move_to", Json::array());
+    if(!move_to.is_array()||move_to.size()>256)
+        throw std::runtime_error("MoveTo feedback must be a bounded array");
+    int64_t prior_request=0;
+    for(const Json& item:move_to) {
+        if(!item.is_object()||!item.contains("sequence")||!item["sequence"].is_number_integer()||
+           !item.contains("reached")||!item["reached"].is_boolean()||
+           item["sequence"].get<int64_t>()<=prior_request)
+            throw std::runtime_error("MoveTo feedback requires increasing positive sequences and boolean results");
+        prior_request=item["sequence"].get<int64_t>();
+    }
+    auto publish_move_to=[&]() {
+        const Json* previous=local_value(w,*humanoid,"__MoveToFeedbackSequence");
+        int64_t delivered=previous&&previous->is_number_integer()?previous->get<int64_t>():0;
+        for(const Json& item:move_to) {
+            const int64_t sequence=item["sequence"].get<int64_t>();
+            if(sequence<=delivered)continue;
+            emit(w,*humanoid,"MoveToFinished",Json::array({item["reached"]}));
+            w.local_properties[humanoid->id]["__MoveToFeedbackSequence"]=sequence;
+            delivered=sequence;
+        }
+    };
+    // Validate motion before publishing any feedback. Only the current local
+    // root is simulated; this is not authority to update other world bodies.
+    Node* motion_root = nullptr;
+    Json motion_velocity;
+    if(feedback.contains("motion")) {
+        const Json& motion=feedback["motion"];
+        if(!motion.is_object()||motion.size()!=2||!motion.contains("root_id")||
+           !motion["root_id"].is_string()||!motion.contains("linear_velocity")||
+           !motion["linear_velocity"].is_array()||motion["linear_velocity"].size()!=3)
+            throw std::runtime_error("invalid physics motion feedback");
+        motion_root=find_node(w,motion["root_id"].get<std::string>());
+        Node* character=find_node(w,character_id);
+        bool valid_root=motion_root&&instance_name(w,*motion_root)=="HumanoidRootPart";
+        if(character)if(const Json* primary=property_value(w,*character,"PrimaryPart"))
+            valid_root=valid_root||(motion_root&&primary->is_object()&&primary->contains("$ref")&&
+                (*primary)["$ref"].is_string()&&(*primary)["$ref"].get<std::string>()==motion_root->id);
+        if(!motion_root||motion_root->destroyed||!pivot_part(w,*motion_root)||
+           parent_id(w,*motion_root)!=character_id||!valid_root)
+            throw std::runtime_error("physics feedback root is not the current local character");
+        for(const Json& component:motion["linear_velocity"])
+            if(!component.is_number()||!std::isfinite(component.get<double>())||std::abs(component.get<double>())>1.0e6)
+                throw std::runtime_error("physics feedback velocity must be finite and bounded");
+        motion_velocity=Json{{"$vector3",motion["linear_velocity"]}};
+    }
+    if (feedback.contains("running_speed")) {
+        const Json& speed_value = feedback["running_speed"];
+        if (!speed_value.is_number())
+            throw std::runtime_error("physics feedback running_speed must be a number");
+        const double speed = speed_value.get<double>();
+        if (!std::isfinite(speed) || speed < 0)
+            throw std::runtime_error("physics feedback running_speed must be finite and nonnegative");
+        const Json* previous_speed = local_value(w, *humanoid, "__HumanoidRunningFeedback");
+        if (!previous_speed || !previous_speed->is_number() || previous_speed->get<double>() != speed) {
+            emit(w, *humanoid, "Running", Json::array({speed}));
+            w.local_properties[humanoid->id]["__HumanoidRunningFeedback"] = speed;
+        }
+    }
+    const Json state = feedback.value("state", Json(nullptr));
+    if (state.is_null()) {
+        clear_local_property(w, humanoid->id, "__HumanoidStateFeedback");
+        update_body_position_feedback(w,Json::array(),character_id);
+        publish_move_to();
+        return;
+    }
+    if (!state.is_object() || !state.contains("name") || !state["name"].is_string() ||
+        !state.contains("value") || !state["value"].is_number_integer())
+        throw std::runtime_error("physics feedback state must contain a name and integer value");
+    const int value = state["value"].get<int>();
+    const std::string name = state["name"].get<std::string>();
+    if (value < 0 || !humanoid_state_name(value) || humanoid_state_from_name(name) != value)
+        throw std::runtime_error("physics feedback state name/value mismatch");
+    const Json* old = local_value(w, *humanoid, "__HumanoidStateFeedback");
+    int previous = old && old->is_number_integer() && humanoid_state_name(old->get<int>())
+                   ? old->get<int>() : received_humanoid_state(w, *humanoid);
+    Json transitions = feedback.value("transitions", Json::array());
+    if (!transitions.is_array() || transitions.size() > 16)
+        throw std::runtime_error("physics feedback transitions must be a bounded array");
+    std::vector<int> transition_values;
+    for (const Json& transition : transitions) {
+        if (!transition.is_object() || !transition.contains("name") || !transition["name"].is_string() ||
+            !transition.contains("value") || !transition["value"].is_number_integer())
+            throw std::runtime_error("physics feedback transitions need name and integer value");
+        const int transition_value = transition["value"].get<int>();
+        if (!humanoid_state_name(transition_value) ||
+            humanoid_state_from_name(transition["name"].get<std::string>()) != transition_value)
+            throw std::runtime_error("physics feedback transition name/value mismatch");
+        transition_values.push_back(transition_value);
+    }
+    if (transition_values.empty() && previous != value) transition_values.push_back(value);
+    const bool platform_transition=previous==14||value==14||
+        std::find(transition_values.begin(),transition_values.end(),14)!=transition_values.end();
+    for (int transition_value : transition_values) {
+        if (previous >= 0) emit_humanoid_state_changed(L, w, *humanoid, previous, transition_value);
+        previous = transition_value;
+    }
+    if (!transition_values.empty() && transition_values.back() != value)
+        throw std::runtime_error("physics feedback transitions do not end at stable state");
+    w.local_properties[humanoid->id]["__HumanoidStateFeedback"] = value;
+    if(platform_transition) {
+        const bool active=value==14;
+        const Json* old_platform=property_value(w,*humanoid,"PlatformStand");
+        const bool changed=!old_platform||*old_platform!=Json(active);
+        w.local_properties[humanoid->id]["PlatformStand"]=active;
+        if(changed)property_events(w,*humanoid,"PlatformStand");
+    }
+    Json signals = feedback.value("signals", Json::array());
+    if (!signals.is_array() || signals.size() > 8)
+        throw std::runtime_error("physics feedback signals must be a bounded array");
+    for (const Json& item : signals) {
+        if (!item.is_object() || !item.contains("name") || !item["name"].is_string() ||
+            !item.contains("active") || !item["active"].is_boolean())
+            throw std::runtime_error("physics feedback signals need name and boolean active");
+        const std::string signal = item["name"].get<std::string>();
+        if (signal != "Jumping" && signal != "FreeFalling" && signal != "PlatformStanding")
+            throw std::runtime_error("unsupported physics feedback signal");
+        emit(w, *humanoid, signal, Json::array({item["active"]}));
+    }
+    if(feedback.contains("movers"))update_body_position_feedback(w,feedback["movers"],character_id);
+    if(motion_root) {
+        auto members=received_character_motion_parts(w,*motion_root);
+        // The validated Model.PrimaryPart fallback can lack the standard name.
+        if(members.empty())members.push_back(motion_root);
+        std::vector<Node*> changed;
+        for(auto* member:members) {
+            const Json* previous=property_value(w,*member,"AssemblyLinearVelocity");
+            if(!previous||*previous!=motion_velocity)changed.push_back(member);
+            w.local_properties[member->id]["AssemblyLinearVelocity"]=motion_velocity;
+        }
+        for(auto* member:changed)property_events(w,*member,"AssemblyLinearVelocity");
+    }
+    publish_move_to();
+    (void)L;
+}
+
+Node parse_node_record(const Json& record) {
+    if(!record.is_object()||!record.contains("id")||!record["id"].is_string()||!record.contains("class_name")||!record["class_name"].is_string()||!record.contains("name")||!record["name"].is_string())throw std::runtime_error("node requires string id, class_name, and name");
+    Node n;n.id=record["id"].get<std::string>();n.class_name=record["class_name"].get<std::string>();n.name=record["name"].get<std::string>();
+    if(n.id.empty()||n.id.size()>256||n.class_name.empty()||n.class_name.size()>256||n.name.size()>256)throw std::runtime_error("invalid node metadata");
+    if(record.contains("parent")&&!record["parent"].is_null()){if(!record["parent"].is_string())throw std::runtime_error("node parent must be a node id or null");n.parent=record["parent"].get<std::string>();}
+    if(record.contains("properties")){if(!record["properties"].is_object())throw std::runtime_error("node properties must be an object");n.properties=record["properties"];}
+    if(record.contains("origins")){if(!record["origins"].is_object())throw std::runtime_error("node origins must be an object");n.origins=record["origins"];}
+    if(record.contains("attributes")){if(!record["attributes"].is_object())throw std::runtime_error("node attributes must be an object");n.attributes=record["attributes"];}
+    if(record.contains("property_revisions")){if(!record["property_revisions"].is_object())throw std::runtime_error("property revisions must be an object");n.revisions=record["property_revisions"];}
+    if(!n.properties.contains("Color"))if(const Json* color=received_color_alias(n,n.properties)) {
+        n.properties["Color"]=*color;n.origins["Color"]="derived_received";
+        if(n.revisions.contains("Color3uint8"))n.revisions["Color"]=n.revisions["Color3uint8"];
+    }
+    n.attributes_known=record.value("attributes_known",record.contains("attributes"));
+    n.destroyed=record.value("destroyed",false);n.server_owned=record.value("server_owned",true);
+    collection_read_state(n,record);
+    if(n.destroyed&&!n.parent.empty())throw std::runtime_error("destroyed instance must have nil Parent");
+    return n;
+}
 World parse_snapshot(const std::string& text) {
     Json root=Json::parse(text);
     if(!root.is_object()||root.value("version",0)!=1)throw std::runtime_error("unsupported world snapshot version");
-    if(!root.contains("nodes")||!root["nodes"].is_array()||root["nodes"].size()>kMaxNodes)throw std::runtime_error("snapshot nodes must be an array of at most 20000 records");
+    if(!root.contains("nodes")||!root["nodes"].is_array()||root["nodes"].size()>kMaxNodes)throw std::runtime_error("snapshot nodes must be an array of at most "+std::to_string(kMaxNodes)+" records");
     if(!root.contains("services")||!root["services"].is_object()||root["services"].size()>128)throw std::runtime_error("snapshot services must be an object");
     World w;
+    if(root.contains("session_stats"))w.session_stats=validated_session_stats(root.at("session_stats"));
+    if(root.contains("input_capabilities"))w.input_capabilities=validated_input_capabilities(root.at("input_capabilities"));
+    if(root.contains("viewport"))w.viewport=validated_viewport(root.at("viewport"));
+    if(!w.viewport.empty())w.display=display_from_viewport(w.viewport);
+    if(root.contains("display"))update_display(w,root.at("display"));
+    w.chat_enabled=root.value("chat_enabled",false);
+    w.initial_replication_complete=root.value("initial_replication_complete",false);
     if(root.contains("local_player")&&root["local_player"].is_string())w.local_player=root["local_player"].get<std::string>();
     if(root.contains("job_id")&&root["job_id"].is_string())w.job_id=root["job_id"].get<std::string>();
     if(root.contains("sequence")&&root["sequence"].is_number())w.sequence=root["sequence"].get<double>();
     if(root.contains("class_parents"))w.class_parents=root["class_parents"];
     if(root.contains("defaults"))w.defaults=root["defaults"];
     if(root.contains("default_origins"))w.default_origins=root["default_origins"];
+    if(root.contains("class_events"))w.class_events=root["class_events"];
+    if(!w.class_events.is_object())throw std::runtime_error("class events must be an object");
+    for(const auto& list:w.class_events)if(!list.is_array())throw std::runtime_error("class events must contain arrays");
     if(!w.class_parents.is_object()||!w.defaults.is_object()||!w.default_origins.is_object())throw std::runtime_error("invalid class metadata/defaults");
+    for(auto cls=constructors().begin();cls!=constructors().end();++cls) {
+        if(cls.value().contains("parent"))
+            w.class_parents[cls.key()]=cls.value()["parent"];
+    }
     for(const Json& record:root["nodes"]){
-        if(!record.is_object()||!record.contains("id")||!record["id"].is_string()||!record.contains("class_name")||!record["class_name"].is_string()||!record.contains("name")||!record["name"].is_string())throw std::runtime_error("node requires string id, class_name, and name");
-        Node n;n.id=record["id"].get<std::string>();n.class_name=record["class_name"].get<std::string>();n.name=record["name"].get<std::string>();
-        if(n.id.empty()||n.id.size()>256||n.class_name.empty()||n.class_name.size()>256||n.name.size()>256)throw std::runtime_error("invalid node metadata");
-        if(record.contains("parent")&&!record["parent"].is_null()){if(!record["parent"].is_string())throw std::runtime_error("node parent must be a node id or null");n.parent=record["parent"].get<std::string>();}
-        if(record.contains("properties")){if(!record["properties"].is_object())throw std::runtime_error("node properties must be an object");n.properties=record["properties"];}
-        if(record.contains("origins")){if(!record["origins"].is_object())throw std::runtime_error("node origins must be an object");n.origins=record["origins"];}
+        Node n=parse_node_record(record);
         if(!w.nodes.emplace(n.id,std::move(n)).second)throw std::runtime_error("duplicate node id");w.order.push_back(record["id"].get<std::string>());
     }
     for(const auto&[id,node]:w.nodes)if(node.class_name=="DataModel"){if(!w.game_id.empty())throw std::runtime_error("snapshot has multiple DataModel nodes");w.game_id=id;}
     if(w.game_id.empty()){Node game;game.id="__world_snapshot_datamodel__";game.class_name="DataModel";game.name="Game";w.game_id=game.id;w.nodes.emplace(game.id,std::move(game));}
     Node settings;settings.id=kSettingsId;settings.class_name="UserSettings";settings.name="GlobalBasicSettings";w.nodes.emplace(settings.id,std::move(settings));
-    for(auto&[id,n]:w.nodes){if(id==kSettingsId||id==w.game_id)continue;if(!n.parent.empty()&&!w.nodes.count(n.parent))throw std::runtime_error("node parent reference is unknown");}
-    for(auto it=root["services"].begin();it!=root["services"].end();++it){std::string id;if(it.value().is_string())id=it.value().get<std::string>();else if(it.value().is_object()&&it.value().contains("$ref")&&it.value()["$ref"].is_string())id=it.value()["$ref"].get<std::string>();else throw std::runtime_error("service values must be node ids or $ref records");if(!w.nodes.count(id)||id==w.game_id)throw std::runtime_error("service references unknown node");w.services.emplace(it.key(),id);Node& node=w.nodes.at(id);if(node.parent.empty())node.parent=w.game_id;}
-    if(!w.local_player.empty()&&!w.nodes.count(w.local_player))throw std::runtime_error("local_player references unknown node");
-    for(auto&[id,n]:w.nodes){std::set<std::string>seen;std::string p=n.parent;while(!p.empty()){if(p==id||!seen.insert(p).second)throw std::runtime_error("snapshot parent cycle");Node* parent=find_node(w,p);if(!parent)break;p=parent->parent;}}
+    // Parent references to streamed-out instances remain unresolved; getters
+    // produce nil while propertyOrigin returns `unresolved_reference`.
+    for(auto it=root["services"].begin();it!=root["services"].end();++it){std::string id;if(it.value().is_string())id=it.value().get<std::string>();else if(it.value().is_object()&&it.value().contains("$ref")&&it.value()["$ref"].is_string())id=it.value()["$ref"].get<std::string>();else throw std::runtime_error("service values must be node ids or $ref records");if(!w.nodes.count(id)||id==w.game_id)throw std::runtime_error("service references unknown node");w.services.emplace(it.key(),id);Node& node=w.nodes.at(id);if(node.parent.empty()&&!node.destroyed)node.parent=w.game_id;}
+    if(w.local_player.empty()){
+        auto pi=w.services.find("Players");if(pi!=w.services.end()){Node&p=w.nodes.at(pi->second);auto li=p.properties.find("LocalPlayer");if(li!=p.properties.end()&&li->is_object()&&li->contains("$ref")&&(*li)["$ref"].is_string())w.local_player=(*li)["$ref"].get<std::string>();}
+    }
+    // An unresolved local-player reference is retained and reads as nil.
+    std::unordered_map<std::string,uint8_t> marks;
+    for(const auto&[start,node]:w.nodes){(void)node;if(marks[start]==2)continue;std::vector<std::string>path;std::string cur=start;
+        while(!cur.empty()&&w.nodes.count(cur)&&marks[cur]==0){marks[cur]=1;path.push_back(cur);cur=w.nodes.at(cur).parent;}
+        if(!cur.empty()&&marks[cur]==1)throw std::runtime_error("snapshot parent cycle");
+        for(const auto&id:path)marks[id]=2;
+    }
+    for(const auto& [id,node]:w.nodes)if(node.class_name=="Player") {
+        auto value=node.properties.find("Character");
+        if(value!=node.properties.end()&&value->is_object()&&value->contains("$ref")&&(*value)["$ref"].is_string()) {
+            auto target=(*value)["$ref"].get<std::string>();if(!find_node(w,target))w.pending_characters[id]=target;
+        }
+    }
+    refresh_current_camera(w);
+    // Initial received part poses are authoritative. Seed connectivity without
+    // snapping a captured world; later topology changes activate pose solving.
+    seed_joint_activation(w);
     return w;
 }
 
 void install(lua_State*L,World&w){
+    const int stack_base = lua_gettop(L);
+    if(!w.services.count("UserInputService"))ensure_client_service(w,"UserInputService");
+    if(!w.services.count("RunService"))ensure_client_service(w,"RunService");
+    // CoreGui is a client-local container. Create its actual local identity
+    // before scripts run so ordinary child lookup also finds the service.
+    if(!w.services.count("CoreGui"))ensure_client_service(w,"CoreGui");
+    install_vector3_methods(L);
+    luaL_newmetatable(L,kChatStatusMeta);lua_pushcfunction(L,chat_status_index,"__index");lua_setfield(L,-2,"__index");lua_pushcfunction(L,chat_status_string,"__tostring");lua_setfield(L,-2,"__tostring");lua_pushcfunction(L,chat_status_equal,"__eq");lua_setfield(L,-2,"__eq");lua_pushcfunction(L,chat_readonly,"__newindex");lua_setfield(L,-2,"__newindex");lua_pushliteral(L,"EnumItem");lua_setfield(L,-2,"__type");lua_pushliteral(L,"chat EnumItem");lua_setfield(L,-2,"__metatable");lua_pop(L,1);
+    luaL_newmetatable(L,kChatEnumMeta);lua_pushcfunction(L,chat_enum_index,"__index");lua_setfield(L,-2,"__index");lua_pushcfunction(L,chat_enum_string,"__tostring");lua_setfield(L,-2,"__tostring");lua_pushcfunction(L,chat_readonly,"__newindex");lua_setfield(L,-2,"__newindex");lua_pushliteral(L,"Enum");lua_setfield(L,-2,"__type");lua_pushliteral(L,"chat Enum");lua_setfield(L,-2,"__metatable");lua_pop(L,1);
+    lua_newtable(L);lua_newuserdatatagged(L,1,0);luaL_getmetatable(L,kChatEnumMeta);lua_setmetatable(L,-2);lua_pushvalue(L,-1);lua_setfield(L,LUA_REGISTRYINDEX,"Headless.ChatStatusEnum");lua_setfield(L,-2,"TextChatMessageStatus");install_animation_enum(L);install_geometry_enums(L);install_humanoid_state_enum(L);install_ussi_export_enums(L,-1);install_enum_root(L);lua_setreadonly(L,-1,true);lua_setglobal(L,"Enum");
+    install_tween_bindings(L);
+    install_ussi_security_capabilities(L,LUA_GLOBALSINDEX);
+    luaL_newmetatable(L,kSignalMeta);lua_pushcfunction(L,signal_index,"__index");lua_setfield(L,-2,"__index");lua_pushliteral(L,"RBXScriptSignal");lua_setfield(L,-2,"__type");lua_pushliteral(L,"headless signal");lua_setfield(L,-2,"__metatable");lua_pop(L,1);
+    luaL_newmetatable(L,kConnectionMeta);lua_pushcfunction(L,connection_index,"__index");lua_setfield(L,-2,"__index");lua_pushliteral(L,"RBXScriptConnection");lua_setfield(L,-2,"__type");lua_pushliteral(L,"headless connection");lua_setfield(L,-2,"__metatable");lua_pop(L,1);
+    luaL_newmetatable(L,kInstanceHandleMeta);lua_pushcfunction(L,instance_handle_index,"__index");lua_setfield(L,-2,"__index");lua_pushcfunction(L,instance_handle_equal,"__eq");lua_setfield(L,-2,"__eq");lua_pushcfunction(L,instance_handle_tostring,"__tostring");lua_setfield(L,-2,"__tostring");lua_pushliteral(L,"InstanceHandle");lua_setfield(L,-2,"__type");lua_pushliteral(L,"headless InstanceHandle");lua_setfield(L,-2,"__metatable");lua_pop(L,1);
     luaL_newmetatable(L,kInstanceMeta);
     lua_pushcfunction(L,instance_index,"__index");lua_setfield(L,-2,"__index");
     lua_pushcfunction(L,instance_newindex,"__newindex");lua_setfield(L,-2,"__newindex");
     lua_pushcfunction(L,instance_tostring,"__tostring");lua_setfield(L,-2,"__tostring");
     lua_pushcfunction(L,instance_equal,"__eq");lua_setfield(L,-2,"__eq");
+    lua_pushcclosurek(L,compat_namecall,"__namecall",0,compat_namecall_continue);lua_setfield(L,-2,"__namecall");
     lua_pushliteral(L,"Instance");lua_setfield(L,-2,"__type");lua_pushliteral(L,"world snapshot Instance");lua_setfield(L,-2,"__metatable");lua_pop(L,1);
-    luaL_newmetatable(L,kCFrameMeta);lua_pushcfunction(L,cframe_index,"__index");lua_setfield(L,-2,"__index");lua_pushcfunction(L,cframe_tostring,"__tostring");lua_setfield(L,-2,"__tostring");lua_pushcfunction(L,cframe_equal,"__eq");lua_setfield(L,-2,"__eq");lua_pushliteral(L,"CFrame");lua_setfield(L,-2,"__type");lua_pushliteral(L,"snapshot CFrame");lua_setfield(L,-2,"__metatable");lua_pop(L,1);
+    luaL_newmetatable(L,kCFrameMeta);lua_pushcfunction(L,cframe_index,"__index");lua_setfield(L,-2,"__index");lua_pushcfunction(L,cframe_tostring,"__tostring");lua_setfield(L,-2,"__tostring");lua_pushcfunction(L,cframe_equal,"__eq");lua_setfield(L,-2,"__eq");lua_pushliteral(L,"CFrame");lua_setfield(L,-2,"__type");lua_pushliteral(L,"snapshot CFrame");lua_setfield(L,-2,"__metatable");install_frame_methods(L);lua_pop(L,1);
+    lua_createtable(L,0,8);lua_pushcfunction(L,vector3_new,"new");lua_setfield(L,-2,"new");install_geometry_vector_constructors(L);set_vector_constant(L,"zero",0,0,0);set_vector_constant(L,"one",1,1,1);set_vector_constant(L,"xAxis",1,0,0);set_vector_constant(L,"yAxis",0,1,0);set_vector_constant(L,"zAxis",0,0,1);lua_setreadonly(L,-1,1);lua_setglobal(L,"Vector3");
+    lua_createtable(L,0,8);install_frame_constructors(L);lua_pushcfunction(L,cframe_new,"new");lua_setfield(L,-2,"new");lua_pushcfunction(L,cframe_from_matrix,"fromMatrix");lua_setfield(L,-2,"fromMatrix");auto*identity=new_cframe(L);luaL_getmetatable(L,kCFrameMeta);lua_setmetatable(L,-2);lua_setfield(L,-2,"identity");lua_setreadonly(L,-1,1);lua_setglobal(L,"CFrame");
     Node*game=find_node(w,w.game_id);push_node(L,w,game);lua_setglobal(L,"game");
     auto ws=w.services.find("Workspace");if(ws!=w.services.end()){push_node(L,w,find_node(w,ws->second));lua_setglobal(L,"workspace");}
     auto players=w.services.find("Players");if(players!=w.services.end()){
@@ -362,7 +2089,429 @@ void install(lua_State*L,World&w){
     lua_pushlightuserdata(L,&w);lua_pushcclosurek(L,print_capture,"print",1,nullptr);lua_setglobal(L,"print");
     lua_pushlightuserdata(L,&w);lua_pushboolean(L,1);lua_pushcclosurek(L,print_capture,"warn",2,nullptr);lua_setglobal(L,"warn");
     lua_pushlightuserdata(L,&w);lua_pushcclosurek(L,make_user_settings,"UserSettings",1,nullptr);lua_setglobal(L,"UserSettings");
-    lua_createtable(L,0,3);lua_pushlightuserdata(L,&w);lua_pushcclosurek(L,client_index,"client.__index",1,nullptr);lua_setfield(L,-2,"__index");lua_pushliteral(L,"world snapshot client");lua_setfield(L,-2,"__metatable");lua_setmetatable(L,-2);lua_setglobal(L,"client");
+    lua_createtable(L,0,0);
+    lua_createtable(L,0,2);lua_pushlightuserdata(L,&w);lua_pushcclosurek(L,client_index,"client.__index",1,nullptr);lua_setfield(L,-2,"__index");lua_pushliteral(L,"world snapshot client");lua_setfield(L,-2,"__metatable");
+    lua_setmetatable(L,-2);lua_setglobal(L,"client");
+    lua_createtable(L,0,1);lua_pushlightuserdata(L,&w);lua_pushcclosurek(L,instance_new,"Instance.new",1,nullptr);lua_setfield(L,-2,"new");lua_setreadonly(L,-1,1);lua_setglobal(L,"Instance");
+    lua_newtable(L);lua_pushlightuserdata(L,&w);lua_pushcclosurek(L,instance_handle_new,"InstanceHandle.new",1,nullptr);lua_setfield(L,-2,"new");lua_setreadonly(L,-1,true);lua_setglobal(L,"InstanceHandle");
+    install_instance_compat(L,w);
+    assert(lua_gettop(L) == stack_base);
 }
 Json capture_value(lua_State* L,World& world,int index){return convert_lua_value(L,world,index);}
+int clone_client_template(lua_State* L) {
+    auto* handle=checked_handle(L,1);
+    if(!handle->world->persistent){luaL_error(L,"template cloning requires a persistent world");return 0;}
+    bool previous=cloning_client_template;cloning_client_template=true;
+    lua_pushcfunction(L,clone_instance,"client template clone");lua_pushvalue(L,1);
+    int status=lua_pcall(L,1,1,0);cloning_client_template=previous;
+    if(status!=LUA_OK){lua_error(L);return 0;}return 1;
+}
+void push_instance(lua_State* L,World& world,const std::string& id){auto* node=find_node(world,id);if(node)push_node(L,world,node);else lua_pushnil(L);}
+void push_player_scripts(lua_State* L,World& w) {
+    auto* player=find_node(w,w.local_player);if(!player){lua_pushnil(L);return;}
+    for(const auto& id:w.order){auto& node=w.nodes.at(id);if(!node.destroyed&&node.class_name=="PlayerScripts"&&parent_id(w,node)==player->id){push_node(L,w,&node);return;}}
+    if(w.nodes.size()>=kMaxNodes+1000)throw std::runtime_error("client container limit exceeded");
+    Node node;do{node.id="local:"+std::to_string(w.next_local_id++);}while(w.nodes.count(node.id));
+    node.class_name="PlayerScripts";node.name="PlayerScripts";node.parent=player->id;node.server_owned=false;node.attributes_known=true;node.collection_tags_known=true;
+    node.origins=Json{{"Name","local"},{"ClassName","local"},{"Parent","local"}};
+    std::vector<Json> entries{Json{{"kind","create"},{"node",node_record(node)}}};check_mutation_budget(w,entries);
+    auto id=node.id;auto [it,ok]=w.nodes.emplace(id,std::move(node));w.order.push_back(id);append_mutations(w,std::move(entries));
+    parent_events(w,it->second,"",player->id);push_node(L,w,&it->second);
+}
+Json script_nodes(World& w) {
+    Json rows=Json::array();
+    for(const auto& id:w.order) {
+        auto& n=w.nodes.at(id);
+        if(n.class_name!="LocalScript"&&n.class_name!="ModuleScript"&&n.class_name!="Script")continue;
+        Json row{{"id",id},{"destroyed",n.destroyed}};
+        for(const char* key:{"Disabled","Enabled","RunContext"}) {
+            const Json* value=property_value(w,n,key);if(value)row[key]=*value;
+        }
+        rows.push_back(std::move(row));
+    }
+    return rows;
+}
+void stop_script_tasks(lua_State* from,World& w,const std::string& owner) {
+    if(!w.scheduler)return;
+    clear_owned_bindables(from,w,owner);
+    clear_render_owner(from,w,owner);
+    clear_context_owner(from,w,owner);
+    auto owned=[&](lua_State* thread){return w.scheduler->owner(thread)==owner;};
+    for(auto& connection:w.connections)if(connection->owner==owner){connection->connected=false;connection->manually_disconnected=true;}
+    for(auto& [signal,waiters]:w.waiters)for(auto it=waiters.begin();it!=waiters.end();) {
+        if(owned(it->thread)){lua_unref(from,it->reference);it=waiters.erase(it);}else ++it;
+    }
+    for(auto it=w.child_waiters.begin();it!=w.child_waiters.end();) {
+        if(owned(it->thread)){lua_unref(from,it->reference);it=w.child_waiters.erase(it);}else ++it;
+    }
+    for(auto it=w.handle_waiters.begin();it!=w.handle_waiters.end();) {
+        if(owned(it->thread)){lua_unref(from,it->reference);it=w.handle_waiters.erase(it);}else ++it;
+    }
+    for(auto it=w.chat_waiters.begin();it!=w.chat_waiters.end();) {
+        if(owned(it->thread)){lua_unref(from,it->reference);it=w.chat_waiters.erase(it);}else ++it;
+    }
+    w.scheduler->cancel_owner(owner);
+    dispatch_remote_server_waiters(from,w);
+}
+void dispatch_pending_events(lua_State* from,World& world) {
+    // Already received signals must make progress even when 128 interrupted
+    // callbacks keep the ordinary runnable batch full. Admit a bounded batch
+    // against the total callback-task limit (including the foreground reserve).
+    // Periodic frame generation below still uses callback_capacity(), so this
+    // cannot generate new Heartbeats while the runnable queue is backpressured.
+    size_t capacity=std::min(size_t{128},world.scheduler->invocation_capacity());
+    while(!world.events.empty()) {
+        const auto& front=world.events.front();
+        if(front.connection&&!front.connection->manually_disconnected&&
+           (front.connection->connected||front.connection->auto_disconnected)&&capacity==0)break;
+        auto event=std::move(world.events.front());world.events.pop_front();
+        auto push=[&](lua_State* target){
+            if(event.argument_ref!=LUA_NOREF) {
+                lua_getref(target,event.argument_ref);int table=lua_gettop(target);
+                size_t budget=10000;std::unordered_set<const void*> path;
+                for(int i=0;i<event.argument_count;i++){lua_rawgeti(target,table,i+1);copy_bindable_value(target,-1,path,budget);lua_remove(target,-2);}
+                lua_remove(target,table);return event.argument_count;
+            }
+            for(const auto& value:event.arguments)push_json(target,world,value);return static_cast<int>(event.arguments.size());
+        };
+        if(event.waiter){world.scheduler->wake_signal(event.waiter,push);lua_unref(from,event.waiter_ref);}
+        else if(event.connection) {
+            auto& c=*event.connection;
+            if(c.manually_disconnected||(!c.connected&&!c.auto_disconnected))continue;
+            auto* connection=&c;
+            world.scheduler->callback(from,c.callback,push,[connection](){return !connection->manually_disconnected;},c.owner);
+            --capacity;
+            if(c.once)c.connected=false;
+        }
+    }
+    // Undispatched BindableEvent entries still own argument references.
+    if(world.events.empty()) {
+        for(int reference:world.event_argument_refs)lua_unref(from,reference);
+        world.event_argument_refs.clear();
+    }
+}
+void progress_invocations(lua_State* from,World& world) {
+    if(!world.scheduler)return;
+    if(!world.bindable_invocations.empty())dispatch_bindable_functions(from,world,false);
+    if(!world.remote_client_invocations.empty())dispatch_remote_client_functions(from,world);
+}
+void dispatch_events(lua_State* from,World& world) {
+    if(!world.scheduler)return;
+    process_debris(world,std::chrono::steady_clock::now());
+    flush_jump_requests(from,world);
+    refresh_display_events(world);
+    dispatch_bindable_functions(from,world);
+    dispatch_remote_client_functions(from,world);
+    dispatch_remote_server_waiters(from,world);
+    advance_animations(world);
+    advance_tweens(from,world);
+    flush_motor_transforms(world);
+    refresh_attachment_events(world);
+    refresh_joint_events(world);
+    refresh_assembly_root_events(world);
+    refresh_part_mass_events(world);
+    dispatch_pending_events(from,world);
+    dispatch_context_actions(from,world);
+    // A headless source-scheduler tick, not a renderer or a physics step.
+    // Polls may be slower than 60 Hz: report actual elapsed time once, without
+    // flooding callbacks with synthetic catch-up frames after an idle period.
+    auto heartbeat_now=std::chrono::steady_clock::now();
+    if(world.heartbeat_previous==std::chrono::steady_clock::time_point{})
+        world.heartbeat_previous=heartbeat_now;
+    double heartbeat_dt=std::chrono::duration<double>(heartbeat_now-world.heartbeat_previous).count();
+    if(world.render_previous==std::chrono::steady_clock::time_point{})world.render_previous=heartbeat_now;
+    double render_dt=std::chrono::duration<double>(heartbeat_now-world.render_previous).count();
+    if(world.render_steps.active&&world.render_steps.thread) {
+        const char* state=world.scheduler->task_state(world.render_steps.thread);
+        if(!std::strcmp(state,"completed")||!std::strcmp(state,"cancelled")||!std::strcmp(state,"untracked")) {
+            world.render_steps.active=false;world.render_steps.group.clear();
+        }
+    }
+    if(world.events.empty()&&!world.context_actions.active&&world.context_actions.pending.empty()&&!world.render_steps.active&&world.scheduler->callback_capacity()>0&&render_dt>0&&(world.render_cap==0||render_dt>=1.0/world.render_cap)) {
+        world.render_previous=heartbeat_now;auto service=world.services.find("RunService");
+        if(service!=world.services.end())if(auto* node=find_node(world,service->second)) {
+            start_render_frame(from,world,*node,render_dt);
+        }
+    }
+    // The headless tick advances when callback dispatch has capacity. Keep
+    // the previous timestamp while backpressured so the next actual frame
+    // reports all elapsed time. Already queued events remain receipt ordered;
+    // generating another frame here would amplify the backlog on every poll.
+    if(world.events.empty()&&world.scheduler->callback_capacity()>0&&heartbeat_dt>=1.0/60.0) {
+        world.heartbeat_previous=heartbeat_now;
+        world.heartbeat_delta=heartbeat_dt;
+        auto service=world.services.find("RunService");
+        if(service!=world.services.end())if(auto* node=find_node(world,service->second))
+            emit(world,*node,"Heartbeat",Json::array({heartbeat_dt}));
+    }
+    for(auto it=world.chat_waiters.begin();it!=world.chat_waiters.end();) {
+        bool finished=world.scheduler->completion(it->thread)!=LUA_YIELD;
+        bool expired=std::chrono::steady_clock::now()>=it->deadline;
+        if(finished||expired) {
+            if(!finished)world.scheduler->wake_signal(it->thread,[](lua_State* target){lua_pushnil(target);lua_pushliteral(target,"server chat response timed out");return 2;});
+            auto request=it->request;
+            world.chat_requests.erase(std::remove_if(world.chat_requests.begin(),world.chat_requests.end(),[&](const Json& item){return item.at("request_id")==request;}),world.chat_requests.end());
+            lua_unref(from,it->reference);it=world.chat_waiters.erase(it);
+        } else ++it;
+    }
+    for(auto it=world.handle_waiters.begin();it!=world.handle_waiters.end();) {
+        Node* found=find_node(world,it->id);
+        if(found||std::chrono::steady_clock::now()>=it->deadline) {
+            world.scheduler->wake_signal(it->thread,[&](lua_State* target){if(found)push_node(target,world,found);else lua_pushnil(target);return 1;});
+            lua_unref(from,it->reference);it=world.handle_waiters.erase(it);
+        } else ++it;
+    }
+    for(auto it=world.child_waiters.begin();it!=world.child_waiters.end();) {
+        Node* found=nullptr;
+        for(const auto& id:world.order){Node& child=world.nodes.at(id);if(parent_id(world,child)==it->parent&&instance_name(world,child)==it->name){found=&child;break;}}
+        if(found||std::chrono::steady_clock::now()>=it->deadline) {
+            world.scheduler->wake_signal(it->thread,[&](lua_State* target){if(found)push_node(target,world,found);else lua_pushnil(target);return 1;});
+            lua_unref(from,it->reference);it=world.child_waiters.erase(it);
+        } else ++it;
+    }
+    dispatch_pending_events(from,world);
+}
+void complete_remote_server(lua_State* from,World& w,const Json& responses) {
+    complete_remote_server_impl(from,w,responses);
+}
+void complete_chat(lua_State* from,World& w,const Json& responses) {
+    if(!w.chat_enabled||!w.persistent)throw std::runtime_error("chat bridge is disabled");
+    if(!responses.is_array()||responses.size()>128)throw std::runtime_error("invalid chat response batch");
+    for(const auto& response:responses) {
+        uint64_t request=response.at("request_id").get<uint64_t>();
+        auto waiter=std::find_if(w.chat_waiters.begin(),w.chat_waiters.end(),[&](const ChatWaiter& item){return item.request==request;});
+        if(waiter==w.chat_waiters.end())continue;
+        if(response.contains("error")) {
+            auto error=response.at("error").get<std::string>();if(error.size()>1024)throw std::runtime_error("chat error exceeds limit");
+            w.scheduler->wake_signal(waiter->thread,[&](lua_State* target){lua_pushnil(target);lua_pushlstring(target,error.data(),error.size());return 2;});
+        } else {
+            const auto& message=response.at("message");
+            const bool universe=message.contains("route")&&message.at("route").is_string()
+                &&message.at("route").get<std::string>()=="universe";
+            if(message.contains("route")&&!message.at("route").is_string())throw std::runtime_error("chat response route must be a string");
+            if(universe!=waiter->universe)throw std::runtime_error("chat response route mismatch");
+            if(message.at("channel_id")!=waiter->channel)throw std::runtime_error("chat response channel mismatch");
+            int status=message.at("status_value").get<int>();if(status<1||status>9)throw std::runtime_error("unsupported chat response status");
+            if(w.nodes.size()>=kMaxNodes+1000)throw std::runtime_error("chat instance limit exceeded");
+            Node node;node.id="chat-message:"+std::to_string(request);node.class_name="TextChatMessage";node.name="TextChatMessage";node.server_owned=false;
+            for(const auto& field:std::array<std::pair<const char*,const char*>,4>{{{"Text","text"},{"Metadata","metadata"},{"PrefixText","prefix_text"},{"MessageId","message_id"}}}) {
+                auto value=message.at(field.second).get<std::string>();if(value.size()>16384)throw std::runtime_error("chat message field exceeds limit");node.properties[field.first]=value;node.origins[field.first]="received";
+            }
+            node.properties["Status"]=Json{{"$chat_status",status}};
+            node.properties["TextChannel"]=universe?Json(nullptr):Json{{"$ref",waiter->channel}};
+            node.properties["TextSource"]=universe?Json(nullptr):(message.contains("source_id")&&!message["source_id"].is_null()?Json{{"$ref",message.at("source_id")}}:Json(nullptr));
+            node.origins["Status"]="received";node.origins["TextChannel"]="received";node.origins["TextSource"]="received";
+            auto [it,inserted]=w.nodes.emplace(node.id,std::move(node));if(!inserted)throw std::runtime_error("chat message ID collision");
+            ++w.chat_messages;
+            Node* created_message=&it->second;
+            w.scheduler->wake_signal(waiter->thread,[&](lua_State* target){push_node(target,w,created_message);return 1;});
+            if(!universe)if(auto* channel=find_node(w,waiter->channel))emit(w,*channel,"MessageReceived",Json::array({Json{{"$ref",it->first}}}));
+            auto service=w.services.find("TextChatService");if(service!=w.services.end())if(auto* node=find_node(w,service->second))
+                emit(w,*node,universe?"UniverseChatMessageReceived":"MessageReceived",Json::array({Json{{"$ref",it->first}}}));
+        }
+        lua_unref(from,waiter->reference);w.chat_waiters.erase(waiter);
+    }
+}
+void update_snapshot(lua_State* from,World& w,const std::string& text) {
+    if(text.size()>8*1024*1024)throw std::runtime_error("world delta exceeds 8 MiB");
+    Json delta=Json::parse(text);
+    if(!delta.is_object()||delta.value("version",0)!=1||!delta.value("delta",false)
+       ||!delta.contains("actions")||!delta["actions"].is_array()||delta["actions"].size()>10000)
+        throw std::runtime_error("invalid ordered world delta");
+    if(delta.contains("session_stats"))w.session_stats=validated_session_stats(delta.at("session_stats"));
+    if(delta.contains("input_capabilities"))update_input_capabilities(w,delta.at("input_capabilities"));
+    if(delta.contains("input_events"))update_input_events(w,delta.at("input_events"));
+    if(delta.contains("viewport")){update_viewport(w,delta.at("viewport"));w.display=display_from_viewport(w.viewport);}
+    if(delta.contains("display"))update_display(w,delta.at("display"));
+    if(delta.contains("animation_responses"))complete_animations(w,delta.at("animation_responses"));
+    const bool initial_ready=delta.value("initial_replication_complete",false);
+    std::unordered_set<std::string> received_joint_poses,received_part_poses;
+    Children removal_children;
+    bool removal_children_ready=false;
+    for(const auto& action:delta["actions"]) {
+        uint64_t sequence=action.at("sequence").get<uint64_t>();
+        if(sequence<=w.sequence)continue;
+        std::string kind=action.at("kind").get<std::string>();
+        std::string id=action.contains("id")&&!action["id"].is_null()?action["id"].get<std::string>():"";
+        if(kind=="create") {
+            removal_children_ready=false;
+            Node incoming=parse_node_record(action.at("node"));incoming.server_owned=true;
+            Node* existing=find_node(w,incoming.id);
+            if(existing&&existing->class_name!=incoming.class_name)throw std::runtime_error("replicated instance changed class");
+            if(!w.locally_destroyed.count(incoming.id)) {
+                w.joint_topology_dirty=true;
+                if(joint_rigid(incoming)&&incoming.class_name!="WeldConstraint") {
+                    received_joint_poses.insert(incoming.id);
+                    if(existing)remember_received_motor_transform(w,*existing,incoming.properties);
+                }
+                if(pivot_part(w,incoming)&&incoming.properties.contains("CFrame"))received_part_poses.insert(incoming.id);
+            }
+            if(!existing) {
+                if(w.nodes.size()>=kMaxNodes+1000)throw std::runtime_error("persistent instance limit exceeded");
+                id=incoming.id;std::string parent=incoming.parent;incoming.parent.clear();
+                auto [it,ok]=w.nodes.emplace(id,std::move(incoming));w.order.push_back(id);
+                it->second.parent=parent;parent_events(w,it->second,"",parent);
+            } else if(!w.locally_destroyed.count(id)) {
+                auto old_parent=parent_id(w,*existing);auto old_name=instance_name(w,*existing);
+                auto attributes=existing->attributes;bool known=existing->attributes_known;
+                auto tags=existing->collection_tags;bool tags_known=existing->collection_tags_known;
+                *existing=std::move(incoming);w.local_properties.erase(id);
+                if(!action.at("node").contains("attributes")){existing->attributes=std::move(attributes);existing->attributes_known=known;}
+                if(!action.at("node").contains("collection_tags")){existing->collection_tags=std::move(tags);existing->collection_tags_known=tags_known;}
+                if(old_name!=existing->name)property_events(w,*existing,"Name");
+                parent_events(w,*existing,old_parent,existing->parent);
+            }
+        } else if(kind=="set") {
+            Node* n=find_node(w,id);
+            if(n&&!n->destroyed&&!w.locally_destroyed.count(id)) {
+                const auto& fields=action.at("fields");if(!fields.is_object())throw std::runtime_error("world fields must be an object");
+                const Json* received_color=fields.contains("Color")?nullptr:received_color_alias(*n,fields);
+                if(fields.contains("Parent"))removal_children_ready=false;
+                const bool part_updated=apply_received_part_transform(w,*n,fields,sequence);
+                if(part_updated)received_part_poses.insert(id);
+                const bool attachment_updated=apply_received_attachment_transform(w,*n,fields,sequence);
+                if(joint_rigid(*n)&&n->class_name!="WeldConstraint"&&(fields.contains("C0")||fields.contains("C1")||(n->class_name=="Motor6D"&&fields.contains("Transform")))) {
+                    remember_received_motor_transform(w,*n,fields);
+                    received_joint_poses.insert(id);
+                }
+                for(auto it=fields.begin();it!=fields.end();++it) {
+                    const std::string name=it.key();const Json value=it.value();
+                    if(attachment_updated&&attachment_local_key(name))continue;
+                    if(attachment_node(w,*n)&&(attachment_world_key(name)||bone_computed_key(*n,name)))continue;
+                    if(part_updated&&(part_transform_key(name)||(name=="ReplicationPV"&&value.is_object()&&value.contains("$cframe"))))continue;
+                    if(name=="Source"||name=="Bytecode"||name=="ScriptBytecode")continue;
+                    if(n->class_name=="UserInputService"&&input_capability_key(name))continue;
+                    if(display_property(w,*n,name))continue;
+                    if(n->class_name=="Camera"&&name=="ViewportSize")continue;
+                    if(name=="Parent") {
+                        std::string parent=value.is_null()?"":value.at("$ref").get<std::string>();
+                        auto old=parent_id(w,*n);auto* target=find_node(w,parent);
+                        if(target&&(target==n||is_descendant_of(w,*target,id)))throw std::runtime_error("received Parent would create a cycle in the client model");
+                        clear_local_property(w,id,"Parent");n->parent=parent;n->revisions[name]=sequence;n->origins[name]="received";
+                        parent_events(w,*n,old,parent);
+                    } else {
+                        Json old=name=="Name"?Json(instance_name(w,*n)):property_value(w,*n,name)?*property_value(w,*n,name):Json(nullptr);
+                        clear_local_property(w,id,name);n->properties[name]=value;n->revisions[name]=sequence;n->origins[name]="received";
+                        if(name=="Name"){if(!value.is_string())throw std::runtime_error("received Name must be text");n->name=value.get<std::string>();}
+                        bool deferred_character=n->class_name=="Player"&&name=="Character"&&value.is_object()
+                            &&value.contains("$ref")&&value["$ref"].is_string()&&!find_node(w,value["$ref"].get<std::string>());
+                        if(old!=value&&!deferred_character) {
+                            property_events(w,*n,name);
+                            humanoid_received_health_change(w,*n,name,old,value);
+                        }
+                        if(n->class_name=="Player"&&name=="Character"&&old!=value) {
+                            w.pending_characters.erase(id);
+                            if(old.is_object()&&old.contains("$ref")&&old["$ref"].is_string()&&find_node(w,old["$ref"].get<std::string>()))emit(w,*n,"CharacterRemoving",Json::array({old}));
+                            if(deferred_character)w.pending_characters[id]=value["$ref"].get<std::string>();
+                            else if(!value.is_null())emit(w,*n,"CharacterAdded",Json::array({value}));
+                        }
+                        if((name=="CFrame"||name=="ReplicationPV")&&value.is_object()&&value.contains("$cframe")) {
+                            const auto& frame=value["$cframe"];
+                            if(frame.is_object()&&frame.contains("position")) {
+                                Json position{{"$vector3",frame["position"]}};
+                                const auto* previous=property_value(w,*n,"Position");bool changed=!previous||*previous!=position;
+                                clear_local_property(w,id,"Position");n->properties["Position"]=position;
+                                n->revisions["Position"]=sequence;n->origins["Position"]="derived_received";
+                                if(changed)property_events(w,*n,"Position");
+                                if(name=="ReplicationPV") {
+                                    clear_local_property(w,id,"CFrame");n->properties["CFrame"]=value;
+                                    n->revisions["CFrame"]=sequence;n->origins["CFrame"]="derived_received";property_events(w,*n,"CFrame");
+                                }
+                            }
+                        }
+                    }
+                }
+                if(received_color) {
+                    const Json* previous=property_value(w,*n,"Color");bool changed=!previous||*previous!=*received_color;
+                    clear_local_property(w,id,"Color");n->properties["Color"]=*received_color;
+                    n->origins["Color"]="derived_received";n->revisions["Color"]=sequence;
+                    if(changed)property_events(w,*n,"Color");
+                }
+                if(action.contains("attribute_snapshot")) {
+                    const auto& snapshot=action.at("attribute_snapshot");
+                    const auto& incoming=snapshot.at("attributes");
+                    if(!incoming.is_object()||incoming.size()>1024||!snapshot.at("attributes_known").is_boolean())
+                        throw std::runtime_error("invalid received attribute snapshot");
+                    std::set<std::string> changed;
+                    for(auto it=n->attributes.begin();it!=n->attributes.end();++it)
+                        if(!incoming.contains(it.key())||incoming.at(it.key())!=*it)changed.insert(it.key());
+                    for(auto it=incoming.begin();it!=incoming.end();++it)
+                        if(!n->attributes.contains(it.key())||n->attributes.at(it.key())!=*it)changed.insert(it.key());
+                    n->attributes=incoming;n->attributes_known=snapshot.at("attributes_known").get<bool>();
+                    for(const auto& name:changed){emit(w,*n,"AttributeChanged",Json::array({name}));emit(w,*n,"attribute:"+name);}
+                }
+                if(action.contains("tag_snapshot"))collection_received_state(w,*n,action.at("tag_snapshot"));
+            }
+        } else if(kind=="attribute") {
+            Node* n=find_node(w,id);
+            if(n&&!n->destroyed&&!w.locally_destroyed.count(id)) {
+                const auto& update=action.at("attribute_update");
+                const auto name=update.at("name").get<std::string>();
+                const bool known=update.at("known").get<bool>();
+                if(name.empty()||name.size()>100||name.find('\0')!=std::string::npos)
+                    throw std::runtime_error("invalid received attribute name");
+                const bool had=n->attributes.contains(name);
+                if(known) {
+                    const auto& value=update.at("value");
+                    if(!had&&(!value.is_null()||!n->attributes_known)&&n->attributes.size()>=1024)
+                        throw std::runtime_error("attribute count limit exceeded");
+                    const bool changed=had?n->attributes.at(name)!=value:(!value.is_null()||!n->attributes_known);
+                    if(value.is_null()&&n->attributes_known)n->attributes.erase(name);
+                    else n->attributes[name]=value;
+                    if(changed){emit(w,*n,"AttributeChanged",Json::array({name}));emit(w,*n,"attribute:"+name);}
+                } else {
+                    n->attributes.erase(name);n->attributes_known=false;
+                    if(had){emit(w,*n,"AttributeChanged",Json::array({name}));emit(w,*n,"attribute:"+name);}
+                }
+            }
+        } else if(kind=="remove") {
+            Node* n=find_node(w,id);
+            if(n&&!n->destroyed&&!w.locally_destroyed.count(id)) {
+                // Reuse the parent index for a consecutive stream-out batch.
+                // Creates/reparents invalidate it before the next removal.
+                if(!removal_children_ready){removal_children=children_index(w);removal_children_ready=true;}
+                std::deque<std::string> pending{id};
+                while(!pending.empty()) {
+                    auto key=pending.front();pending.pop_front();Node& node=w.nodes.at(key);
+                    if(node.destroyed)continue;
+                    auto child=removal_children.find(key);if(child!=removal_children.end())for(const auto& value:child->second)pending.push_back(value);
+                    emit(w,node,"Destroying");parent_events(w,node,parent_id(w,node),"");
+                    node.parent.clear();node.destroyed=true;clear_local_property(w,key,"Parent");
+                    for(auto& c:w.connections)if(c->signal->node==&node){c->connected=false;c->auto_disconnected=true;}
+                }
+            }
+        } else if(kind=="event") {
+            ++w.server_events;Node* n=find_node(w,id);
+            if(n&&!n->destroyed){
+                const auto& args=action.at("arguments");if(!args.is_array())throw std::runtime_error("event arguments must be an array");
+                const auto name=action.at("name").get<std::string>();
+                if(n->class_name=="RemoteFunction"&&name=="RemoteOnInvokeClient")queue_remote_client_invoke(from,w,*n,args);
+                else emit(w,*n,name,args);
+            }
+            else ++w.unresolved_server_events;
+        } else throw std::runtime_error("unsupported world action kind");
+        w.sequence=static_cast<double>(sequence);++w.server_actions;
+    }
+    for(auto it=w.pending_characters.begin();it!=w.pending_characters.end();) {
+        Node* player=find_node(w,it->first);Node* character=find_node(w,it->second);
+        auto* value=player?property_value(w,*player,"Character"):nullptr;
+        Json expected{{"$ref",it->second}};
+        if(!player||player->destroyed||!value||*value!=expected)it=w.pending_characters.erase(it);
+        else if(character){property_events(w,*player,"Character");emit(w,*player,"CharacterAdded",Json::array({expected}));it=w.pending_characters.erase(it);}
+        else ++it;
+    }
+    // Loaded describes completion of the initial replication, not character
+    // spawning or later streaming. Apply the received actions before waking
+    // listeners; repeated markers cannot fire this transition again.
+    refresh_current_camera(w);
+    // Complete the ordered input transaction before deriving poses or waking
+    // listeners. Explicit received part poses win within this transaction.
+    flush_joint_poses(w,std::move(received_joint_poses),received_part_poses,static_cast<uint64_t>(w.sequence));
+    if(initial_ready&&!w.initial_replication_complete) {
+        w.initial_replication_complete=true;
+        emit(w,w.nodes.at(w.game_id),"Loaded");
+    }
+    (void)from;
+}
+#include "render_surface.inc"
 } // namespace world_bindings

@@ -1,11 +1,7 @@
-# dev notes
+# still wip
 
-nov 2, 2026
+current runtime, terminal, launcher, renderer and export adapter are now in this repo. builds use the bundled Luau source.
 
-- spawn and visible walking animations have been confirmed in private tests.
-- UNC is 83/83 locally. sUNC isn't passing yet.
-- found missing native `debug.info` / `debug.traceback` in the test worker. the fix and better job diagnostics are in progress.
-- checking the old Unveil runtime for missing bindings. it hasn't all been ported.
-- this update changes docs. the newer runtime code isn't part of this GitHub snapshot yet.
+1,771 script tests and 17 renderer tests pass. the runtime suite has 544 passes, 9 failures and 1 skip; details are in `PUBLICATION-CHECK.json`.
 
-`PUBLICATION-CHECK.json` records the original snapshot checks, not the newer local test results.
+the filesystem aliases, API inventory, pivot-event behavior and some older Rust-host expectations still need work. long live sessions and the reported disconnects have not been retested for this upload.

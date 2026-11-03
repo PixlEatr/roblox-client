@@ -62,11 +62,18 @@ class Reader:
 
 
 def decompress_stream(reader, limit=16 * 1024 * 1024):
-    import zstandard
     compressed, expanded = reader.u32(), reader.u32()
     if compressed > limit or expanded > limit:
         raise WireError("Compressed stream exceeds limit")
     data = reader.take(compressed)
+    return Reader(decompress_bytes(data, expanded, limit))
+
+
+def decompress_bytes(data, expanded, limit=16 * 1024 * 1024):
+    """Decode one exact-size Zstandard frame under the caller's byte budget."""
+    import zstandard
+    if len(data) > limit or not 0 <= expanded <= limit:
+        raise WireError("Compressed stream exceeds limit")
     declared = zstandard.frame_content_size(data)
     if declared not in (expanded, zstandard.CONTENTSIZE_UNKNOWN):
         raise WireError("Compression size header mismatch")
@@ -74,4 +81,4 @@ def decompress_stream(reader, limit=16 * 1024 * 1024):
         data, max_output_size=max(expanded, 1), allow_extra_data=False)
     if len(result) != expanded:
         raise WireError("Decompressed length mismatch")
-    return Reader(result)
+    return result

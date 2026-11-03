@@ -1,12 +1,16 @@
-"""Unpack RSB1 and fix opcode headers. This alone does not authenticate code."""
+"""Data-only format conversion for Roblox's RSB1 Luau container.
+
+Checks the container checksum and structural encoding only. This neither
+authenticates the producer nor validates Roblox-specific extensions/trailers.
+No input is executed here. All trailing bytes are preserved unchanged.
+"""
 from functools import lru_cache
-from pathlib import Path
 import struct
-import sys
 
 import zstandard
 
 from login_packets import ticket_hash
+from session_integrity import observe_container_checksum
 
 
 MAX_BYTES = 128 * 1024
@@ -18,11 +22,13 @@ def unpack_container(blob):
     key = bytes(((blob[i] ^ b'RSB1'[i]) - i * 41) & 255 for i in range(4))
     raw = bytes(value ^ ((key[i % 4] + i * 41) & 255)
                 for i, value in enumerate(blob))
-    if raw[:4] != b'RSB1' or ticket_hash(raw, 42) != int.from_bytes(key, 'little'):
+    checksum_matches = raw[:4] == b'RSB1' and ticket_hash(raw, 42) == int.from_bytes(key, 'little')
+    observe_container_checksum(checksum_matches)
+    if not checksum_matches:
         raise ValueError('Bytecode-container checksum mismatch')
     size = struct.unpack_from('<I', raw, 4)[0]
-    # Zero means the bytes are already uncompressed.
-    # The next layer still needs to check the Luau format.
+    # Native 1013f6eb4/1013f741c: zero is the uncompressed form, not an
+    # empty decompression target. The following format layer validates Luau.
     if size == 0:
         return raw[8:]
     if size > MAX_BYTES:
@@ -42,9 +48,6 @@ def unpack_container(blob):
 
 @lru_cache(maxsize=1)
 def _inspector():
-    path = Path(__file__).resolve().parent
-    if str(path) not in sys.path:
-        sys.path.insert(0, str(path))
     import inspect_bytecode
     return inspect_bytecode
 

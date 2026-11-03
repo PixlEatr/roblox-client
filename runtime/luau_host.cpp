@@ -5,6 +5,14 @@
 #include "random_compat.hpp"
 #include "engine_bindings.hpp"
 #include "world_bindings.hpp"
+#include "source_bindings.hpp"
+#include "source_scheduler.hpp"
+#include "authored_bindings.hpp"
+#include "movement_bindings.hpp"
+#include "script_execution.hpp"
+#ifndef LOCAL_LUAU_FFI
+#include "memory_categories.inc"
+#endif
 
 #include <cerrno>
 #include <chrono>
@@ -29,7 +37,7 @@
 
 namespace {
 using Clock = std::chrono::steady_clock;
-constexpr size_t kMaxSource = 128 * 1024;
+constexpr size_t kMaxSource = 100 * 1024 * 1024;
 constexpr size_t kMaxResult = 256 * 1024;
 constexpr size_t kMaxOutput = 300 * 1024;
 constexpr size_t kMaxWorldSnapshot = 8 * 1024 * 1024;
@@ -102,7 +110,8 @@ std::string error_json(const std::string& message, bool timeout = false) {
 std::string world_error_json(world_bindings::World& world, const std::string& message, bool timeout = false) {
     using world_bindings::Json;
     Json result{{"ok",false},{"values",Json::array()},{"error",message},{"timed_out",timeout},
-                {"output",world.output},{"output_truncated",world.output_truncated},{"mutations",world.mutations}};
+                {"output",world.output},{"output_truncated",world.output_truncated},{"mutations",world.mutations},
+                {"joint_pose_errors",world.joint_pose_errors}};
     return result.dump(-1,' ',false,Json::error_handler_t::replace)+"\n";
 }
 
@@ -139,32 +148,52 @@ bool emit_value(lua_State* L, int index, std::string& out, size_t& strings) {
 std::string run_vm(const std::string& source, const std::vector<double>& args,
                    bool is_bytecode, int timeout_ms, int memory_mb,
                    const LocalEngineContext* engine_context,
-                   const std::string* world_snapshot_text) {
+                   const std::string* world_snapshot_text,
+                   const SourceBindings* source_bindings = nullptr) {
     std::unique_ptr<world_bindings::World> world;
     if (world_snapshot_text) {
         try { world=std::make_unique<world_bindings::World>(world_bindings::parse_snapshot(*world_snapshot_text)); }
         catch(const std::exception&e){return error_json(std::string("invalid world snapshot: ")+e.what());}
     }
+    ProtectedScriptStore standalone_protected_scripts;
+    auto* protected_scripts=world ? world->protected_scripts.get() : &standalone_protected_scripts;
+    // Keep the store outside the VM invocation so errors retain observations.
+    auto execute=[&]() -> std::string {
     Limits limits;
     limits.cap = static_cast<size_t>(memory_mb) * 1024 * 1024;
     limits.deadline = Clock::now() + std::chrono::milliseconds(timeout_ms);
     lua_State* L = lua_newstate(capped_alloc, &limits);
     if (!L) return error_json("memory limit reached while creating VM");
+    std::unique_ptr<lua_State,decltype(&lua_close)> state(L,&lua_close);
 
     lua_Callbacks* cb = lua_callbacks(L);
     cb->userdata = &limits;
     cb->interrupt = interrupt;
     luaL_openlibs(L);
-    // Plain Luau libraries here. Extra host APIs need their own setup.
+    // This is a general Luau VM surface. It deliberately has no file, module,
+    // process, network, or client-engine bindings.
     for (const char* name : {"require", "loadstring", "dofile", "loadfile", "io", "debug"})
         remove_global(L, name);
     lua_getglobal(L, "os");
     if (lua_istable(L, -1)) { lua_pushnil(L); lua_setfield(L, -2, "exit"); }
     lua_pop(L, 1);
     install_random_compat(L);
+    if(!is_bytecode)install_authored_bindings(L);
     if (engine_context) install_local_engine(L, *engine_context);
     remove_global(L, "print"); // stdout is reserved for the JSON result
     if (world) world_bindings::install(L,*world);
+#ifndef LOCAL_LUAU_FFI
+    if(!is_bytecode&&!source_bindings) {
+        // The plain source CLI has no supervisor extensions. Preserve the
+        // genuine Luau debug library and add standard allocation-tag APIs.
+        lua_getfield(L,LUA_REGISTRYINDEX,"_LOADED");lua_getfield(L,-1,"debug");
+        const int original_debug=lua_gettop(L);lua_newtable(L);
+        for(const char* name:{"info","traceback"}) {
+            lua_getfield(L,original_debug,name);lua_setfield(L,-2,name);
+        }
+        install_memory_category_bindings(L);lua_setglobal(L,"debug");lua_pop(L,2);
+    }
+#endif
     luaL_sandbox(L);
 
     std::string bytecode;
@@ -174,40 +203,75 @@ std::string run_vm(const std::string& source, const std::vector<double>& args,
         try {
             bytecode = Luau::compile(source);
         } catch (const std::exception& e) {
-            lua_close(L);
+            state.reset();
             return error_json(std::string("compile failed: ") + e.what());
         }
     }
     lua_State* co = lua_newthread(L);
     luaL_sandboxthread(co);
-    if (luau_load(co, "=user-source", bytecode.data(), bytecode.size(), 0) != 0) {
+    // Instance properties are live. GETIMPORT must not retain values resolved
+    // from chains such as workspace.Part.AssemblyMass while loading a chunk.
+    if(world)lua_setsafeenv(co,LUA_GLOBALSINDEX,false);
+    if (source_bindings) install_source_bindings(co, source_bindings,
+        world ? world->script_thread_integrity.get() : nullptr,
+        protected_scripts);
+    std::unique_ptr<SourceScheduler> scheduler;
+    std::unique_ptr<ScriptExecution> source_scripts;
+    if(!is_bytecode) {
+        scheduler=std::make_unique<SourceScheduler>(L,limits.deadline);scheduler->install(co);
+        if(world)world->scheduler=scheduler.get();
+        if(world&&source_bindings){source_scripts=std::make_unique<ScriptExecution>(co,*world,*scheduler,world_bindings::Json::parse(*world_snapshot_text));source_scripts->reconcile();}
+    }
+    auto load=[&]() {
+        if(world)return world->load_script(co,"=user-source",bytecode,is_bytecode?"":source);
+        auto payload=protected_scripts->make(is_bytecode?"":source,bytecode);
+        return load_protected_script(co,"=user-source",payload);
+    };
+    if (load() != 0) {
         size_t n = 0;
         const char* e = lua_tolstring(co, -1, &n);
         std::string msg = e ? std::string(e, n) : "Luau load failed";
-        lua_close(L);
+        state.reset();
         return error_json(msg);
     }
     for (double arg : args) lua_pushnumber(co, arg);
-    int status = lua_resume(co, L, static_cast<int>(args.size()));
+    int status;
+    try {
+        status = scheduler ? scheduler->run(co,static_cast<int>(args.size()),[&](){if(world)world_bindings::dispatch_events(co,*world);})
+                           : lua_resume(co, L, static_cast<int>(args.size()));
+    } catch(const std::exception& e) {
+        state.reset();
+        return world ? world_error_json(*world,std::string("source scheduler failed: ")+e.what())
+                     : error_json(std::string("source scheduler failed: ")+e.what());
+    }
     if (limits.timed_out || Clock::now() >= limits.deadline) {
-        lua_close(L);
+        state.reset();
         return world ? world_error_json(*world,"execution time limit exceeded",true) : error_json("execution time limit exceeded", true);
     }
     if (status != 0) {
         size_t n = 0;
         const char* e = lua_tolstring(co, -1, &n);
         std::string msg = e ? std::string(e, n) : "Luau runtime error";
-        lua_close(L);
+        state.reset();
         return world ? world_error_json(*world,msg) : error_json(msg);
     }
+    if(world && world->event_overflow){state.reset();return world_error_json(*world,"local event queue limit exceeded");}
     if(world){
         using world_bindings::Json;
         Json result{{"ok",true},{"values",Json::array()},{"output",world->output},
                     {"output_truncated",world->output_truncated},{"mutations",world->mutations}};
+        result["movement_intents"]=Json::parse(movement_bindings::drain(co));
+        if(source_bindings){
+            result["console_events"]=Json::parse(source_host_io(co,R"({"action":"drain"})"));
+            result["teleport_queue"]=Json::parse(source_host_io(co,R"({"action":"teleport_peek"})"));
+        }
+        result["joint_pose_errors"]=world->joint_pose_errors;
+        if(scheduler&&!scheduler->errors().empty())result["task_errors"]=scheduler->errors();
         try { for(int i=1;i<=lua_gettop(co);++i) result["values"].push_back(world_bindings::capture_value(co,*world,i)); }
-        catch(const std::exception&e){lua_close(L);return world_error_json(*world,std::string("result capture failed: ")+e.what());}
+        catch(const std::exception&e){state.reset();return world_error_json(*world,std::string("result capture failed: ")+e.what());}
         std::string out=result.dump(-1,' ',false,Json::error_handler_t::replace)+"\n";
-        lua_close(L);return out;
+        if(out.size()>kMaxOutput){state.reset();return world_error_json(*world,"world result exceeds output limit");}
+        state.reset();return out;
     }
     std::string out = "{\"ok\":true,\"values\":[";
     const int count = lua_gettop(co);
@@ -215,14 +279,258 @@ std::string run_vm(const std::string& source, const std::vector<double>& args,
     for (int i = 1; i <= count; ++i) {
         if (i > 1) out += ',';
         if (!emit_value(co, i, out, strings)) {
-            lua_close(L);
+            state.reset();
             return error_json("return values must be nil, boolean, finite number, or bounded string");
         }
     }
-    out += "]}\n";
-    lua_close(L);
+    out += "]";
+    if(scheduler&&!scheduler->errors().empty())out += ",\"task_errors\":"+world_bindings::Json(scheduler->errors()).dump();
+    if(source_bindings) {
+        out += ",\"console_events\":"+source_host_io(co,R"({"action":"drain"})");
+        out += ",\"teleport_queue\":"+source_host_io(co,R"({"action":"teleport_peek"})");
+    }
+    out += "}\n";
+    state.reset();
     return out;
+    };
+    using world_bindings::Json;
+    Json result;
+    try { result=Json::parse(execute()); }
+    catch(const std::exception& e) { result=Json::parse(error_json(std::string("VM worker failed: ")+e.what())); }
+    auto add_observations=[&](Json& target) {
+        const auto observed=protected_scripts->snapshot();
+        target["runtime_protected_integrity"]={{"version",1},{"constructions",observed.constructions},
+            {"copies",observed.copies},{"failures",observed.failures}};
+        // A standalone VM has no World owner to check; do not invent a check.
+        if(world)target["runtime_thread_integrity"]=world->script_thread_report();
+    };
+    add_observations(result);
+    auto serialized=result.dump(-1,' ',false,Json::error_handler_t::replace)+"\n";
+    if(serialized.size()>kMaxOutput) {
+        result=Json::parse(error_json("worker result exceeds output limit"));
+        add_observations(result);
+        serialized=result.dump()+"\n";
+    }
+    return serialized;
 }
+
+class PersistentSourceSession {
+    using Json=world_bindings::Json;
+    struct Job {uint64_t id;lua_State* thread;uint64_t attribute_read_start;};
+    Limits limits;
+    SourceBindings bindings;
+    std::unique_ptr<world_bindings::World> world;
+    lua_State* main=nullptr;
+    lua_State* environment=nullptr;
+    std::unique_ptr<SourceScheduler> scheduler;
+    std::vector<Job> jobs;
+    std::unique_ptr<ScriptExecution> script_execution;
+    uint64_t next_job=1;
+    std::string request_operation,request_stage;
+
+    Json job_diagnostics() const {
+        Json output=Json::array();
+        for(const auto& job:jobs) {
+            Json item{{"job_id",job.id},{"scheduler_state",scheduler->task_state(job.thread)},
+                      {"frames",Json::array()}};
+            const auto progress=scheduler->task_progress(job.thread);
+            item["resume_count"]=progress.resumes;item["yield_count"]=progress.yields;
+            item["slice_interruptions"]=progress.interruptions;item["execution_ms"]=progress.execution_ms;
+            for(auto read=world->attribute_reads.rbegin();read!=world->attribute_reads.rend();++read)
+                if(read->first==job.thread&&read->second.at("sequence").get<uint64_t>()>job.attribute_read_start)
+                    {item["last_attribute_read"]=read->second;break;}
+            lua_Debug frame{};
+            for(int depth=0;depth<8&&lua_getinfo(job.thread,depth,"sln",&frame);++depth)
+                item["frames"].push_back(Json{{"source",frame.short_src?frame.short_src:"?"},
+                    {"line",frame.currentline},{"function",std::string(frame.name?frame.name:"").substr(0,128)}});
+            for(const auto& waiter:world->child_waiters)if(waiter.thread==job.thread) {
+                item["wait"]={{"kind","child"},{"parent_id",waiter.parent},{"name",waiter.name.substr(0,256)},
+                              {"name_truncated",waiter.name.size()>256},
+                              {"has_timeout",waiter.deadline!=Clock::time_point::max()}};break;
+            }
+            for(const auto& [signal,waiters]:world->waiters)for(const auto& waiter:waiters)
+                if(waiter.thread==job.thread)item["wait"]={{"kind","signal"},
+                    {"instance_id",signal->node?signal->node->id:""},{"name",signal->key}};
+            output.push_back(std::move(item));
+        }
+        return output;
+    }
+
+    Json collect_jobs() {
+        Json completed=Json::array();
+        for(auto it=jobs.begin();it!=jobs.end();) {
+            int status=scheduler->completion(it->thread);
+            if(status==LUA_YIELD){++it;continue;}
+            Json result{{"job_id",it->id},{"ok",status==0},{"values",Json::array()},
+                        {"completed",true},{"state",status==0?"completed":"failed"}};
+            if(status==0) {
+                try{for(int i=1;i<=lua_gettop(it->thread);++i)result["values"].push_back(world_bindings::capture_value(it->thread,*world,i));}
+                catch(const std::exception& e){result["ok"]=false;result["state"]="failed";result["values"]=Json::array();result["error"]=e.what();}
+            } else {
+                size_t size=0;const char* error=lua_tolstring(it->thread,-1,&size);
+                result["error"]=status==LUA_BREAK?"source task exceeded its CPU step budget":error?std::string(error,size):"source task failed or was cancelled";
+                result["timed_out"]=status==LUA_BREAK;
+            }
+            completed.push_back(std::move(result));
+            for(auto read=world->attribute_reads.begin();read!=world->attribute_reads.end();)
+                if(read->first==it->thread)read=world->attribute_reads.erase(read);else ++read;
+            scheduler->release_root(it->thread);it=jobs.erase(it);
+        }
+        return completed;
+    }
+public:
+    Json failure_context() const {
+        return {{"operation",request_operation},{"stage",request_stage}};
+    }
+    PersistentSourceSession(const std::string& snapshot,int memory_mb,SourceBindings source_bindings):bindings(source_bindings) {
+        if(snapshot.size()>kMaxWorldSnapshot||memory_mb<8||memory_mb>local_test_memory_limit())throw std::runtime_error("invalid persistent VM limits");
+        world=std::make_unique<world_bindings::World>(world_bindings::parse_snapshot(snapshot));
+        world->persistent=true;
+        const char* trace_attributes=std::getenv("RCR_TRACE_ATTRIBUTE_READS");
+        world->trace_attribute_reads=trace_attributes&&std::strcmp(trace_attributes,"1")==0;
+        limits.cap=static_cast<size_t>(memory_mb)*1024*1024;limits.deadline=Clock::now()+std::chrono::seconds(2);
+        main=lua_newstate(capped_alloc,&limits);if(!main)throw std::runtime_error("cannot allocate persistent Luau VM");
+        try {
+            auto* callbacks=lua_callbacks(main);callbacks->userdata=&limits;callbacks->interrupt=interrupt;
+            luaL_openlibs(main);
+            for(const char* name:{"require","loadstring","dofile","loadfile","io","debug"})remove_global(main,name);
+            lua_getglobal(main,"os");if(lua_istable(main,-1)){lua_pushnil(main);lua_setfield(main,-2,"exit");}lua_pop(main,1);
+            install_random_compat(main);install_authored_bindings(main);world_bindings::install(main,*world);luaL_sandbox(main);
+            environment=lua_newthread(main);luaL_sandboxthread(environment);
+            lua_setsafeenv(environment,LUA_GLOBALSINDEX,false);
+            install_source_bindings(environment,&bindings,world->script_thread_integrity.get(),world->protected_scripts.get());
+            scheduler=std::make_unique<SourceScheduler>(main,limits.deadline,true);scheduler->install(environment);world->scheduler=scheduler.get();
+            script_execution=std::make_unique<ScriptExecution>(environment,*world,*scheduler,world_bindings::Json::parse(snapshot));
+        } catch(const std::exception& error) {
+            // Luau exceptions may own a reference to this VM's error stack.
+            // Materialize the message before destroying the state.
+            std::string message=error.what();lua_close(main);main=nullptr;throw std::runtime_error(message);
+        } catch(...) {lua_close(main);main=nullptr;throw;}
+    }
+    ~PersistentSourceSession(){if(main)lua_close(main);}
+    void add_integrity_observations(Json& response) const {
+        response["runtime_thread_integrity"]=world->script_thread_report();
+        response["runtime_protected_integrity"]=world->protected_script_report();
+    }
+    Json request(const Json& command) {
+        request_operation=command.value("op",std::string());request_stage="validate";
+        if(!command.is_object())throw std::runtime_error("persistent request must be an object");
+        if(command.value("op",std::string())=="render")
+            return Json{{"ok",true},{"values",Json::array()},{"frame",world_bindings::render_snapshot(*world)}};
+        scheduler->begin_frame();
+        const std::string operation=command.at("op").get<std::string>();
+        int budget=command.value("timeout_ms",operation=="execute"?250:10);
+        if(budget<1||budget>2000)throw std::runtime_error("CPU step budget must be 1..2000 ms");
+        limits.timed_out=false;limits.deadline=Clock::now()+std::chrono::milliseconds(budget);
+        if(operation=="host_io") {
+            return Json{{"ok",true},{"values",Json::array()},{"persistent",true},
+                        {"host_io",Json::parse(source_host_io(environment,command.at("command").dump()))}};
+        }
+        if(operation=="physics_feedback") {
+            request_stage="physics_feedback";
+            world_bindings::update_physics_feedback(environment,*world,command.at("feedback"));
+            return Json{{"ok",true},{"values",Json::array()},{"persistent",true}};
+        }
+        request_stage="script_reconcile_before";
+        Json script_status=script_execution->reconcile();
+        uint64_t started=0;
+        const Json* engine_poses=nullptr;
+        Json engine_pose_result=nullptr;
+        if(operation=="execute") {
+            if(jobs.size()>=128)throw std::runtime_error("too many active source jobs");
+            const auto source=command.at("source").get<std::string>();
+            if(source.size()>kMaxSource)throw std::runtime_error("source exceeds 100 MiB");
+            std::string code=Luau::compile(source);
+            lua_State* thread=lua_newthread(environment);
+            int load=world->load_script(thread,"=persistent-source",code,source);
+            if(load) {
+                size_t size=0;const char* error=lua_tolstring(thread,-1,&size);std::string message=error?std::string(error,size):"source compilation failed";
+                lua_pop(environment,1);
+                return Json{{"ok",false},{"values",Json::array()},{"completed",true},{"state","failed"},{"error",message},
+                            {"runtime_thread_integrity",world->script_thread_report()},
+                            {"runtime_protected_integrity",world->protected_script_report()}};
+            }
+            started=next_job++;jobs.push_back(Job{started,thread,world->attribute_read_sequence});
+            scheduler->start(thread);lua_pop(environment,1);
+        } else if(operation=="update") {
+            request_stage="world_update";
+            world_bindings::update_snapshot(environment,*world,command.at("delta").dump());
+            if(command.at("delta").contains("script_sources"))script_execution->update(command.at("delta").at("script_sources"));
+            if(command.at("delta").contains("initial_replication_complete"))script_execution->set_initial_ready(command.at("delta").at("initial_replication_complete").get<bool>());
+            if(command.at("delta").contains("engine_poses"))engine_poses=&command.at("delta").at("engine_poses");
+        } else if(operation=="chat") {
+            world_bindings::complete_chat(environment,*world,command.at("responses"));
+        } else if(operation=="remote_server_results") {
+            world_bindings::complete_remote_server(environment,*world,command.at("responses"));
+        } else if(operation=="gui_action") {
+            world_bindings::render_gui_action(*world,command.at("action"));
+        } else if(operation!="poll"&&operation!="init")throw std::runtime_error("unknown persistent source operation");
+        request_stage="script_reconcile_after";
+        script_status=script_execution->reconcile();
+        if(engine_poses)engine_pose_result=world_bindings::apply_engine_poses(*world,*engine_poses);
+        // World updates and script reconciliation are non-yielding host work.
+        // They can exhaust a short transaction deadline before any ready job
+        // runs. Reserve a bounded slice after that work, rather than leaving
+        // ready jobs queued forever. A request gains at most five milliseconds;
+        // the scheduler's accumulated non-yielding task limit still applies.
+        limits.deadline=std::max(limits.deadline,Clock::now()+std::chrono::milliseconds(std::min(budget,5)));
+        request_stage="scheduler";
+        scheduler->step(limits.deadline,[&](){world_bindings::dispatch_events(environment,*world);},256,
+                        [&](Clock::time_point deadline){limits.deadline=deadline;},
+                        [&](){world_bindings::progress_invocations(environment,*world);});
+        request_stage="script_reconcile_final";
+        script_status=script_execution->reconcile();
+        request_stage="collect_jobs";
+        Json completed=collect_jobs();
+        Json response{{"ok",true},{"values",Json::array()},{"persistent",true},{"completed_jobs",completed},
+            {"script_runtime",script_status},
+            {"runtime_thread_integrity",world->script_thread_report()},
+            {"runtime_protected_integrity",world->protected_script_report()},
+            {"output",world->output},{"output_truncated",world->output_truncated},{"mutations",world->mutations},
+            {"task_errors",scheduler->errors()},{"active_jobs",jobs.size()},
+            {"pending_tasks",scheduler->pending()+world->events.size()},{"pending_events",world->events.size()},
+            {"world_revision",world->sequence},{"server_actions",world->server_actions},
+            {"server_events",world->server_events},{"unresolved_server_events",world->unresolved_server_events}};
+        if(engine_pose_result.is_object()) {
+            response["engine_pose_status"]=engine_pose_result.value("status",std::string("unknown"));
+            response["engine_pose_frames_applied"]=engine_pose_result.value("frames_applied",size_t(0));
+        }
+        response["chat_requests"]=world->chat_requests;world->chat_requests=Json::array();
+        response["remote_client_replies"]=world->remote_client_replies;world->remote_client_replies=Json::array();
+        response["remote_server_events"]=std::move(world->remote_server_events);
+        world->remote_server_events=Json::array();world->remote_server_event_bytes=0;
+        response["remote_server_calls"]=std::move(world->remote_server_calls);
+        world->remote_server_calls=Json::array();world->remote_server_call_bytes=0;
+        response["active_remote_server_requests"]=Json::array();
+        for(const auto& waiter:world->remote_server_waiters)response["active_remote_server_requests"].push_back(waiter.request);
+        response["animation_requests"]=world->animation.requests;world->animation.requests=Json::array();
+        response["animation_intents"]=world->animation.intents;world->animation.intents=Json::array();
+        request_stage="movement_drain";
+        response["movement_intents"]=Json::parse(movement_bindings::drain(environment));
+        request_stage="console_drain";
+        response["console_events"]=Json::parse(source_host_io(environment,R"({"action":"drain"})"));
+        request_stage="job_diagnostics";
+        response["job_diagnostics"]=job_diagnostics();
+        Json event_kinds=Json::object();
+        for(const auto& event:world->events) {
+            std::string kind=event.connection?event.connection->signal->key:"signal_wait";
+            if(event_kinds.size()>=32&&!event_kinds.contains(kind))kind="other";
+            event_kinds[kind]=event_kinds.value(kind,size_t(0))+1;
+        }
+        response["pending_event_kinds"]=std::move(event_kinds);
+        response["joint_pose_errors"]=world->joint_pose_errors;world->joint_pose_errors=Json::array();
+        response["active_chat_requests"]=Json::array();for(const auto& waiter:world->chat_waiters)response["active_chat_requests"].push_back(waiter.request);
+        if(started) {
+            response["job_id"]=started;response["state"]="running";response["completed"]=false;
+            for(const auto& result:completed)if(result["job_id"]==started)
+                for(auto it=result.begin();it!=result.end();++it)response[it.key()]=it.value();
+        }
+        if(world->event_overflow){response["ok"]=false;response["error"]="local event queue limit exceeded";}
+        world->output.clear();world->output_truncated=false;world->mutations=Json::array();world->mutation_bytes=0;
+        scheduler->clear_errors();world->event_overflow=false;
+        return response;
+    }
+};
 
 bool parse_num(const char* s, double& value) {
     char* end = nullptr;
@@ -295,7 +603,8 @@ bool parse_context_file(const std::string& path, LocalEngineContext& context, st
         error = "context requires mode, job_id, and services"; return false;
     }
     if (session_metadata) {
-        // This is an interpreter, so IsStudio stays false.
+        // This host is an interpreter client, not the Studio editor. Keep its
+        // execution mode independent of caller-supplied expected check values.
         if (studio_seen) { error = "session mode cannot override IsStudio"; return false; }
         const std::string& id = context.job_id;
         if (id.size() != 36) { error = "session job_id must be a UUID"; return false; }
@@ -343,7 +652,7 @@ int main_cli(int argc, char** argv) {
     std::string context_path;
     std::string world_snapshot_path;
     int timeout_ms = 250;
-    int memory_mb = 32;
+    int memory_mb = 512;
     bool args_started = false;
     std::vector<double> args;
     for (int i = 1; i < argc; ++i) {
@@ -358,9 +667,9 @@ int main_cli(int argc, char** argv) {
         else if (std::strcmp(argv[i], "--memory-mb") == 0 && i + 1 < argc) memory_mb = std::atoi(argv[++i]);
         else if (std::strcmp(argv[i], "--context-file") == 0 && i + 1 < argc) context_path = argv[++i];
         else if (std::strcmp(argv[i], "--world-snapshot") == 0 && i + 1 < argc) world_snapshot_path = argv[++i];
-        else { std::cout << error_json("usage: luau-host (--source PATH | --bytecode PATH) [--context-file PATH] [--world-snapshot PATH] [--timeout-ms 1..2000] [--memory-mb 8..128] [-- NUMBER ...]"); return 2; }
+        else { std::cout << error_json("usage: luau-host (--source PATH | --bytecode PATH) [--context-file PATH] [--world-snapshot PATH] [--timeout-ms 1..2000] [--memory-mb 8..512] [-- NUMBER ...]"); return 2; }
     }
-    if ((source_path.empty() == bytecode_path.empty()) || timeout_ms < 1 || timeout_ms > 2000 || memory_mb < 8 || memory_mb > 128 || args.size() > 64) {
+    if ((source_path.empty() == bytecode_path.empty()) || timeout_ms < 1 || timeout_ms > 2000 || memory_mb < 8 || memory_mb > 512 || args.size() > 64) {
         std::cout << error_json("invalid source or resource limit"); return 2;
     }
     const bool is_bytecode = !bytecode_path.empty();
@@ -372,7 +681,7 @@ int main_cli(int argc, char** argv) {
     if (!f) { std::cout << error_json("cannot read input file"); return 2; }
     auto source_size = f.tellg();
     if (source_size < 0 || static_cast<uint64_t>(source_size) > kMaxSource) {
-        std::cout << error_json("input exceeds 128 KiB limit"); return 2;
+        std::cout << error_json("input exceeds 100 MiB limit"); return 2;
     }
     std::string source(static_cast<size_t>(source_size), '\0');
     f.seekg(0);
@@ -454,4 +763,82 @@ int main_cli(int argc, char** argv) {
 }
 } // namespace
 
+#ifdef LOCAL_LUAU_FFI
+// Source-only boundary for the Rust process supervisor. Authentication keeps
+// using the independent verified-bytecode path above.
+extern "C" int local_luau_source(const unsigned char* source, size_t source_len,
+    const double* arguments, size_t argument_count,
+    const unsigned char* snapshot, size_t snapshot_len,
+    int timeout_ms, int memory_mb, char** output, size_t* output_len,
+    int (*codec)(unsigned int,const unsigned char*,size_t,unsigned char**,size_t*),
+    void (*release)(unsigned char*,size_t)) noexcept {
+    if (!output || !output_len) return 1;
+    *output = nullptr;
+    *output_len = 0;
+    try {
+        if ((!source && source_len) || source_len > local_test_source_limit(kMaxSource) ||
+            (!arguments && argument_count) || argument_count > 64 ||
+            (!snapshot && snapshot_len) || snapshot_len > kMaxWorldSnapshot ||
+            timeout_ms < 1 || timeout_ms > local_test_time_limit() || memory_mb < 8 || memory_mb > local_test_memory_limit() ||
+            !codec || !release)
+            return 1;
+        std::vector<double> args;
+        for (size_t i = 0; i < argument_count; ++i) {
+            if (!std::isfinite(arguments[i])) return 1;
+            args.push_back(arguments[i]);
+        }
+        std::string text(source ? reinterpret_cast<const char*>(source) : "", source_len);
+        std::string world(snapshot ? reinterpret_cast<const char*>(snapshot) : "", snapshot_len);
+        SourceBindings bindings{codec,release};
+        std::string result = run_vm(text, args, false, timeout_ms, memory_mb,
+            nullptr, snapshot ? &world : nullptr, &bindings);
+        if (result.size() > 1024 * 1024) return 1;
+        auto* buffer = static_cast<char*>(std::malloc(result.size()));
+        if (!buffer) return 1;
+        std::memcpy(buffer, result.data(), result.size());
+        *output = buffer;
+        *output_len = result.size();
+        return 0;
+    } catch (...) {
+        return 1;
+    }
+}
+
+extern "C" void local_luau_free(char* output) noexcept { std::free(output); }
+extern "C" int local_luau_session_request(void** handle,const unsigned char* input,size_t length,
+    char** output,size_t* output_len,
+    int (*codec)(unsigned int,const unsigned char*,size_t,unsigned char**,size_t*),
+    void (*release)(unsigned char*,size_t)) noexcept {
+    if(!handle||!output||!output_len||!input||!codec||!release||length>608*1024*1024)return 1;
+    *output=nullptr;*output_len=0;
+    try {
+        using Json=world_bindings::Json;Json response;
+        try {
+            Json command=Json::parse(input,input+length);
+            if(!*handle) {
+                if(command.value("op","")!="init")throw std::runtime_error("persistent VM requires init first");
+                auto session=std::make_unique<PersistentSourceSession>(command.at("snapshot").dump(),command.value("memory_mb",512),SourceBindings{codec,release});
+                response=session->request(Json{{"op","init"}});*handle=session.release();
+            } else {
+                if(command.value("op","")=="init")throw std::runtime_error("persistent VM is already initialized");
+                response=static_cast<PersistentSourceSession*>(*handle)->request(command);
+            }
+        }catch(const std::exception& e){
+            response=Json{{"ok",false},{"values",Json::array()},{"error",e.what()},{"persistent",true}};
+            if(*handle)response["runtime_failure_context"]=static_cast<PersistentSourceSession*>(*handle)->failure_context();
+        }
+        if(*handle)static_cast<PersistentSourceSession*>(*handle)->add_integrity_observations(response);
+        std::string data=response.dump(-1,' ',false,Json::error_handler_t::replace);
+        if(data.size()>1024*1024) {
+            response=Json{{"ok",false},{"values",Json::array()},{"error","persistent response exceeds 1 MiB"}};
+            if(*handle)static_cast<PersistentSourceSession*>(*handle)->add_integrity_observations(response);
+            data=response.dump();
+        }
+        auto* result=static_cast<char*>(std::malloc(data.size()));if(!result)return 1;
+        std::memcpy(result,data.data(),data.size());*output=result;*output_len=data.size();return 0;
+    }catch(...){return 1;}
+}
+extern "C" void local_luau_session_close(void* handle) noexcept {delete static_cast<PersistentSourceSession*>(handle);}
+#else
 int main(int argc, char** argv) { return main_cli(argc, argv); }
+#endif

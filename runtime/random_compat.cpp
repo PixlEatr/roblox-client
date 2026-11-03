@@ -31,6 +31,8 @@ constexpr uint64_t kMultiplier = UINT64_C(6364136223846793005);
 constexpr uint64_t kIncrement = UINT64_C(105);
 constexpr uint64_t kMaximumExactSeed = UINT64_C(9007199254740991);
 constexpr const char* kMetatable = "RobloxClientResearch.RandomCompatibility.v1";
+constexpr double kPi = 3.141592653589793238462643383279502884;
+constexpr int kMaximumShuffleEntries = 1000000;
 
 struct RandomState
 {
@@ -105,6 +107,18 @@ uint32_t nextUint32(RandomState& random)
     const uint32_t shifted = static_cast<uint32_t>(((previous >> 18u) ^ previous) >> 27u);
     const uint32_t rotation = static_cast<uint32_t>(previous >> 59u);
     return (shifted >> rotation) | (shifted << ((0u - rotation) & 31u));
+}
+
+float randomFloatMul(float left, float right)
+{
+    volatile float result = left * right;
+    return result;
+}
+
+float randomFloatSub(float left, float right)
+{
+    volatile float result = left - right;
+    return result;
 }
 
 double nextFraction(RandomState& random)
@@ -186,6 +200,92 @@ int randomNextInteger(lua_State* L)
     return 1;
 }
 
+int randomNextUnitVector(lua_State* L)
+{
+    checkArity(L, 1, "Random:NextUnitVector");
+    RandomState* random = stateFor(L);
+
+    // Pick azimuth and height uniformly; this gives uniform area on the unit
+    // sphere without the polar clustering caused by choosing three cube axes.
+    // The float operations follow the user's prior native override. They are
+    // not independently verified against the current Roblox engine build.
+    constexpr double uint32Scale = 1.0 / 4294967296.0;
+    const float angleFraction = static_cast<float>(static_cast<double>(nextUint32(*random)) * uint32Scale);
+    const float heightFraction = static_cast<float>(static_cast<double>(nextUint32(*random)) * uint32Scale);
+    const float angle = randomFloatMul(angleFraction, static_cast<float>(2.0 * kPi));
+    const float height = randomFloatSub(randomFloatMul(heightFraction, 2.0f), 1.0f);
+    const float radius = std::sqrt(std::max(0.0f, randomFloatSub(1.0f, randomFloatMul(height, height))));
+    const float x = randomFloatMul(radius, static_cast<float>(std::cos(static_cast<double>(angle))));
+    const float y = randomFloatMul(radius, static_cast<float>(std::sin(static_cast<double>(angle))));
+    lua_pushvector(L, x, y, height);
+    return 1;
+}
+
+int randomShuffleLength(lua_State* L, int tableIndex)
+{
+    tableIndex = lua_absindex(L, tableIndex);
+    uint64_t count = 0;
+    uint64_t maximum = 0;
+
+    // Iterate raw keys so neither __pairs nor any other metamethod runs.
+    lua_pushnil(L);
+    while (lua_next(L, tableIndex))
+    {
+        if (lua_type(L, -2) == LUA_TNUMBER)
+        {
+            const double key = lua_tonumber(L, -2);
+            if (std::isfinite(key) && key >= 1.0 && std::floor(key) == key)
+            {
+                if (key > static_cast<double>(kMaximumShuffleEntries))
+                {
+                    lua_pop(L, 2);
+                    luaL_error(L, "Random:Shuffle array exceeds the local 1,000,000 item limit");
+                    return 0;
+                }
+                ++count;
+                maximum = std::max(maximum, static_cast<uint64_t>(key));
+            }
+        }
+        lua_pop(L, 1); // value; keep the key for lua_next
+    }
+
+    if (count != maximum)
+    {
+        luaL_error(L, "Attempted to shuffle table containing nil values. This is not allowed because the table length may change.");
+        return 0;
+    }
+    return static_cast<int>(maximum);
+}
+
+int randomShuffle(lua_State* L)
+{
+    checkArity(L, 2, "Random:Shuffle");
+    RandomState* random = stateFor(L);
+    luaL_checktype(L, 2, LUA_TTABLE);
+    const int tableIndex = lua_absindex(L, 2);
+    if (lua_getreadonly(L, tableIndex))
+    {
+        luaL_error(L, "Random:Shuffle cannot modify a frozen table");
+        return 0;
+    }
+
+    // Validate the full dense array before consuming random state or mutating
+    // it. Positive integer keys are the array part; hash keys are ignored.
+    const int length = randomShuffleLength(L, tableIndex);
+    for (int index = length; index >= 2; --index)
+    {
+        const int other = 1 + static_cast<int>((static_cast<uint64_t>(index) * nextUint32(*random)) >> 32u);
+        lua_rawgeti(L, tableIndex, index);
+        lua_rawgeti(L, tableIndex, other);
+        lua_pushvalue(L, -1);
+        lua_rawseti(L, tableIndex, index);
+        lua_pushvalue(L, -2);
+        lua_rawseti(L, tableIndex, other);
+        lua_pop(L, 2);
+    }
+    return 0;
+}
+
 int randomToString(lua_State* L)
 {
     checkArity(L, 1, "Random tostring");
@@ -208,6 +308,8 @@ void install_random_compat(lua_State* L)
         lua_newtable(L);
         setFunction(L, "NextInteger", randomNextInteger);
         setFunction(L, "NextNumber", randomNextNumber);
+        setFunction(L, "NextUnitVector", randomNextUnitVector);
+        setFunction(L, "Shuffle", randomShuffle);
         setFunction(L, "Clone", randomClone);
         lua_setreadonly(L, -1, true);
         lua_setfield(L, -2, "__index");

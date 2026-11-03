@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Resolve a private invite saved locally. No invite is bundled here."""
+"""Resolve the user-provided Roblox server invite stored in the private directory."""
 import json
 import re
 from urllib.parse import parse_qs, urlsplit

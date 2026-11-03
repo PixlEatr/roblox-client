@@ -1,0 +1,17 @@
+{
+  "upstream": {
+    "repository": "https://github.com/luau/UniversalSynSaveInstance",
+    "commit": "7e2ec746a39390e7bd6e47b424c9dca4f1e8eace"
+  },
+  "helpers": {
+    "repository": "https://github.com/luau/SomeHub",
+    "commit": "ba076d029a9b8d09d539423c231867c50a72e1d2"
+  },
+  "files": {
+    "vendor/UniversalSynSaveInstance/saveinstance.luau": "19468c45c23456d9e8a2cb0405f0540f6f67861cf2dfd9264160617c71869018",
+    "vendor/UniversalSynSaveInstance/LICENSE": "94294715af18fa90f333599bfa9a88ad4ea05823d70040b9f34c89a84b91cf82",
+    "vendor/SomeHub/StreamBuffer.luau": "14d4217bdc9be03153dca2af94789b879aea251ca4b4cf3e43aff583934cec19",
+    "vendor/SomeHub/UniversalMethodFinder.luau": "073f17d26a10abcef69f7497b7378793b90ed8e2d80ee48c99599e840297066f",
+    "vendor/UniversalSynSaveInstance-reference/Serialization-API-Dump.json": "20604901d26d51254881ee0c14ed47b02b0f272f2e0eb0ec89f1252654c4d034"
+  }
+}

@@ -1,4 +1,9 @@
-"""Check the original V1 signature. This only verifies; it cannot sign anything."""
+"""Verify genuine V1 bytecode signatures against the pinned native public map.
+
+Faithful verification-only port of 1013fa42c and its coefficient layout builders
+1013fac7c/1013fadb4. This neither generates signatures nor executes bytecode.
+The original encoded body and complete trailer must be supplied unchanged.
+"""
 import argparse
 from functools import lru_cache
 import hashlib

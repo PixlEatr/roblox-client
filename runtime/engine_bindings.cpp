@@ -22,7 +22,8 @@ struct Service {
 struct Runtime {
     LocalEngineContext config;
     Service game{"Game", "DataModel", "", nullptr, false, false, true};
-    // Checked in Studio 0.745: Name and ClassName differ here.
+    // Independently measured through the public API in Studio 0.745:
+    // the singleton's Instance.Name differs from its ClassName.
     Service settings{"GlobalBasicSettings", "UserSettings", "", nullptr, false, false, true};
     std::unordered_map<std::string, std::unique_ptr<Service>> services;
 };
@@ -223,7 +224,8 @@ void install_local_engine(lua_State* L, const LocalEngineContext& config) {
         }
         ctx->services.emplace(name, std::move(service));
     }
-    // Keep this alive until lua_close. Each worker gets a fresh state.
+    // Runtime ownership intentionally lasts until lua_close; the host creates
+    // one fresh state per worker process.
     auto* holder = static_cast<ContextHolder*>(lua_newuserdatadtor(L, sizeof(ContextHolder), destroy_context));
     holder->value = ctx;
     luaL_newmetatable(L, kInstanceMeta);

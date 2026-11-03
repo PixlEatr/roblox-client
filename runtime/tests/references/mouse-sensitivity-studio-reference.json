@@ -1,0 +1,60 @@
+{
+  "version": "0.745.0.7451137",
+  "cases": [
+    {
+      "input": "-5",
+      "value": "-5",
+      "ok": true
+    },
+    {
+      "input": "0",
+      "value": "0",
+      "ok": true
+    },
+    {
+      "input": "0.25",
+      "value": "0.25",
+      "ok": true
+    },
+    {
+      "input": "1",
+      "value": "1",
+      "ok": true
+    },
+    {
+      "input": "10",
+      "value": "10",
+      "ok": true
+    },
+    {
+      "input": "25",
+      "value": "10",
+      "ok": true
+    },
+    {
+      "input": "inf",
+      "value": "10",
+      "ok": true
+    },
+    {
+      "input": "-inf",
+      "value": "-10",
+      "ok": true
+    },
+    {
+      "input": "nan",
+      "value": "nan",
+      "ok": true
+    },
+    {
+      "input": "2",
+      "value": "2",
+      "ok": true
+    },
+    {
+      "input": "true",
+      "value": "0",
+      "ok": true
+    }
+  ]
+}

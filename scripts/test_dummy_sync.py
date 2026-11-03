@@ -7,12 +7,57 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
-from dummy_sync import TimeSyncProbe, request_packet, response_echo
+from dummy_sync import TimeSyncProbe, request_packet, response_echo, response_timing
 from game_wire import CONTROL_CHANNEL
 from native_session import NativeSession
 
 
 class DummySyncTests(unittest.TestCase):
+    def test_native_timing_callback_vectors_and_signed_rounding(self):
+        # Independently executed by validate_native_dummy_timing.py against
+        # pinned native104EEF158, stopping before its registered callback.
+        vectors = (
+            ((1000000, 80, 1700000000000000, 80000000), 1020080, 1699999998989, 78989),
+            ((1000000, 80, 900000, 800000), 1020080, -110, -210),
+            ((1000000, 3, 1021001, 1020999), 1020004, 10, 10),
+            (((1 << 64)-2000, 10, 5000000, 4000000), 1000, 5000, 4000),
+        )
+        for words, received, offset, extended in vectors:
+            with self.subTest(words=words):
+                payload = b'\3'+struct.pack('<QQQQ', *words)
+                sample = response_timing(payload, received, extended_timing=True)
+                self.assertEqual(sample.callback_offset_ms, offset)
+                self.assertEqual(sample.callback_extended_offset_ms, extended)
+
+    def test_extended_timing_requires_policy_and_response_word(self):
+        payload = b'\3'+struct.pack('<QQQQ', 1000000, 80, 900000, 800000)
+        self.assertIsNone(response_timing(payload, 1020080).callback_extended_offset_ms)
+        sample = response_timing(payload[:25], 1020080, extended_timing=True)
+        self.assertEqual(sample.callback_offset_ms, -110)
+        self.assertIsNone(sample.callback_extended_offset_ms)
+        for bad in (-1, 1 << 64, True, 1.5):
+            with self.assertRaises(ValueError):
+                response_timing(payload, bad)
+        with self.assertRaises(ValueError):
+            response_timing(payload, 1020080, extended_timing=1)
+
+    def test_native_timing_is_recorded_only_for_matched_valid_response(self):
+        probe = TimeSyncProbe()
+        probe.start(1.)
+        probe.due(1., 1000000)
+        payload = b'\3'+struct.pack('<QQQQ', 1000000, 80, 900000, 800000)
+        self.assertFalse(probe.receive(payload, 1.02, local_receive_us=-1))
+        self.assertIn(1000000, probe.pending)
+        self.assertTrue(probe.receive(payload, 1.02008, local_receive_us=1020080,
+                                      extended_timing=True))
+        self.assertFalse(probe.receive(payload, 1.03, local_receive_us=1030000))
+        report = probe.public_report()
+        self.assertEqual(len(report['time_sync_native_callback_samples']), 1)
+        self.assertEqual(report['time_sync_native_callback_samples'][0], {
+            'half_interval_ms': 10, 'callback_offset_ms': -110,
+            'callback_extended_offset_ms': -210})
+        self.assertFalse(report['time_sync_physics_clock_adjustment_applied'])
+
     def test_native_request_vector_and_bounds(self):
         self.assertEqual(request_packet(0x0102030405060708),
                          bytes.fromhex('030807060504030201') + bytes(16))
@@ -79,7 +124,10 @@ class DummySyncTests(unittest.TestCase):
             waits.append(timeout)
             clock[0] += timeout
             return [], [], []
+        def empty_receive(_size):
+            raise BlockingIOError
         fake_socket = SimpleNamespace(bind=lambda address: None, setblocking=lambda flag: None,
+                                      recvfrom=empty_receive,
                                       close=lambda: None)
         client = NativeSession.__new__(NativeSession)
         client.duration = 1

@@ -1,16 +1,25 @@
-# luau runner
+# runtime stuff
 
-from the repo root:
+build from the repo root with `python3.12 runtime/build.py`. it uses the bundled Luau source.
 
 ```sh
-python3 runtime/build.py
 runtime/build/luau-host --source runtime/smoke.luau -- 2 5
+.venv/bin/python scripts/runtime_preflight.py
 ```
 
-this published runner starts a fresh VM each time. it returns JSON with `ok`, `values`, and errors. world snapshots also support logs and local changes.
+preflight checks the dependencies offline. build the Rust worker too, as shown in the main readme.
 
-this snapshot's limits are 128 KiB input, 1–2000 ms execution, and 8–128 MiB VM memory. the newer local build has higher limits; see the root README.
+`runtime/build/luau-host` handles individual jobs. `rust-client/target/release/headless-luau` keeps the world and scripts running. edits are local unless a supported replication path sends them.
 
-`game`, `workspace`, and `UserSettings` need an engine context or world snapshot. local changes don't automatically reach a server.
+extra tools:
 
-`--bytecode` is for trusted compiler output. the VM memory cap doesn't cover the compiler or whole process, and this isn't an OS sandbox.
+- `python3.12 scripts/build_desktop.py` builds `~/Applications/Rove.app` on Apple Silicon. keep the repo where it is after building.
+- `.venv/bin/python scripts/renderer_fixture.py --showcase --allow-webgl` opens an offline preview fixture. built-in Roblox mesh/texture files need the Roblox app installed.
+- `:saveinstance map.rbxlx` exports the runtime's available world to `rove exports/` using the bundled USSI script.
+- `python3.12 scripts/build_decompiler.py` downloads and builds the pinned Tovek decompiler. needs Rust nightly. decompilation is optional.
+
+`--framework-init` is an old Nothingness-specific research option. it needs a local calibration file; the normal launcher only enables it when that file exists. it isn't a general join flag.
+
+the optional external sUNC suite is not bundled. its expected source is listed in `runtime/tests/sunc/manifest.json`.
+
+this is a partial runtime, not an OS sandbox or a promise of Roblox compatibility.

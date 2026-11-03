@@ -1,0 +1,224 @@
+{
+  "version": 1,
+  "sequence": 7,
+  "job_id": "synthetic-snapshot-job",
+  "local_player": "scope:player-1",
+  "services": {
+    "Workspace": "scope:workspace",
+    "Players": "scope:players",
+    "RunService": "scope:run-service"
+  },
+  "class_parents": {
+    "Part": "BasePart",
+    "BasePart": "PVInstance",
+    "PVInstance": "Instance",
+    "Model": "PVInstance",
+    "Humanoid": "Instance",
+    "Players": "Instance",
+    "RunService": "Instance",
+    "Workspace": "WorldRoot",
+    "WorldRoot": "Model",
+    "ModuleScript": "LuaSourceContainer",
+    "LuaSourceContainer": "Instance",
+    "Folder": "Instance",
+    "ObjectValue": "ValueBase",
+    "StringValue": "ValueBase",
+    "ValueBase": "Instance",
+    "DataModel": "Instance"
+  },
+  "defaults": {},
+  "default_origins": {},
+  "nodes": [
+    {
+      "id": "scope:workspace",
+      "class_name": "Workspace",
+      "name": "Workspace",
+      "parent": null,
+      "properties": {
+        "Gravity": 196.2
+      }
+    },
+    {
+      "id": "scope:players",
+      "class_name": "Players",
+      "name": "Players",
+      "parent": null,
+      "properties": {
+        "LocalPlayer": {
+          "$ref": "scope:player-1"
+        }
+      }
+    },
+    {
+      "id": "scope:run-service",
+      "class_name": "RunService",
+      "name": "Run Service",
+      "parent": null,
+      "properties": {}
+    },
+    {
+      "id": "scope:player-1",
+      "class_name": "Player",
+      "name": "FixturePlayer",
+      "parent": "scope:players",
+      "properties": {
+        "UserId": 123,
+        "Character": {
+          "$ref": "scope:character-1"
+        }
+      }
+    },
+    {
+      "id": "scope:character-1",
+      "class_name": "Model",
+      "name": "FixtureCharacter",
+      "parent": "scope:workspace",
+      "properties": {}
+    },
+    {
+      "id": "scope:humanoid-1",
+      "class_name": "Humanoid",
+      "name": "Humanoid",
+      "parent": "scope:character-1",
+      "properties": {
+        "Health": 100,
+        "WalkSpeed": 16
+      }
+    },
+    {
+      "id": "scope:root-1",
+      "class_name": "Part",
+      "name": "HumanoidRootPart",
+      "parent": "scope:character-1",
+      "properties": {
+        "Anchored": true,
+        "Position": {
+          "$vector3": [
+            1,
+            2,
+            3
+          ]
+        },
+        "CFrame": {
+          "$cframe": {
+            "position": [
+              1,
+              2,
+              3
+            ],
+            "rotation": [
+              1,
+              0,
+              0,
+              0,
+              1,
+              0,
+              0,
+              0,
+              1
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": "fixture:game",
+      "class_name": "DataModel",
+      "name": "FixturePlace",
+      "parent": null,
+      "properties": {
+        "PlaceId": 0,
+        "PlaceVersion": 1,
+        "GameId": 0,
+        "CreatorId": 0,
+        "JobId": "owned-ussi-fixture"
+      }
+    },
+    {
+      "id": "fixture:model",
+      "class_name": "Model",
+      "name": "ExportFixture",
+      "parent": "scope:workspace",
+      "properties": {
+        "Archivable": true
+      }
+    },
+    {
+      "id": "fixture:part",
+      "class_name": "Part",
+      "name": "Probe",
+      "parent": "fixture:model",
+      "properties": {
+        "Archivable": true,
+        "Anchored": true,
+        "Size": {
+          "$vector3": [
+            3,
+            4,
+            5
+          ]
+        },
+        "CFrame": {
+          "$cframe": {
+            "position": [
+              1,
+              2,
+              3
+            ],
+            "rotation": [
+              1,
+              0,
+              0,
+              0,
+              1,
+              0,
+              0,
+              0,
+              1
+            ]
+          }
+        },
+        "Color": {
+          "$color3": [
+            0.25,
+            0.5,
+            0.75
+          ]
+        },
+        "Transparency": 0.25
+      }
+    },
+    {
+      "id": "fixture:link",
+      "class_name": "ObjectValue",
+      "name": "Link",
+      "parent": "fixture:model",
+      "properties": {
+        "Archivable": true,
+        "Value": {
+          "$ref": "fixture:part"
+        }
+      }
+    },
+    {
+      "id": "fixture:label",
+      "class_name": "StringValue",
+      "name": "Label",
+      "parent": "fixture:model",
+      "properties": {
+        "Archivable": true,
+        "Value": "hello <world> & caf\u00e9"
+      }
+    },
+    {
+      "id": "fixture:script",
+      "class_name": "ModuleScript",
+      "name": "SourceProbe",
+      "parent": "fixture:model",
+      "properties": {
+        "Archivable": true,
+        "Source": ""
+      }
+    }
+  ]
+}

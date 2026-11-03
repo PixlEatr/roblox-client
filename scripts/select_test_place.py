@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Pick a place the configured account can join."""
+"""Select an accessible game for the explicitly requested alt-account test."""
 import argparse
 import json
 from roblox_session import ROOT, RobloxSession, SessionError

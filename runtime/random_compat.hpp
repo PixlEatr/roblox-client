@@ -2,7 +2,8 @@
 
 struct lua_State;
 
-// Installs the standalone Random.new / NextInteger / NextNumber / Clone API.
+// Installs the standalone Random.new / NextInteger / NextNumber / Clone /
+// NextUnitVector / Shuffle API. Shuffle is limited to one million array items.
 // Seeded sequences preserve the user's former runtime implementation and its
 // recorded Studio 0.742 controls. Compatibility with Roblox build 0.745 is
 // UNVERIFIED; this module is an ordinary local API, not an engine environment.
