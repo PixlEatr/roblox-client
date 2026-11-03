@@ -1,25 +1,16 @@
-# local luau runner
+# luau runner
 
-build with `python3 runtime/build.py` from the project root.
+from the repo root:
 
 ```sh
+python3 runtime/build.py
 runtime/build/luau-host --source runtime/smoke.luau -- 2 5
-runtime/build/luau-host --source runtime/tests/engine_model.luau --context-file runtime/tests/local_context.txt
 ```
 
-`--source` runs real Luau. `--bytecode` loads trusted standard compiler output.
-choose one. inputs are capped at 128 KiB. use `--timeout-ms` from 1 to 2000 and
-`--memory-mb` from 8 to 128. each call starts fresh.
+this published runner starts a fresh VM each time. it returns JSON with `ok`, `values`, and errors. world snapshots also support logs and local changes.
 
-without an engine context, game/workspace/UserSettings aren't installed.
-the offline fixture gives basic services, identity, parenting, and lookup
-methods. the world-snapshot mode adds local replicated instances. neither is
-a complete Roblox engine, and local mutations aren't sent to the server.
+this snapshot's limits are 128 KiB input, 1–2000 ms execution, and 8–128 MiB VM memory. the newer local build has higher limits; see the root README.
 
-results are JSON with `ok` and `values`. return nil, booleans, finite numbers,
-or bounded strings. world mode can also capture logs and local mutations.
-strings preserve bytes as matching JSON code points. Python can recover the
-bytes with `.encode('latin1')`.
+`game`, `workspace`, and `UserSettings` need an engine context or world snapshot. local changes don't automatically reach a server.
 
-these worker/VM limits aren't an OS sandbox. compiler allocations are outside
-the VM allocation cap. only use bytecode whose compiler output you trust.
+`--bytecode` is for trusted compiler output. the VM memory cap doesn't cover the compiler or whole process, and this isn't an OS sandbox.
