@@ -3,6 +3,9 @@ import os
 from pathlib import Path
 import stat
 
+# Windows SDK CreateFile flag; some pywin32 builds omit it from win32con.
+FILE_FLAG_OPEN_REPARSE_POINT = 0x00200000
+
 
 def _windows_security():
     import win32api
@@ -84,7 +87,7 @@ def open_nofollow(path, flags, mode=0o600):
     try:
         handle = win32file.CreateFile(str(path), access,
         win32con.FILE_SHARE_READ | win32con.FILE_SHARE_WRITE, attributes, disposition,
-        win32con.FILE_FLAG_OPEN_REPARSE_POINT, None)
+        FILE_FLAG_OPEN_REPARSE_POINT, None)
     except pywintypes.error as error:
         if error.winerror in (2,3): raise FileNotFoundError(str(path)) from None
         if error.winerror in (80,183): raise FileExistsError(str(path)) from None
