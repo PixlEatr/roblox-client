@@ -21,6 +21,17 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+      - name: Check Windows setup and private storage before compiling
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          python -m venv .venv
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & .venv/Scripts/python.exe -m pip install -r requirements-session.txt
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $env:PYTHONPATH = "$PWD/scripts;$PWD/tests/scripts"
+          & .venv/Scripts/python.exe -m unittest -v test_platform_portability test_windows_setup test_rove_entrypoint
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Install Linux dependencies
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y cmake g++ pkg-config libssl-dev libzstd-dev

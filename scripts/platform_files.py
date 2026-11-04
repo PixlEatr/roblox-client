@@ -34,6 +34,11 @@ def protect_private(path):
     security.SetNamedSecurityInfo(str(path), security.SE_FILE_OBJECT,
         security.DACL_SECURITY_INFORMATION | security.PROTECTED_DACL_SECURITY_INFORMATION,
         None, None, acl, None)
+    # Elevated Windows processes may create files owned by Administrators.
+    # Normalize the owner as well as the DACL, matching read_private's policy.
+    # Set the DACL first so the current user has WRITE_OWNER on existing files.
+    security.SetNamedSecurityInfo(str(path), security.SE_FILE_OBJECT,
+        security.OWNER_SECURITY_INFORMATION, user, None, None, None)
 
 
 def private_descriptor(fd):
