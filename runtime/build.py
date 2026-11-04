@@ -18,8 +18,8 @@ def main():
     out = args.output_dir.resolve()
     subprocess.run(['cmake', '-S', str(HERE), '-B', str(out),
                     '-DCMAKE_BUILD_TYPE=Release'], check=True)
-    subprocess.run(['cmake', '--build', str(out), '--parallel', str(args.jobs)], check=True)
-    print(out / 'luau-host')
+    subprocess.run(['cmake', '--build', str(out), '--config', 'Release', '--target', 'luau-host', 'luau-source-to-bytecode', '--parallel', str(args.jobs)], check=True)
+    print(out / ('luau-host.exe' if os.name == 'nt' else 'luau-host'))
 
 
 if __name__ == '__main__':

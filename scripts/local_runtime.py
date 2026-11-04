@@ -13,13 +13,14 @@ from pathlib import Path
 import subprocess
 import tempfile
 import uuid
+from platform_process import executable
 
 from session_integrity import observe_runtime_oneshot_report
 
 HOST = Path(os.environ.get('ROBLOX_LUAU_HOST',
-                           Path(__file__).resolve().parents[1] / 'runtime' / 'build' / 'luau-host'))
+                           Path(__file__).resolve().parents[1] / 'runtime' / 'build' / executable('luau-host')))
 RUST_HOST = Path(os.environ.get('ROBLOX_LUAU_RUST_HOST',
-                                Path(__file__).resolve().parents[1] / 'rust-client' / 'target' / 'release' / 'headless-luau'))
+                                Path(__file__).resolve().parents[1] / 'rust-client' / 'target' / 'release' / executable('headless-luau')))
 MAX_SOURCE_BYTES = 100 * 1024 * 1024
 
 

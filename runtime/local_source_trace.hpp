@@ -1,6 +1,7 @@
 #pragma once
 #include "sha256.hpp"
 #include <cstdlib>
+#ifndef _WIN32
 #include <fcntl.h>
 #include <sys/stat.h>
 #include <unistd.h>
@@ -37,3 +38,8 @@ inline void trace_local_source(const char* source,size_t length) noexcept {
         close(dir);
     } catch(...) {if(fd>=0)close(fd);if(dir>=0)close(dir);}
 }
+#else
+// Private POSIX source tracing is an optional developer facility. Never dump
+// source to an unprotected Windows path in its absence.
+inline void trace_local_source(const char*,size_t) noexcept {}
+#endif

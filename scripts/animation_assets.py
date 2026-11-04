@@ -18,7 +18,8 @@ import urllib.parse
 import urllib.request
 
 ROOT = Path(__file__).resolve().parents[1]
-CODEC = ROOT / 'animation-codec/target/release/animation-codec'
+from platform_process import executable
+CODEC = ROOT / 'animation-codec/target/release' / executable('animation-codec')
 MAX_INPUT = 4 * 1024 * 1024
 CODEC_ERRORS = frozenset('''unsupported_container truncated_header instance_limit
 expansion_limit truncated_chunk trailing_data missing_end_chunk invalid_numeric_property

@@ -28,10 +28,11 @@ def shape(value, depth=0):
 
 
 def write_private(path, value):
-    flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW
-    fd = os.open(str(path), flags, 0o600)
+    from platform_files import open_nofollow
+    flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
+    fd = open_nofollow(path, flags, 0o600)
     try:
-        os.fchmod(fd, 0o600)
+        if os.name != "nt": os.fchmod(fd, 0o600)
         with os.fdopen(fd, "w") as output:
             fd = None
             json.dump(value, output)

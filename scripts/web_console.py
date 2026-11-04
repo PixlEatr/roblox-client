@@ -87,20 +87,16 @@ class WebConsole:
 
     def connected(self):
         try:
-            info = self.socket_path.lstat()
-            if not stat.S_ISSOCK(info.st_mode) or info.st_uid != os.getuid():
-                return False
-            with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as probe:
-                probe.settimeout(.2)
-                probe.connect(str(self.socket_path))
+            from local_transport import probe
+            probe(self.socket_path)
             return True
-        except OSError:
+        except (OSError, ValueError):
             return False
 
     def runtime_identity(self):
         try:
             info=self.socket_path.lstat()
-            if stat.S_ISSOCK(info.st_mode) and info.st_uid==os.getuid():
+            if (os.name == 'nt' and self.connected()) or (os.name != 'nt' and stat.S_ISSOCK(info.st_mode) and info.st_uid==os.getuid()):
                 return f'{info.st_dev}:{info.st_ino}:{info.st_ctime_ns}'
         except OSError:pass
         return None

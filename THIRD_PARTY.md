@@ -1,6 +1,7 @@
 # credits
 
 - [Luau](https://github.com/luau-lang/luau), release 745, commit `2a3d8937c19c8fd9f7b72b6ec9068c62760e6588`. sources and licenses are in `vendor/luau`.
+- [LZ4](https://github.com/lz4/lz4), v1.10.0. The portable codec and BSD license are in `vendor/lz4`.
 - [nlohmann/json](https://github.com/nlohmann/json), v3.12.0. header, MIT license and provenance are in `runtime/vendor`.
 - [Three.js](https://github.com/mrdoob/three.js), 0.187.0. MIT license is in `ui/assets/three-LICENSE.txt`; npm dependencies are pinned in the lockfile.
 - [UniversalSynSaveInstance](https://github.com/luau/UniversalSynSaveInstance) and [SomeHub](https://github.com/luau/SomeHub). bundled script, helpers and their AGPL-3.0 / CC0 notices are under `vendor`. exact revisions and file hashes are in `vendor/ussi-bundle.json`.

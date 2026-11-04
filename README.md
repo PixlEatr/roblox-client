@@ -1,32 +1,28 @@
-# rove
+# Rove
 
-one Rove interface for your account, game preview and Luau scripts. same UI in the browser and mac app. still a wip.
+A work-in-progress Roblox runtime with a terminal and an optional browser workspace for Luau scripts and a game preview.
 
-needs Python 3.12+, CMake, a C++17 compiler, Rust and Node.js. macOS is the main dev platform.
+## Start here
 
-```sh
-python3.12 -m venv .venv
-.venv/bin/python -m pip install -r requirements-session.txt
-python3.12 runtime/build.py
-cargo build --release --locked --manifest-path rust-client/Cargo.toml
-cargo build --release --locked --manifest-path animation-codec/Cargo.toml
-npm --prefix ui ci
-npm --prefix ui run build
-mkdir -p secrets
-```
+Install the [prerequisites for your system](docs/setup.md), then run these commands from the project folder:
 
-put your cookie in `secrets/roblox-cookie.txt`, then run `chmod 600 secrets/roblox-cookie.txt`. that folder stays out of git.
+| | Windows | macOS / Linux |
+| --- | --- | --- |
+| Set up once | `py rove.py setup` | `python3 rove.py setup` |
+| Check offline | `py rove.py check` | `python3 rove.py check` |
+| Start | `py rove.py` | `python3 rove.py` |
 
-```sh
-.venv/bin/python rove.py
-```
+Setup creates an empty, private `secrets/roblox-cookie.txt`. Add your account session there before joining. Keep that file local.
 
-open **Workspace** for the game view, script editor and output. Play joins a game; Leave disconnects it. terminal sessions appear in the same workspace.
+Windows and Linux start in the terminal. macOS opens the existing browser UI. Use `rove.py terminal` for terminal mode on any system; `:quit` leaves the game. Windows also accepts `rove.cmd setup`, `rove.cmd check`, and `rove.cmd`.
 
-terminal only: `.venv/bin/python scripts/terminal_client.py --no-web`. `:view` opens Rove.
+**Windows is a native source build, not a packaged app.** Windows execution is still being validated. Rendering, physics, and game scripts are incomplete, and some games or sessions may fail.
 
-`ui/` is the only frontend. tests and preview fixtures live in `tests/` ([dev checks](tests/README.md)).
+## Find your way
 
-rendering, physics and game scripts are incomplete. some games won't load and the reported disconnects aren't fixed yet. this isn't the official Roblox client.
+- [Setup and troubleshooting](docs/setup.md)
+- [Project map and development](docs/development.md)
+- [Runtime and optional tools](runtime/README.md)
+- [Third-party credits](THIRD_PARTY.md)
 
-[runtime / optional tools](runtime/README.md) · [credits](THIRD_PARTY.md)
+The browser workspace is in `ui/`; runtime code is in `runtime/` and `rust-client/`; Python session code is in `scripts/`; offline checks and fixtures are in `tests/`. You only need `rove.py` to get started.

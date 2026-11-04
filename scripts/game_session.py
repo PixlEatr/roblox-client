@@ -12,6 +12,9 @@ import time
 if sys.pycache_prefix is None:
     sys.pycache_prefix = str(Path.home()/'.cache/roblox-client-research/python')
 os.environ.setdefault('PYTHONPYCACHEPREFIX', sys.pycache_prefix)
+if os.name == 'nt':
+    import signal
+    signal.signal(signal.SIGBREAK, signal.default_int_handler)
 
 from game_wire import CONTROL_CHANNEL, issued_early_auth, feature_configuration, protocol_sync
 from join_allocation import main as refresh_allocation, write_private

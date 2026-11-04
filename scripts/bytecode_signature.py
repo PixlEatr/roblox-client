@@ -111,19 +111,9 @@ def _read_private_module(path):
     resolved = Path(path).resolve(strict=True)
     if not resolved.is_relative_to((ROOT / 'secrets').resolve()):
         raise SignatureError('cli-input-must-be-private-capture')
-    flags = os.O_RDONLY | os.O_NOFOLLOW
-    descriptor = os.open(str(resolved), flags)
-    try:
-        metadata = os.fstat(descriptor)
-        if (not stat.S_ISREG(metadata.st_mode) or metadata.st_mode & 0o077
-                or metadata.st_uid != os.getuid() or metadata.st_size > MAX_BYTECODE):
-            raise SignatureError('private-capture-permissions-or-size')
-        with os.fdopen(descriptor, 'rb') as source:
-            descriptor = None
-            return source.read(MAX_BYTECODE + 1)
-    finally:
-        if descriptor is not None:
-            os.close(descriptor)
+    from platform_files import read_private
+    try: return read_private(resolved, MAX_BYTECODE)
+    except ValueError: raise SignatureError('private-capture-permissions-or-size') from None
 
 
 def main():

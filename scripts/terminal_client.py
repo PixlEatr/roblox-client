@@ -10,6 +10,7 @@ import shlex
 import select
 import socket
 import subprocess
+from platform_process import group_options, stop_group
 import sys
 import threading
 import time
@@ -70,14 +71,11 @@ def selection_command(target):
 
 def ensure_console_free(path):
     # Check before changing the shared target/allocation files.
-    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as probe:
-        probe.settimeout(.3)
-        try:
-            probe.connect(str(path))
-        except (FileNotFoundError, ConnectionRefusedError):
-            return
-        except OSError:
-            raise SessionError('Cannot check the local script socket; another client may be using it.') from None
+    from local_transport import probe
+    try: probe(path, .3)
+    except (FileNotFoundError, ConnectionRefusedError): return
+    except (OSError, ValueError):
+        raise SessionError('Cannot check the local console; another client may be using it.') from None
     raise SessionError('A client is already running. Close it before launching another.')
 
 
@@ -317,6 +315,10 @@ def console(process, timeout_ms, duration=0):
     pasted = None
     paste_bytes = 0
     pending_input = bytearray()
+    windows_input = None
+    if os.name == 'nt':
+        from platform_input import WindowsLineInput
+        windows_input = WindowsLineInput()
     follower=OutputFollower()
     log('Joining. Scripts become available when your Player is replicated.', 'join')
     log(('No session time limit.' if duration == 0 else f'Session duration: {duration} seconds.')
@@ -351,9 +353,14 @@ def console(process, timeout_ms, duration=0):
             print('...> ' if pasted is not None else 'luau> ', end='', flush=True)
             prompt = True
         if b'\n' not in pending_input:
-            if not select.select([sys.stdin], [], [], .1)[0]:
-                continue
-            chunk = os.read(sys.stdin.fileno(), 65536)
+            if windows_input is not None:
+                chunk = windows_input.read()
+                if chunk is None:
+                    time.sleep(.02)
+                    continue
+            else:
+                if not select.select([sys.stdin], [], [], .1)[0]: continue
+                chunk = os.read(sys.stdin.fileno(), 65536)
             if not chunk:
                 break
             pending_input.extend(chunk)
@@ -364,6 +371,8 @@ def console(process, timeout_ms, duration=0):
                 continue
         raw, _, rest = pending_input.partition(b'\n')
         pending_input = bytearray(rest)
+        if len(raw)>128*1024:
+            log('Input exceeds 128 KiB; closing console.', 'error'); break
         line = raw.decode('utf-8').rstrip('\r')
         prompt = False
         if line.strip() == ':quit':
@@ -455,15 +464,15 @@ def console(process, timeout_ms, duration=0):
 def stop(process):
     if process.poll() is None:
         import signal
-        process.send_signal(signal.SIGINT)
+        process.send_signal(signal.CTRL_BREAK_EVENT if os.name == 'nt' else signal.SIGINT)
         try:
             process.wait(timeout=5)
         except subprocess.TimeoutExpired:
-            process.terminate()
+            stop_group(process)
             try:
                 process.wait(timeout=3)
             except subprocess.TimeoutExpired:
-                process.kill()
+                stop_group(process, force=True)
                 process.wait()
 
 
@@ -496,7 +505,7 @@ def main():
                                                walk_for_minute=args.walk_for_minute), cwd=ROOT,
                                stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                                stderr=subprocess.STDOUT, text=True, bufsize=1,
-                               start_new_session=True)
+                               **group_options())
     try:
         if not args.no_web:
             try:

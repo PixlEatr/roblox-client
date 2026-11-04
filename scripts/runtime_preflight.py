@@ -9,6 +9,7 @@ import json
 from pathlib import Path
 import subprocess
 import sys
+from local_runtime import HOST, RUST_HOST
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -23,8 +24,8 @@ def _probe():
         'opcode_lengths': ROOT / 'vendor/luau/Common/include/Luau/BytecodeUtils.h',
         'signature_table': ROOT / 'inputs/bytecode-signature-v1-public.bin',
         'signature_provenance': ROOT / 'inputs/bytecode-signature-v1-public.json',
-        'persistent_runtime': ROOT / 'rust-client/target/release/headless-luau',
-        'bytecode_runtime': ROOT / 'runtime/build/luau-host',
+        'persistent_runtime': RUST_HOST,
+        'bytecode_runtime': HOST,
     }
     for label, path in required.items():
         try:
