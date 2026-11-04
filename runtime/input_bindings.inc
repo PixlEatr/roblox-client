@@ -1,5 +1,5 @@
-// Local keyboard/mouse/touch input. Only the host supplies device events;
-// scripts cannot make server receipts impersonate hardware state.
+// Local keyboard/mouse/touch input. Host events require an attached device;
+// VirtualInputManager can also submit explicitly synthetic local events.
 int input_enum_kind(const char* name) {
     for(int k=0;k<(int)std::size(kUsiExportEnums);++k)if(!strcmp(kUsiExportEnums[k].name,name))return k;
     throw std::runtime_error("missing input enum metadata");
@@ -167,7 +167,7 @@ void publish_input_event(World& w,const std::string& id,int type,int key,int sta
     publish_mouse_event(w,type,state,wheel);
     queue_context_input(w,id,type,key,state,processed);
 }
-void update_input_events(World& w,const Json& batch) {
+void update_input_events(World& w,const Json& batch,bool synthetic=false) {
     if(!batch.is_array()||batch.size()>128)throw std::runtime_error("input batch must contain at most 128 events");
     context_reserve(w,batch.size(),batch.size()*w.context_actions.bindings.size());
     std::vector<HostInputEvent> events;auto active=w.input.contacts;auto continuous=w.input.continuous;
@@ -180,9 +180,10 @@ void update_input_events(World& w,const Json& batch) {
         if(e.state<0)throw std::runtime_error("invalid input phase");
         e.type_item=input_enum_item("UserInputType",value.at("input_type").get<std::string>());
         e.type=kUsiExportEnums[input_enum_kind("UserInputType")].items[e.type_item].value;
+        if(w.input.ignored_types.count(e.type)&&e.state<2)continue;
         if(!(e.type>=0&&e.type<=4)&&e.type!=7&&e.type!=8&&e.type!=9)throw std::runtime_error("input bridge supports keyboard, mouse, touch and focus events");
         const char* capability=e.type==8?"KeyboardEnabled":e.type==7?"TouchEnabled":"MouseEnabled";
-        if(e.type!=9&&!input_capability(w,capability))throw std::runtime_error("input device capability is disabled");
+        if(e.type!=9&&!synthetic&&!input_capability(w,capability))throw std::runtime_error("input device capability is disabled");
         if(e.type==9&&e.state!=0&&e.state!=2)throw std::runtime_error("window focus requires begin or end phase");
         e.key_item=input_enum_item("KeyCode",value.value("key_code",std::string("None")));
         e.key=kUsiExportEnums[input_enum_kind("KeyCode")].items[e.key_item].value;
@@ -191,6 +192,7 @@ void update_input_events(World& w,const Json& batch) {
         if(e.type==7&&(token.empty()||token.size()>64))throw std::runtime_error("touch requires input_id of 1 to 64 bytes");
         if(e.type!=7&&!token.empty())throw std::runtime_error("input_id is only supported for touch");
         e.identity=std::to_string(e.type)+":"+(e.type==7?token:std::to_string(e.key));
+        if(w.input.ignored_types.count(e.type)&&e.state>=2&&!active.count(e.identity))continue;
         e.continuous=e.type==3||e.type==4;
         if(e.continuous) {
             if(e.state!=1)throw std::runtime_error("mouse movement and wheel require change phase");
@@ -198,7 +200,7 @@ void update_input_events(World& w,const Json& batch) {
         } else {
             if(e.state==0) {
                 if(active.count(e.identity))throw std::runtime_error("input is already pressed");
-                active[e.identity]=InputContact{"",e.type,e.key};++created;
+                active[e.identity]=InputContact{"",e.type,e.key,synthetic};++created;
                 if(active.size()>128)throw std::runtime_error("pressed input limit exceeded");
             } else {
                 if(!active.count(e.identity))throw std::runtime_error("input must begin before change or end");
@@ -224,7 +226,7 @@ void update_input_events(World& w,const Json& batch) {
             node.properties={{"KeyCode",input_enum_json("KeyCode",e.key_item)},{"UserInputType",input_enum_json("UserInputType",e.type_item)},
                 {"UserInputState",input_enum_json("UserInputState",4)},{"Position",{{"$vector3",{0,0,0}}}},{"Delta",{{"$vector3",{0,0,0}}}}};
             id=node.id;w.nodes.emplace(id,std::move(node));w.order.push_back(id);
-            if(e.continuous)w.input.continuous[e.type]=id;else w.input.contacts[e.identity]=InputContact{id,e.type,e.key};
+            if(e.continuous)w.input.continuous[e.type]=id;else w.input.contacts[e.identity]=InputContact{id,e.type,e.key,synthetic};
         }
         auto& node=w.nodes.at(id);
         auto set=[&](const char* field,const Json& v){if(v.is_null())return;clear_local_property(w,id,field);if(node.properties[field]!=v){node.properties[field]=v;property_events(w,node,field);}};
@@ -239,13 +241,18 @@ void update_input_events(World& w,const Json& batch) {
             for(int i=0;i<3;++i)delta["$vector3"][i]=encode_number(static_cast<float>(json_number(delta["$vector3"][i]))*sensitivity);
         }
         set("Delta",delta);
+        if(!e.continuous&&!e.position.is_null()) {
+            auto& contact=w.input.contacts.at(e.identity);
+            for(int i=0;i<3;++i)contact.position[i]=e.position["$vector3"][i].get<float>();
+        }
         if(e.state>=2)w.input.contacts.erase(e.identity);
-        if(e.has_mouse)w.input.location=e.mouse;
+        if(e.has_mouse){w.input.location=e.mouse;w.input.virtual_mouse=synthetic;}
         if(e.type==4&&!e.delta.is_null())for(int i=0;i<2;++i)w.input.pending_delta[i]=static_cast<float>(std::clamp(double(w.input.pending_delta[i])+e.delta["$vector3"][i].get<double>(),-double(std::numeric_limits<float>::max()),double(std::numeric_limits<float>::max())));
         const Json& wheel=e.position.is_null()?e.delta:e.position;
         const double wheel_steps=e.type==3&&!wheel.is_null()?wheel["$vector3"][2].get<double>():0;
         publish_input_event(w,id,e.type,e.key,e.state,e.type_item,e.processed,wheel_steps);
     }
+    if(!synthetic)virtual_input_record_host(w,batch);
 }
 void cancel_disabled_inputs(World& w) {
     auto service=w.services.find("UserInputService");
@@ -253,7 +260,7 @@ void cancel_disabled_inputs(World& w) {
     for(auto it=w.input.contacts.begin();it!=w.input.contacts.end();) {
         const auto contact=it->second;
         // Window focus is independent of whether a mouse is attached.
-        if(contact.type==9){++it;continue;}
+        if(contact.type==9||contact.synthetic){++it;continue;}
         const char* capability=contact.type==8?"KeyboardEnabled":contact.type==7?"TouchEnabled":"MouseEnabled";
         if(input_capability(w,capability)){++it;continue;}
         auto* node=find_node(w,contact.node);it=w.input.contacts.erase(it);
@@ -270,7 +277,7 @@ void cancel_disabled_inputs(World& w) {
             }
         }
     }
-    if(!input_capability(w,"MouseEnabled")){w.input.pending_delta={};w.input.frame_delta={};}
+    if(!input_capability(w,"MouseEnabled")&&!w.input.virtual_mouse){w.input.pending_delta={};w.input.frame_delta={};}
 }
 void begin_input_frame(World& w) {
     w.input.frame_delta=w.input.pending_delta;w.input.pending_delta={};

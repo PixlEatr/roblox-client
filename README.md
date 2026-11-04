@@ -18,7 +18,7 @@ Setup creates an empty, private `secrets/roblox-cookie.txt`. Add your account se
 
 Windows and Linux start in the terminal. macOS opens the browser UI. Use `rove.py terminal` for terminal mode on any system; `:quit` leaves the game. Setup is only needed the first time or after updating the source.
 
-**Windows uses a native source build.** Build and offline-test results are available in [GitHub Actions](https://github.com/alexkkork/roblox-client/actions/workflows/portability.yml). more Luau functions, GUI layouts and fonts are in. still fixing physics and game scripts, so expect some bugs.
+**Windows uses a native source build.** Build and offline-test results are available in [GitHub Actions](https://github.com/alexkkork/roblox-client/actions/workflows/portability.yml). virtual input is in now too — keys, mouse, touch, gamepads and record/replay. still fixing physics and game scripts, so expect some bugs.
 
 ## Find your way
 
@@ -28,6 +28,7 @@ Windows and Linux start in the terminal. macOS opens the browser UI. Use `rove.p
 | Find a command | [Command reference](docs/setup.md#commands) |
 | Change the code | [Project map](docs/development.md) |
 | Find physics, scripting, or session code | [Python module guide](scripts/README.md) |
+| Try virtual input | [Quick example](docs/virtual-input.md) |
 | Run tests | [Test guide](tests/README.md) |
 
 [All guides](docs/README.md) · [Third-party credits](THIRD_PARTY.md)

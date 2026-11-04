@@ -25,3 +25,5 @@ extra tools:
 the optional external sUNC suite is not bundled. its expected source is listed in `tests/fixtures/sunc/manifest.json`.
 
 this is a partial runtime, not an OS sandbox or a promise of Roblox compatibility.
+
+virtual input now covers keyboard/mouse/touch, gamepads, sensors and local record/replay. [quick example + limits](../docs/virtual-input.md).

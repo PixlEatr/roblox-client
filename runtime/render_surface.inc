@@ -418,6 +418,7 @@ void render_gui_action(World& w,const Json& action) {
     }
     if(kind=="text_focus"&&action.size()==2) {
         if(n)capture_textbox(w,*n);
+        if(n&&focused_textbox(w)==n)virtual_input_record_gui(w,action);
         return;
     }
     if(kind=="text_blur"||kind=="text_edit"||kind=="text_select") {
@@ -453,6 +454,7 @@ void render_gui_action(World& w,const Json& action) {
             }
             update_textbox_selection(w,*n,cursor,anchor);
         }
+        virtual_input_record_gui(w,action);
         return;
     }
     const bool releasing=kind=="pointer_up"&&action.size()==2&&w.gui_pointer_target==action["id"];
@@ -634,4 +636,5 @@ void render_gui_action(World& w,const Json& action) {
         authored_textbox_text_changed(w,*n);
         emit(w,*n,"FocusLost",Json::array({true,nullptr}));
     }else throw std::runtime_error("Unsupported GUI interaction");
+    virtual_input_record_gui(w,action);
 }

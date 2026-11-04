@@ -8,6 +8,7 @@ Choose the guide for what you want to do:
 | Find code or run developer checks | [Development](development.md) |
 | Locate physics, Luau, chat, or session modules | [Python module guide](../scripts/README.md) |
 | Understand the native runtime and optional tools | [Runtime](../runtime/README.md) |
+| Try synthetic input and record/replay | [Virtual input](virtual-input.md) |
 | Find offline test suites | [Tests](../tests/README.md) |
 
 Use `rove.py setup`, `rove.py check`, and `rove.py terminal` from the project root. Prefix them with `py` on Windows or `python3` on macOS/Linux. The setup guide lists prerequisites.

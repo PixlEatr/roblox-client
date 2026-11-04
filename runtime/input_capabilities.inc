@@ -22,6 +22,7 @@ Json validated_input_capabilities(const Json& supplied) {
 }
 
 bool input_capability(const World& world, const std::string& key) {
+    if(key=="GamepadEnabled"&&!world.input.gamepads.empty())return true;
     return world.input_capabilities.value(key, false);
 }
 

@@ -18,6 +18,7 @@
 #include <array>
 #include <cassert>
 #include <cstring>
+#include <climits>
 #include <cstdlib>
 #include <cmath>
 #include <memory>
@@ -663,6 +664,7 @@ int get_full_name(lua_State* L) {
 Node* ensure_http_service(World& world);
 Node* ensure_client_service(World& world,const std::string& service);
 bool local_service_supported(const std::string& service) {
+    if(service=="VirtualInputManager")return true;
     if(service=="VRService"||service=="SoundService")return true;
     if(service=="PhysicsService"||service=="EncodingService")return true;
     return service=="TextService"||service=="RunService"||service=="HttpService"||service=="ServerStorage"||service=="ServerScriptService"||service=="GuiService"||service=="UserInputService"||service=="ContextActionService"||service=="Lighting"||service=="CoreGui"||service=="Debris"||service=="CollectionService"||service=="TweenService"||service=="TestService"||service=="Stats";
@@ -881,6 +883,7 @@ void emit(World& w,Node& node,const std::string& key,Json args=Json::array(),int
 }
 void queue_context_input(World&,const std::string&,int,int,int,bool);
 void context_reserve(World&,size_t,size_t);
+void virtual_input_record_host(World&,const Json&);
 #include "input_bindings.inc"
 #include "context_action_bindings.inc"
 #include "render_step_bindings.inc"
@@ -948,6 +951,7 @@ void property_events(World& w,Node& n,const std::string& key) {
 #include "mouse_projection.inc"
 #include "gui_layout.inc"
 #include "textbox_focus.inc"
+#include "virtual_input_bindings.inc"
 #include "animation_bindings.inc"
 // State helpers are authored by the character-state workstream.
 #include "humanoid_states.inc"
@@ -1089,6 +1093,8 @@ int text_service_continue(lua_State*,int);
 bool text_font_index(lua_State*,World&,Node&,const std::string&);
 int instance_index(lua_State* L) {
     Handle* h=checked_handle(L,1); World& w=*h->world; Node& n=*h->node; std::string key=canonical_instance_member(luaL_checkstring(L,2),&n);
+    if(n.class_name=="VirtualInputManager"&&virtual_input_index(L,key))return 1;
+    if(n.class_name=="UserInputService"&&virtual_input_device_index(L,w,n,key))return 1;
     if(key=="DataCost"&&!SourceScheduler::has_capability(L,"LocalUser"))return luaL_error(L,"DataCost: lacking capability LocalUser"),0;
     if(n.id==kSettingsId&&key=="IsUserFeatureEnabled") {
         lua_pushcfunction(L,[](lua_State* S)->int{checked_handle(S,1);luaL_error(S,"User feature '%s' is not configured in this client",luaL_checkstring(S,2));return 0;},"IsUserFeatureEnabled");return 1;
@@ -1518,6 +1524,10 @@ void destroy_roots(World& w,const std::vector<std::string>& roots) {
     std::vector<Json> mutations{Json{{"kind","destroy"},{"ids",selected}}};check_mutation_budget(w,mutations);
     for(const auto& id:selected) {
         Node& node=w.nodes.at(id);emit(w,node,"Destroying");
+        if(node.class_name=="VirtualInputManager") {
+            virtual_playback_stop(w,false);
+            w.input.tape.recording=false;
+        }
         // AnimationTrack instances are VM handles outside the Instance tree.
         // Preserve a final own-character Stop before destroying either the
         // track handle or its Animator invalidates the ownership check.
@@ -1978,6 +1988,7 @@ int instance_newindex(lua_State* L){
         if(n.class_name=="BindableFunction"&&key=="OnInvoke"){set_bindable_callback(L,w,n);return 0;}
         if(n.class_name=="RemoteFunction"&&key=="OnClientInvoke"){set_bindable_callback(L,w,n);return 0;}
         if(input_write(L,w,n,key))return 0;
+        if(virtual_input_write(L,w,n,key))return 0;
         if(collision_group_write(L,w,n,key))return 0;
         if(humanoid_state_write(L,w,n,key))return 0;
         if(humanoid_health_write(L,w,n,key))return 0;
@@ -2713,8 +2724,10 @@ void dispatch_events(lua_State* from,World& world) {
     refresh_joint_events(world);
     refresh_assembly_root_events(world);
     refresh_part_mass_events(world);
+    progress_virtual_input_playback(from,world);
     dispatch_pending_events(from,world);
     dispatch_context_actions(from,world);
+    progress_virtual_input_waiters(from,world);
     // A headless source-scheduler tick, not a renderer or a physics step.
     // Polls may be slower than 60 Hz: report actual elapsed time once, without
     // flooding callbacks with synthetic catch-up frames after an idle period.
