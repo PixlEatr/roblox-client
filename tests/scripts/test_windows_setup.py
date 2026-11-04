@@ -3,6 +3,7 @@ import json
 import os
 from pathlib import Path
 import tempfile
+import subprocess
 from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
@@ -45,7 +46,28 @@ class WindowsSetupTests(unittest.TestCase):
         self.assertEqual(result['INCLUDE'],'C:\\標頭')
         self.assertNotIn('Path',result)
         self.assertNotIn('',result)
-        self.assertIn(str(script),run.call_args.args[0][-1])
+        command=run.call_args.args[0]
+        self.assertIsInstance(command,str)
+        self.assertIn(f'call "{script}"',command)
+        self.assertNotIn('\\"',command)
+
+    @unittest.skipUnless(os.name=='nt','Runs the Windows command processor')
+    def test_real_batch_environment_from_a_path_with_spaces(self):
+        installer=self.root/'Microsoft Visual Studio/Installer/vswhere.exe'
+        installer.parent.mkdir(parents=True);installer.touch()
+        compiler=self.root/'Visual Studio with spaces'
+        script=compiler/'VC/Auxiliary/Build/vcvars64.bat'
+        script.parent.mkdir(parents=True)
+        script.write_text('@echo off\nset ROVE_SETUP_TEST=working\n',encoding='ascii')
+        real_run=subprocess.run
+        def run(command,**kwargs):
+            if isinstance(command,list):
+                return SimpleNamespace(stdout=(str(compiler)+'\r\n').encode('utf-8'))
+            return real_run(command,**kwargs)
+        env={**os.environ,'ProgramFiles(x86)':str(self.root)}
+        with patch('setup_windows.shutil.which',return_value=None),patch('setup_windows.subprocess.run',side_effect=run):
+            result=compiler_environment(env)
+        self.assertEqual(result['ROVE_SETUP_TEST'],'working')
 
     def test_missing_build_tools_has_actionable_error(self):
         with patch('setup_windows.shutil.which',return_value=None),self.assertRaisesRegex(ValueError,r'Desktop development with C\+\+'):

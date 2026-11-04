@@ -46,8 +46,12 @@ def compiler_environment(env):
     # Only the installer-discovered batch file goes into this shell command;
     # user arguments are passed directly to Python in main(), never to cmd.
     if any(c in str(script) for c in '"%\r\n'):raise ValueError('Unsupported Visual Studio installation path.')
-    result=subprocess.run([env.get('COMSPEC',r'C:\Windows\System32\cmd.exe'),'/d','/u','/s','/c',
-        f'call "{script}" >nul && set'],capture_output=True,check=True,env=env)
+    command_processor=env.get('COMSPEC',r'C:\Windows\System32\cmd.exe')
+    if any(c in command_processor for c in '"%\r\n'):raise ValueError('Unsupported command processor path.')
+    # cmd parses quotes differently from the C runtime. Passing this as a list
+    # would turn the script's quotes into backslash-quotes via list2cmdline.
+    command=f'"{command_processor}" /d /u /v:off /s /c "call "{script}" >nul && set"'
+    result=subprocess.run(command,capture_output=True,check=True,env=env)
     for line in result.stdout.decode('utf-16-le').splitlines():
         name,separator,value=line.partition('=')
         if separator and name:
