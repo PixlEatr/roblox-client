@@ -6,9 +6,9 @@ Start with the [setup guide](setup.md). Build and run through `rove.py` so new t
 
 | Folder | Purpose |
 | --- | --- |
-| `scripts/` | Python launcher, sessions, replication, physics, and platform helpers |
-| `runtime/` | C++ Luau host and engine bindings |
-| `rust-client/` | Persistent Rust runtime supervisor |
+| [`scripts/`](../scripts/README.md) | Python launcher, sessions, replication, physics, and platform helpers; the module guide links to each area |
+| [`runtime/`](../runtime/README.md) | C++ Luau host and engine bindings |
+| [`rust-client/`](../rust-client/README.md) | Persistent Rust runtime supervisor |
 | `animation-codec/` | Animation data decoder |
 | `ui/` | The single browser frontend, also used by the Mac wrapper |
 | `tests/` | Offline tests, fixtures, and preview harness |
