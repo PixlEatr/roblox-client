@@ -17,6 +17,10 @@ Start with the [setup guide](setup.md). Build and run through `rove.py` so new t
 
 Tests stay in `tests/`; new user-facing instructions belong in `docs/`. Keep root entry points limited to `rove.py` and the Windows shortcut `rove.cmd`.
 
+An existing research folder may also contain older `.command`/`.cmd` shortcuts, `ida/`, `references/`, `dist/`, and generated files. Those are local tools or artifacts, not additional setup steps. Use `rove.py` as the common entry point. The published source has a smaller root; local research and account data stay in place so existing tools can still find them.
+
+Historical notes in local research folders live in `docs/archive/`. Start with the [documentation index](README.md) for current guides.
+
 ## Checks
 
 Run `python rove.py check` for the focused portability suite. [tests/README.md](../tests/README.md) describes the broader suites and known failures. They are not equivalent to a live-server test.

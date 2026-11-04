@@ -20,9 +20,7 @@ Windows and Linux start in the terminal. macOS opens the existing browser UI. Us
 
 ## Find your way
 
-- [Setup and troubleshooting](docs/setup.md)
-- [Project map and development](docs/development.md)
-- [Runtime and optional tools](runtime/README.md)
+- [Guides: setup, troubleshooting, project map, and tests](docs/README.md)
 - [Third-party credits](THIRD_PARTY.md)
 
 The browser workspace is in `ui/`; runtime code is in `runtime/` and `rust-client/`; Python session code is in `scripts/`; offline checks and fixtures are in `tests/`. You only need `rove.py` to get started.
