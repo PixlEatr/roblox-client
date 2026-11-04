@@ -39,12 +39,16 @@ from physics_runtime_prediction import own_character_monitor_snapshot
 from runtime_diagnostics import CoalescedPrivateSnapshotWriter
 from physics_trial_finalization import finalize_physics_reports
 from client_session_lease import SessionLeaseBusy, acquire_session_lease
+from session_diagnostics import current, session_logging
+from session_awake import prevent_idle_sleep
 
 
 def parse_args(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--refresh", action="store_true")
     parser.add_argument("--duration", type=int, default=12, help="Session seconds; 0 runs until quit or disconnection")
+    parser.add_argument('--log-level',choices=('verbose','normal','off'),default='verbose',
+                        help='Session timeline in outputs/logs (default: verbose)')
     parser.add_argument("--protocol-sync", action="store_true", help="Also send the recovered version/player-info packet")
     parser.add_argument("--luau-range", action="store_true", help="Negotiate the existing static reader's bytecode versions 13–14")
     parser.add_argument("--ticket", action="store_true", help="Send the issued account ticket and remaining normal connection packets")
@@ -150,7 +154,8 @@ def _create_physics_driver(args, script_runtime, walk_source=None):
         script_runtime.movement_preview = physics_trial.prediction
         if args.physics:
             from owned_part_poses import OwnedPartPoses
-            physics_trial.authored_parts = OwnedPartPoses()
+            physics_trial.authored_parts = OwnedPartPoses(
+                simulate=os.environ.get('RCR_OWNED_PART_GRAVITY') == '1')
             script_runtime.authored_part_poses = physics_trial.authored_parts
     return physics_trial, walk_exercise, report_key
 
@@ -169,14 +174,17 @@ def _run_session(args, *, ping_stats_provider=None, ping_status_provider=None, r
     early_sources = [(path, read_source(path)) for path in args.early_script]
     startup_labels = set(args.script+args.early_script)
     if args.refresh:
-        with redirect_stdout(io.StringIO()):
+        with current().stage('allocation.refresh'), redirect_stdout(io.StringIO()):
             result = refresh_allocation()
         if result != 0:
             allocation_report = json.loads((ROOT / 'outputs/gamejoin/allocation-check.json').read_text())
             if allocation_report.get('user_privacy_blocks_join'):
                 raise SessionError('Roblox refused the join: User privacy does not allow join.')
             raise SessionError("A fresh ready allocation was not issued")
-    session = NativeSession(duration=args.duration, capabilities=0x100000 if args.luau_range else 0)
+    with current().stage('allocation.load'):
+        session = NativeSession(duration=args.duration, capabilities=0x100000 if args.luau_range else 0)
+    if current().enabled:
+        session.report['diagnostic_log'] = str(current().path.relative_to(ROOT))
     from remote_client_rpc import RemoteClientRpc
     remote_client_rpc = RemoteClientRpc(session.capabilities) if args.persistent_scripts and args.luau_range else None
     from remote_server_events import RemoteServerEvents
@@ -288,10 +296,12 @@ def _run_session(args, *, ping_stats_provider=None, ping_status_provider=None, r
         session.report['framework_init_rpc'] = framework.summary()
 
     def milestone(name):
-        if args.progress and name not in milestones:
+        if name not in milestones:
             milestones.add(name)
-            print(json.dumps({'milestone': name, 'place_id': session.place,
-                              'seconds': round(time.monotonic() - session.started, 3)}), flush=True)
+            current().emit('game.milestone',name=name,session_s=round(time.monotonic()-session.started,3))
+            if args.progress:
+                print(json.dumps({'milestone': name, 'place_id': session.place,
+                                  'seconds': round(time.monotonic() - session.started, 3)}), flush=True)
 
     def flush_markers(client):
         for reply in markers.drain(world):
@@ -436,7 +446,8 @@ def _run_session(args, *, ping_stats_provider=None, ping_status_provider=None, r
                 milestone('client_environment_verification_unimplemented')
             else:
                 try:
-                    response = bytecode_auth.handle(payload)
+                    with current().stage('game.signed_program'):
+                        response = bytecode_auth.handle(payload)
                 except BytecodeAuthError as error:
                     client.report['client_environment_auth'] = bytecode_auth.summary()
                     client.report['client_environment_challenge_handling'] = 'failed'
@@ -528,7 +539,9 @@ def _run_session(args, *, ping_stats_provider=None, ping_status_provider=None, r
     def tick(client, now):
         nonlocal startup_scripts_ok, physics_last_tick, last_runtime_diagnostics
         nonlocal locomotion_source_token
-        ping_handler.flush(client)
+        remote_event_budget = 16
+        with current().stage('game.ping_flush'):
+            ping_handler.flush(client)
         if remote_client_rpc is not None:
             remote_client_rpc.observe(world)
             for _ in range(min(16, len(script_runtime.remote_client_replies))):
@@ -536,25 +549,29 @@ def _run_session(args, *, ping_stats_provider=None, ping_status_provider=None, r
                 script_runtime.remote_client_replies.popleft()
             client.report['remote_client_callbacks'] = remote_client_rpc.summary()
         if remote_server_events is not None:
-            remote_server_events.flush(world, script_runtime.remote_server_events, client.send,
-                                       unreliable_transport=client.send_unreliable)
+            remote_event_budget -= remote_server_events.flush(
+                world, script_runtime.remote_server_events, client.send,
+                unreliable_transport=client.send_unreliable)
             client.report['remote_server_events'] = remote_server_events.summary()
         if remote_server_rpc is not None:
             remote_server_rpc.flush(world, script_runtime, client.send)
             client.report['remote_server_rpc'] = remote_server_rpc.summary()
         if chat_console is not None:
-            chat_console.tick(client, world)
+            with current().stage('game.chat'):
+                chat_console.tick(client, world)
         if clock is not None:
             payload = clock.due(now, wire_clock.microseconds())
             if payload is not None:
                 client.send_unreliable(CLOCK_CHANNEL, payload, application=CLOCK_APPLICATION)
                 client.report.update(clock.public_report())
         if console is not None:
-            console.poll()
+            with current().stage('game.console'):
+                console.poll()
             client.report['luau_console_requests'] = console.requests
         if args.persistent_scripts:
             try:
-                response=script_runtime.poll_background()
+                with current().stage('game.luau_scheduler'):
+                    response=script_runtime.poll_background()
                 if locomotion_animation is not None and locomotion_source_token is not None:
                     animation_result = script_runtime.take_background_source_result(
                         locomotion_source_token)
@@ -578,6 +595,7 @@ def _run_session(args, *, ping_stats_provider=None, ping_status_provider=None, r
                     client.report['runtime_diagnostics_error_type'] = diagnostics_writer.error_type
                 client.report['luau_runtime']={'backend':'rust-persistent','healthy':not script_runtime.failure,**script_runtime.stats}
             except Exception as error:
+                current().exception('game.luau_error',error)
                 startup_scripts_ok=False
                 write_private(ROOT/'secrets/luau-persistent-failure.json',
                               {'error_type':type(error).__name__,'error':str(error),
@@ -590,6 +608,16 @@ def _run_session(args, *, ping_stats_provider=None, ping_status_provider=None, r
                 if physics_trial is not None and script_runtime.failure:
                     physics_trial.stop('shared_script_runtime_failed')
 
+        # A completed callback can produce an event during this tick. Use any
+        # remaining budget now, preserving FIFO and the total 16-attempt limit.
+        # Keep transport errors outside the Luau-error handler above.
+        if (remote_server_events is not None and remote_event_budget
+                and script_runtime.remote_server_events and not client.finished):
+            remote_server_events.flush(
+                world, script_runtime.remote_server_events, client.send,
+                unreliable_transport=client.send_unreliable, max_events=remote_event_budget)
+            client.report['remote_server_events'] = remote_server_events.summary()
+
         if property_acks is not None and not client.finished:
             property_acks.flush(client.send)
             client.report['property_acknowledgments'] = property_acks.summary()
@@ -598,10 +626,11 @@ def _run_session(args, *, ping_stats_provider=None, ping_status_provider=None, r
             now = time.monotonic()
             delta = min(.25, max(0., now-physics_last_tick)) if physics_last_tick is not None else 0.
             physics_last_tick = now
-            trial_report = physics_trial.tick(
-                world=world, own_user_id=join['UserId'], now=now, delta=delta,
-                timestamp_ms=wire_clock.physics_milliseconds(), connected=not client.finished,
-                send_unreliable=client.send_unreliable)
+            with current().stage('game.physics'):
+                trial_report = physics_trial.tick(
+                    world=world, own_user_id=join['UserId'], now=now, delta=delta,
+                    timestamp_ms=wire_clock.physics_milliseconds(), connected=not client.finished,
+                    send_unreliable=client.send_unreliable)
             client.report['wire_clock'] = wire_clock.report()
             client.report[physics_report_key] = {
                 key: value for key, value in trial_report.items() if key != 'local_prediction'}
@@ -610,7 +639,7 @@ def _run_session(args, *, ping_stats_provider=None, ping_status_provider=None, r
                     world, trial_report.get('local_prediction'),
                     legacy_pv_enabled=server_features.get('DebugAdaptivePVCompressor') == 'false',
                     send_unreliable=client.send_unreliable, track_delivery=True,
-                    send_reliable=client.send)
+                    send_reliable=client.send, now=now)
             if locomotion_animation is not None:
                 client.report['local_locomotion_animation'] = locomotion_animation.tick(
                     world=world, own_user_id=join['UserId'], physics_report=trial_report,
@@ -638,7 +667,9 @@ def _run_session(args, *, ping_stats_provider=None, ping_status_provider=None, r
                             'server_animation_confirmed':False}
                 try:
                     posed = animation_joint_model.tick(world=world, physics_report=trial_report,
-                        entries=animation_entries, now=time.monotonic())
+                        entries=animation_entries, now=time.monotonic(),
+                        snapshot=(script_runtime.movement_preview.bridge.animation_snapshot()
+                                  if script_runtime.movement_preview is not None else None))
                     script_runtime.local_animation_joint_pose = posed
                     if posed.get('engine_poses') is not None:
                         script_runtime.queue_engine_poses(**posed['engine_poses'])
@@ -699,7 +730,7 @@ def _run_session(args, *, ping_stats_provider=None, ping_status_provider=None, r
                                        capability_bits=session.capabilities)
             script_runtime.chat_bridge = chat_console
         observation_scope = telemetry.integrity.observe_containers() if telemetry is not None else nullcontext()
-        with observation_scope:
+        with observation_scope, prevent_idle_sleep(session.report), current().stage('transport.loop'):
             result = session.run(ready, packet, report_name=report_name,
                                  on_tick=tick if clock is not None or console is not None or args.persistent_scripts or chat_console is not None or physics_trial is not None else None)
     finally:
@@ -757,10 +788,17 @@ def main(*, ping_stats_provider=None, ping_status_provider=None, report_name='ga
     args = parse_args()
     # Isolated validation runs still use the same account. Their output root
     # must not give them a separate lock from the ordinary terminal client.
-    with acquire_session_lease(ROOT if account_root is None else account_root):
-        return _run_session(args, ping_stats_provider=ping_stats_provider,
-                            ping_status_provider=ping_status_provider,
-                            report_name=report_name)
+    with session_logging(ROOT,level=args.log_level,duration_s=args.duration,
+                         physics=args.physics,persistent_scripts=args.persistent_scripts,
+                         walk_for_minute=args.walk_for_minute,
+                         experimental_physics_walk=args.experimental_physics_walk) as diagnostics:
+        with diagnostics.stage('account.acquire_lease'), acquire_session_lease(ROOT if account_root is None else account_root):
+            with diagnostics.stage('session.setup'):
+                result = _run_session(args, ping_stats_provider=ping_stats_provider,
+                                      ping_status_provider=ping_status_provider,
+                                      report_name=report_name)
+            diagnostics.emit('process.exiting',exit_code=result)
+            return result
 
 
 if __name__ == "__main__":

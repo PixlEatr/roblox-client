@@ -47,9 +47,7 @@ def _probe():
     for context in contexts:
         result = run_source('return 17', timeout_ms=1000, model_context=context)
         if result.get('ok') is not True or result.get('values') != [17]:
-            return {'ok': False, 'reason': 'runtime_probe_failed',
-                    'probe': 'source' if context is None else 'offline_context',
-                    'error': str(result.get('error') or 'Unexpected probe result')[:300]}
+            return {'ok': False, 'reason': 'runtime_probe_failed'}
     return {'ok': True, 'network_used': False, 'runtime_probes': 2}
 
 

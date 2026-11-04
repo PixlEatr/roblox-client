@@ -1,5 +1,7 @@
 // Local VM compatibility helpers. These do not access another process or
 // elevate script permissions. File APIs below use a bounded per-VM workspace.
+Closure* local_lclosure(lua_State* L,int index);
+int debug_integer(lua_State* L,int index,int minimum);
 int compat_getinfo(lua_State* L) {
     int level=lua_isfunction(L,1)?-lua_gettop(L):luaL_checkinteger(L,1);
     if(!lua_isfunction(L,1)&&level<0){luaL_error(L,"stack level must be nonnegative");return 0;}
@@ -14,28 +16,29 @@ int compat_getinfo(lua_State* L) {
     lua_pushvalue(L,function);lua_setfield(L,-2,"func");return 1;
 }
 int compat_upvalue(lua_State* L) {
-    luaL_checktype(L,1,LUA_TFUNCTION);int index=luaL_checkinteger(L,2);
-    if(index<1){luaL_error(L,"upvalue index must be positive");return 0;}
-    if(!lua_getupvalue(L,1,index))lua_pushnil(L);return 1;
+    auto* closure=local_lclosure(L,1);int index=debug_integer(L,2,1);
+    TValue function;setclvalue(L,&function,closure);luaA_pushvalue(L,&function);
+    if(!lua_getupvalue(L,-1,index))return luaL_error(L,"upvalue index out of range"),0;
+    return 1;
 }
 int compat_upvalues(lua_State* L) {
-    luaL_checktype(L,1,LUA_TFUNCTION);lua_newtable(L);
-    for(int i=1;lua_getupvalue(L,1,i);++i)lua_rawseti(L,-2,i);
+    auto* closure=local_lclosure(L,1);TValue function;setclvalue(L,&function,closure);luaA_pushvalue(L,&function);
+    int target=lua_gettop(L);lua_newtable(L);
+    for(int i=1;lua_getupvalue(L,target,i);++i)lua_rawseti(L,-2,i);
     return 1;
 }
 int compat_setupvalue(lua_State* L) {
-    luaL_checktype(L,1,LUA_TFUNCTION);int index=luaL_checkinteger(L,2);luaL_checkany(L,3);
-    if(!lua_isLfunction(L,1)){luaL_error(L,"native closure upvalues are not writable");return 0;}
-    if(index<1){luaL_error(L,"upvalue index must be positive");return 0;}
+    auto* closure=local_lclosure(L,1);int index=debug_integer(L,2,1);luaL_checkany(L,3);
+    TValue function;setclvalue(L,&function,closure);luaA_pushvalue(L,&function);
     lua_pushvalue(L,3);
-    if(!lua_setupvalue(L,1,index)){luaL_error(L,"upvalue index out of range");return 0;}
+    if(!lua_setupvalue(L,-2,index)){luaL_error(L,"upvalue index out of range");return 0;}
     lua_setsafeenv(L,LUA_GLOBALSINDEX,false);return 0;
 }
 int compat_rawmetatable(lua_State* L) {
     luaL_checkany(L,1);if(!lua_getmetatable(L,1))lua_pushnil(L);return 1;
 }
 int compat_setmetatable(lua_State* L) {
-    luaL_checktype(L,1,LUA_TTABLE);
+    luaL_checkany(L,1);
     if(!lua_isnil(L,2))luaL_checktype(L,2,LUA_TTABLE);
     lua_settop(L,2);lua_setmetatable(L,1);lua_pushvalue(L,1);return 1;
 }
@@ -48,6 +51,7 @@ int compat_setreadonly(lua_State* L) {
 }
 int compat_registry(lua_State* L) {lua_pushvalue(L,LUA_REGISTRYINDEX);return 1;}
 #include "memory_categories.inc"
+#include "filesystem_compat.inc"
 void install_local_compat(lua_State* L) {
     // Retain Luau's genuine info/traceback implementations when extending the
     // debug surface. A fresh table discarded them from every source VM.
@@ -75,11 +79,12 @@ void install_local_compat(lua_State* L) {
     ;
     std::string bytecode=Luau::compile(source);
     if(luau_load(L,"=local-workspace",bytecode.data(),bytecode.size(),0)!=0)lua_error(L);
-    lua_call(L,0,0);
+    mark_executor_closure(L,-1);lua_call(L,0,0);
+    install_filesystem_compat(L);
     const char* drawing=
 #include "drawing_compat.inc"
     ;
     bytecode=Luau::compile(drawing);
     if(luau_load(L,"=drawing-compat",bytecode.data(),bytecode.size(),0)!=0)lua_error(L);
-    lua_call(L,0,0);
+    mark_executor_closure(L,-1);lua_call(L,0,0);
 }

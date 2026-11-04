@@ -203,11 +203,13 @@ class OwnedIsrSender:
                 'scope': 'owned_isolated_parts', 'application': 4, 'channel': 5}
 
     def tick_prediction(self, world, prediction, *, legacy_pv_enabled, send_unreliable,
-                        track_delivery=False, send_reliable=None):
+                        track_delivery=False, send_reliable=None, now=None):
         # The physics driver reports None while identity/geometry is warming
         # up. No local clock exists then, so retain the authored queue.
         clock = (prediction or {}).get('simulation_step_clock')
         if clock is not None:
+            if now is not None:
+                self.queue.advance(world, now)
             self.send(world, local_step=clock['step'], legacy_pv_enabled=legacy_pv_enabled,
                       send_unreliable=send_unreliable, track_delivery=track_delivery,
                       send_reliable=send_reliable)

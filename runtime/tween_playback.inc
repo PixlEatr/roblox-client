@@ -191,7 +191,7 @@ int tween_create(lua_State* L) {
             if(!current||!tween_shape(*current,goal))throw std::runtime_error("Tween goal must match an existing supported property datatype");
             if(const Json* descriptor=property_descriptor(*target->node,key))if(!descriptor->value("writable",false))
                 throw std::runtime_error("Tween goal property is read-only");
-            if(key=="ClassName"||key=="JobId"||display_property(w,*target->node,key))throw std::runtime_error("Tween goal property is read-only");
+            if(key=="ClassName"||key=="JobId"||display_readonly_property(w,*target->node,key))throw std::runtime_error("Tween goal property is read-only");
             state.goals[key]=std::move(goal);lua_pop(L,1);
         }
         Node* node=animation_node(w,"Tween","Tween");

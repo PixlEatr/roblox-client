@@ -5,6 +5,7 @@ changes decoded replication/world state and does not construct or send packets.
 The horizontal integrator is shared with ``movement_controller.Controller``.
 """
 import math
+import json
 
 from movement_controller import Controller, MAX_STEP_SECONDS
 from movement_collision import rotation_matrix
@@ -23,6 +24,8 @@ from physics_forces import predicted_assembly_mass, MASS_SOURCES, velocity_servo
 from physics_velocity_servo import solve_movers
 from physics_target_sweep import curve_reaches_target
 from physics_linear_velocity import validated_constraint, constraint_acceleration
+from collision_groups import CollisionContext, part_group
+from no_collision_constraints import topology_records
 
 
 def _cframe_position(value):
@@ -175,6 +178,15 @@ class OwnCharacterPhysicsController:
                 or not math.isfinite(max_step_height) or max_step_height < 0):
             raise ValueError('max_step_height must be finite and non-negative')
         self.geometry = geometry if geometry is not None else GroundGeometry((), ())
+        self._unfiltered_geometry = self.geometry
+        self._collision_context = None
+        self._root_collision_group = 'Default'
+        self._root_collision_error = None
+        self._collision_error = None
+        self._collision_filter_key = None
+        self._collision_overlay = ()
+        self._collision_removed = ()
+        self._collision_overlay_signature = ''
         self.gravity = gravity
         self._dynamic_foot_offset = foot_offset is None
         self._fallback_foot_offset = DEFAULT_FOOT_OFFSET if foot_offset is None else foot_offset
@@ -217,6 +229,15 @@ class OwnCharacterPhysicsController:
         self.character_id = character_id
         self.humanoid_id = humanoid.get('id') if humanoid else None
         self.root_id = root.get('id') if root else None
+        self._collision_overlay=topology_records(snapshot.get('nodes',()))
+        self._collision_removed=tuple(sorted(snapshot.get('removed_physics_instances',())))
+        self._collision_overlay_signature=json.dumps((self._collision_overlay,self._collision_removed),sort_keys=True)
+        try:
+            self._root_collision_group = part_group(root.get('properties', {})) if root else 'Default'
+            self._root_collision_error = None
+        except ValueError as exc:
+            self._root_collision_error = str(exc)
+        self._apply_collision_filter()
         if replaced or root_replaced or initial:self._motion_topology_history.clear()
         self._motion_topology_history.update(received_motion_joint_parts(snapshot))
         self._motion_parts = received_character_motion_parts(
@@ -414,7 +435,36 @@ class OwnCharacterPhysicsController:
         """Replace supported collision geometry without inferring missing ground."""
         if not isinstance(geometry, GroundGeometry):
             raise ValueError('geometry must be GroundGeometry')
-        self.geometry = geometry
+        self._unfiltered_geometry = geometry
+        self._apply_collision_filter()
+
+    def update_collision_context(self, context):
+        if not isinstance(context, CollisionContext):
+            raise ValueError('collision context must be CollisionContext')
+        self._collision_context = context
+        self._apply_collision_filter()
+
+    def _apply_collision_filter(self):
+        key=(id(self._unfiltered_geometry),id(self._collision_context),
+             self._root_collision_group,self._root_collision_error,self._collision_overlay_signature)
+        if key==self._collision_filter_key:return
+        self._collision_filter_key=key
+        self._last_report=None
+        self._collision_error=self._root_collision_error
+        self.geometry=self._unfiltered_geometry
+        if self._collision_context is not None and self._collision_error is None:
+            try:
+                allowed=self._collision_context.allowed_sources(self._root_collision_group,
+                                                                self._collision_overlay,self._collision_removed)
+                self.geometry=GroundGeometry(tuple(c for c in self._unfiltered_geometry.colliders
+                                                  if c.source in allowed),
+                                             self._unfiltered_geometry.unsupported)
+                if self._ground_source is not None and self._ground_source not in allowed:
+                    # Do not carry/jump from support which has just stopped colliding.
+                    self.grounded=False;self._ground_source=None
+                    self._platform_carry_pending=False
+            except ValueError as exc:
+                self._collision_error=str(exc)
 
     def update_environment(self, *, water_regions=(), ladder_regions=(), seat=None,
                            timestamp=None):
@@ -788,6 +838,7 @@ class OwnCharacterPhysicsController:
             self.last_reason = None
 
     def _request_jump(self, intent):
+        if self._collision_error is not None:return 'collision_group_state_unavailable'
         if self._platform_standing():return 'platform_standing'
         if not self._state_enabled.get('Jumping', True):
             return 'jump_state_disabled'
@@ -945,6 +996,22 @@ class OwnCharacterPhysicsController:
         if timestamp is not None and (isinstance(timestamp, bool) or not isinstance(timestamp, (int, float)) or not math.isfinite(timestamp)):
             raise ValueError('timestamp must be finite')
         dt = float(dt)
+        if self._collision_error is not None:
+            # Preserve pose and momentum while the received rules are unknown.
+            # Simulating against an empty map would silently fall through it.
+            self._last_timestamp=timestamp
+            self._last_report={
+                'mode':'local_prediction','source':'authored_movement_intentions',
+                'server_confirmed':False,'network_packets_sent':0,
+                'character_id':self.character_id,'predicted_state':None,
+                'received_state_modified':False,'timestamp':timestamp,
+                'simulated_seconds':self.simulated_seconds,
+                'last_reason':'collision_group_state_unavailable',
+                'collision_filter':{'model':'root_box_group','group':self._root_collision_group,
+                                    'error':self._collision_error},
+                'accepted_intents':self.accepted,'rejected_intents':self.rejected,
+            }
+            return self._last_report
         move_to_remaining = max(0., 8. - self._move_to_elapsed)
         if self.target is not None:
             self._move_to_elapsed += dt
@@ -1369,6 +1436,9 @@ class OwnCharacterPhysicsController:
             'foot_offset': self.foot_offset,
             'foot_offset_origin': self.foot_offset_origin,
             'body_collision': dict(self._body_collision),
+            'collision_filter': {'model':'root_box_group','group':self._root_collision_group,
+                                 'applied':self._collision_context is not None,
+                                 'colliders':len(self.geometry.colliders),'error':None},
             'jump_model': 'grounded_ballistic_subset',
             'accepted_intents': self.accepted, 'rejected_intents': self.rejected,
             'last_reason': self.last_reason,

@@ -84,6 +84,17 @@ int camera_project(lua_State* L) {
         lua_pushvector(L,float(x),float(y),float(depth));lua_pushboolean(L,visible);return 2;
     }catch(const std::exception& e){luaL_error(L,"camera projection: %s",e.what());return 0;}
 }
+// Perspective direction from full-surface pixels. Mouse and Camera use the
+// same lens and rotation; their ray origins follow different public contracts.
+FrameVector camera_pixel_direction(Handle& h,const Json& vp,const CFrameValue& cf,double x,double y) {
+    if(!std::isfinite(x)||!std::isfinite(y))throw std::runtime_error("ray coordinates must be finite");
+    double focal=camera_focal_length(h,vp);
+    FrameVector local={(x-vp["size"][0].get<double>()/2)/focal,(vp["size"][1].get<double>()/2-y)/focal,-1};
+    auto direction=frame_rotate(cf.r,local);double length=std::hypot(direction[0],direction[1],direction[2]);
+    if(!std::isfinite(length)||length==0)throw std::runtime_error("camera transform has no finite ray direction");
+    for(double& component:direction)component/=length;
+    return direction;
+}
 int camera_point_to_ray(lua_State* L) {
     auto* h=checked_camera(L);double x=luaL_checknumber(L,2),y=luaL_checknumber(L,3),depth=luaL_optnumber(L,4,0);
     bool screen=lua_toboolean(L,lua_upvalueindex(1));
@@ -92,11 +103,7 @@ int camera_point_to_ray(lua_State* L) {
         const auto& vp=camera_viewport(*h->world,*h->node);auto cf=camera_frame(L,*h);
         x+=vp["device_safe_insets"][0].get<double>();y+=vp["device_safe_insets"][1].get<double>();
         if(screen){x+=vp["gui_inset"][0].get<double>();y+=vp["gui_inset"][1].get<double>();}
-        double focal=camera_focal_length(*h,vp);
-        FrameVector local={(x-vp["size"][0].get<double>()/2)/focal,(vp["size"][1].get<double>()/2-y)/focal,-1};
-        auto direction=frame_rotate(cf.r,local);double length=std::hypot(direction[0],direction[1],direction[2]);
-        if(!std::isfinite(length)||length==0)throw std::runtime_error("camera transform has no finite ray direction");
-        for(int i=0;i<3;++i)direction[i]/=length;
+        auto direction=camera_pixel_direction(*h,vp,cf,x,y);
         double forward=-(direction[0]*cf.r[2]+direction[1]*cf.r[5]+direction[2]*cf.r[8]);
         double origin_depth=depth-camera_near_plane_z(*h)/forward;
         if(!std::isfinite(forward)||forward<=0||!std::isfinite(origin_depth))throw std::runtime_error("camera transform has no finite near-plane intersection");

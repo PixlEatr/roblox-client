@@ -1,11 +1,16 @@
 #!/usr/bin/env python3
 """Local Rove launcher; account credentials stay in the existing backend file."""
+if __name__ == '__main__':
+    from start_ui import prepare_launcher
+    prepare_launcher()
+
 import argparse
 from collections import deque
 import hmac
 from http.server import ThreadingHTTPServer
 import json
 from pathlib import Path
+import re
 import secrets
 import subprocess
 from platform_process import group_options
@@ -39,14 +44,22 @@ class AccountAPI:
 
     @property
     def session(self):
-        if self._session is None:self._session = RobloxSession()
-        return self._session
+        with self.lock:
+            if self._session is None: self._session=RobloxSession()
+            return self._session
+
+    @session.setter
+    def session(self, value): self._session=value
+
+    def reset_account(self):
+        with self.lock:
+            self._session=None; self.cache.clear()
 
     def request(self, host, path, method='GET', payload=None):
         result = self.session.request(host, path, method, payload, csrf_retry=method in ('POST','DELETE'))
         if result['http_status'] not in (200,201,204) or result['challenge_present']:
             if result['http_status'] == 401:
-                raise SessionError('The saved account session expired. Update secrets/roblox-cookie.txt and restart the launcher.')
+                raise SessionError('Your saved account session expired. Open Setup to reconnect your account.')
             raise SessionError(f'Roblox could not load this section (HTTP {result["http_status"]}).')
         return result['data']
 
@@ -224,7 +237,7 @@ class GameController:
     def status(self):
         with self.lock:
             return {'state':self.state, 'error':self.error, 'game':self.game,
-                    'events':list(self.events), 'editorUrl':'/#/workspace' if self.state=='playing' else None}
+                    'events':list(self.events), 'editorUrl':'/workspace' if self.state=='playing' else None}
 
     def play(self, target, game=None):
         if target == 'saved-private':
@@ -329,6 +342,7 @@ class Launcher:
         self.surface.key=self.key
 
     def close(self):
+        self.surface.stop_rendering()
         self.surface.close()
         self.controller.close()
         self.server.shutdown()
@@ -354,11 +368,16 @@ class Handler(RuntimeHandler):
         self.send_header('Referrer-Policy', 'no-referrer')
         self.send_header('Cross-Origin-Resource-Policy', 'same-origin')
         self.send_header('Content-Security-Policy', "default-src 'self'; img-src 'self' https://*.rbxcdn.com; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src https://css.rbxcdn.com; connect-src 'self' https://*.rbxcdn.com; frame-ancestors 'none'; base-uri 'none'; form-action 'none'")
-        self.end_headers()
-        self.wfile.write(body)
+        try:
+            self.end_headers()
+            if self.command!='HEAD':self.wfile.write(body)
+        except (BrokenPipeError,ConnectionResetError):pass
 
     def valid_host(self):
         return self.headers.get('Host') in (f'127.0.0.1:{self.app.port}', f'localhost:{self.app.port}')
+
+    def do_HEAD(self):
+        return self.do_GET()
 
     def do_GET(self):
         if self.path.startswith('/api/runtime/'):
@@ -368,15 +387,22 @@ class Handler(RuntimeHandler):
             return self.reply(403, {'error':'Invalid local host'})
         parsed = urlsplit(self.path)
         files = {'/':('index.html','text/html; charset=utf-8'),
+                 '/workspace':('index.html','text/html; charset=utf-8'),
+                 '/workspace/':('index.html','text/html; charset=utf-8'),
                  '/app.js':('app.js','text/javascript; charset=utf-8'),
                  '/avatar-viewer.js':('avatar-viewer.js','text/javascript; charset=utf-8'),
                  '/avatar-ui.js':('avatar-ui.js','text/javascript; charset=utf-8'),
                  '/account-pages.js':('account-pages.js','text/javascript; charset=utf-8'),
                  '/sessions-ui.js':('sessions-ui.js','text/javascript; charset=utf-8'),
+                 '/setup-ui.js':('setup-ui.js','text/javascript; charset=utf-8'),
+                 '/setup-ui.css':('setup-ui.css','text/css; charset=utf-8'),
                  '/style.css':('style.css','text/css; charset=utf-8')}
-        for name in ('workspace.js','script-editor.js','input.js','world-viewer.js','chat.js'):
-            files['/'+name]=(name,'text/javascript; charset=utf-8')
-        files['/workspace.css']=('workspace.css','text/css; charset=utf-8')
+        if re.fullmatch(r'/[A-Za-z0-9][A-Za-z0-9_.-]*\.(?:js|css)',parsed.path):
+            name=parsed.path[1:]
+            asset=ASSETS/name
+            if asset.is_symlink() or not asset.is_file():
+                return self.reply(404,{'error':'UI file not found. Restart Rove after updating.'})
+            files[parsed.path]=(name,'text/javascript; charset=utf-8' if name.endswith('.js') else 'text/css; charset=utf-8')
         files['/keyboard-codes.json']=('keyboard-codes.json','application/json')
         for asset in ('navigation.svg','common.svg','games.svg','actions.svg','wordmark.svg','chevron.svg'):
             files['/assets/'+asset] = ('assets/'+asset, 'image/svg+xml')
@@ -389,11 +415,14 @@ class Handler(RuntimeHandler):
             return self.reply(403, {'error':'Reload the launcher to reconnect.'})
         try:
             query=parse_qs(parsed.query)
+            if parsed.path=='/api/setup':
+                from launcher_setup import readiness
+                return self.reply(200,readiness(ROOT))
             if parsed.path=='/api/sessions':
                 connected=self.app.surface.connected()
                 status=self.app.controller.status()
                 return self.reply(200,{'sessions':[{'id':'current','connected':connected,
-                    'url':self.app.url+'#/workspace','editorUrl':self.app.url+'#/workspace',
+                    'url':self.app.url+'workspace','editorUrl':self.app.url+'workspace',
                     'name':((status.get('game') or {}).get('name') if status.get('state') in ('joining','playing') else None) or 'Terminal session'}],
                     'singleAccount':True})
             if parsed.path.startswith('/api/pages/'):
@@ -450,12 +479,23 @@ class Handler(RuntimeHandler):
             return self.reply(403, {'error':'Invalid local request'})
         try:
             length = int(self.headers.get('Content-Length','0'))
-            if not 0 < length <= 4096:
+            path = urlsplit(self.path).path
+            if not 0 < length <= (65536 if path=='/api/setup/account' else 4096):
                 raise ValueError('Invalid request size')
             data = json.loads(self.rfile.read(length))
             if not isinstance(data, dict):
                 raise ValueError('Invalid request')
             path = urlsplit(self.path).path
+            if path=='/api/setup/account':
+                if set(data)!={'session'}: raise ValueError('Invalid account request')
+                if self.app.controller.status().get('state') not in ('idle','error'):
+                    raise ValueError('Leave the current game before changing accounts.')
+                from launcher_setup import connect_account
+                try: result=connect_account(ROOT,data['session'])
+                except RuntimeError:
+                    raise ValueError('Leave the current game before changing accounts.') from None
+                self.app.api.reset_account()
+                return self.reply(200,result)
             if path.startswith('/api/actions/'):
                 from launcher_account_pages import message_action,trade_action,community_action,purchase_quote,purchase
                 action=path.rsplit('/',1)[-1]
@@ -474,6 +514,8 @@ class Handler(RuntimeHandler):
             self.reply(404, {'error':'Not found'})
         except (ValueError, SessionError) as error:
             self.reply(400, {'error':str(error)})
+        except OSError:
+            self.reply(500,{'error':'Could not access local account storage. Check the project folder permissions.'})
 
 
 def main():

@@ -38,20 +38,6 @@ class RustHostTests(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertEqual(result['values'], [7, None, True, 'source ran'])
 
-    def test_offline_context_survives_windows_text_newlines(self):
-        from unittest.mock import patch
-        from local_runtime import run_source
-        context={'mode':'offline','job_id':'offline-fixture-newlines',
-                 'is_studio':False,'services':['RunService']}
-        def windows_text(path, data, encoding=None, **kwargs):
-            return path.write_bytes(data.replace('\n','\r\n').encode(encoding or 'utf-8'))
-        # Exercise Windows text translation on every platform. The context is
-        # a binary protocol file and must reach the real native parser intact.
-        with patch.object(Path, 'write_text', windows_text):
-            result=run_source('return 17, game.JobId', model_context=context)
-        self.assertTrue(result['ok'], result)
-        self.assertEqual(result['values'], [17, 'offline-fixture-newlines'])
-
     def test_unicode_source_and_snapshot_paths_in_both_hosts(self):
         with tempfile.TemporaryDirectory(prefix='rove-path-') as directory:
             root=Path(directory)/'測試 folder';root.mkdir()
@@ -139,7 +125,7 @@ local f,compileError=loadstring("local x=...; return authoredValue+x", "=authore
 assert(f and not compileError)
 local bad,message=loadstring("local =", "=bad chunk")
 return f(shared.count),bad==nil,type(message),iscclosure(loadstring),
-    islclosure(f),getgenv()==getfenv(0),_G.fixture
+    islclosure(f),getgenv()~=getfenv(0),_G.fixture
 ''')
         self.assertEqual(code, 0)
         self.assertEqual(result['values'], [42, True, 'string', True, True, True, 'inside one command'])

@@ -15,9 +15,9 @@ Start with the [setup guide](setup.md). Build and run through `rove.py` so new t
 | `vendor/`, `native/`, `inputs/` | Bundled dependencies and public reference data |
 | `secrets/`, `outputs/` | Generated local state; never committed |
 
-Tests stay in `tests/`; new user-facing instructions belong in `docs/`. Keep root entry points limited to `rove.py` and the Windows shortcut `rove.cmd`.
+Tests stay in `tests/`; new user-facing instructions belong in `docs/`. Use `rove.py` as the main entry point. The optional UI shortcuts call the same setup and launcher helpers.
 
-An existing research folder may also contain older `.command`/`.cmd` shortcuts, `ida/`, `references/`, `dist/`, and generated files. Those are local tools or artifacts, not additional setup steps. Use `rove.py` as the common entry point. The published source has a smaller root; local research and account data stay in place so existing tools can still find them.
+An existing research folder may also contain older `.command`/`.cmd` shortcuts, `ida/`, `references/`, `dist/`, and generated files. Those are local tools or artifacts, not additional setup steps. Use `rove.py` as the common entry point. Local research and account data stay in place so existing tools can still find them.
 
 Historical notes in local research folders live in `docs/archive/`. Start with the [documentation index](README.md) for current guides.
 

@@ -20,6 +20,9 @@ from persistent_runtime import PersistentLuauHost
 
 class FixtureHandler(Handler):
     def do_GET(self):
+        if urlsplit(self.path).path=='/api/setup':
+            return self.reply(200,{'launcherVersion':2,'platform':'Offline fixture','checks':[],
+                                  'runtimeReady':True,'accountConfigured':True})
         if urlsplit(self.path).path=='/deny-webgl.js':
             code=b'''const original=HTMLCanvasElement.prototype.getContext;
 HTMLCanvasElement.prototype.getContext=function(type,...args){
@@ -55,20 +58,34 @@ HTMLCanvasElement.prototype.getContext=function(type,...args){
 class FixtureAPI:
     def account(self):return {'id':123,'name':'Offline fixture','displayName':'Offline fixture','avatar':None}
     def friends(self):return {'friends':[]}
-    def games(self):return {'games':[],'favoriteIds':[],'recentIds':[]}
+    def games(self):return {'games':[{'placeId':1818,'name':'Offline preview','playable':True,
+        'description':'Local fixture. Play tests navigation without connecting to Roblox.',
+        'playing':0,'visits':0}],'favoriteIds':[],'recentIds':[]}
 
 class FixtureController:
-    def status(self):return {'state':'idle','events':[]}
+    def __init__(self):self.state='idle';self.game=None
+    def status(self):return {'state':self.state,'events':[],'game':self.game}
     def close(self):pass
-    def play(self,*args):raise ValueError('This fixture stays offline')
-    def leave(self):return self.status()
+    def play(self,target,game):self.state='playing';self.game=game;return self.status()
+    def leave(self):self.state='idle';return self.status()
 
 
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--allow-webgl',action='store_true')
     parser.add_argument('--showcase',action='store_true')
+    parser.add_argument('--fonts',action='store_true',help='Use native Luau font samples and installed font assets')
+    parser.add_argument('--text-layout',action='store_true',help='Use native Luau alignment, wrapping and measured text scaling samples')
+    parser.add_argument('--clipping',action='store_true',help='Use native Luau nested clipping, scrolling and rotated buttons')
+    parser.add_argument('--render-delay',type=float,default=0,help='Delay the first frame for timeout regression checks')
+    parser.add_argument('--display-delay',type=float,default=0,help='Delay the first resize for timeout regression checks')
     args=parser.parse_args()
+    if args.text_layout:args.fonts=True
+    if args.fonts and args.showcase:parser.error('Choose either --fonts or --showcase')
+    if args.clipping and (args.fonts or args.showcase):parser.error('Use --clipping by itself')
+    native_gui=args.fonts or args.clipping
+    if any(not 0<=delay<=30 for delay in (args.render_delay,args.display_delay)):
+        parser.error('Fixture delays must be between 0 and 30 seconds')
     state={'left':False,'clicks':0}
     def part(id,position,size,color,shape=1):
         return {'id':id,'name':id,'class':'Part','position':{'$vector3':position},'size':{'$vector3':size},'color':{'$color3':color},'shape':shape,'transparency':0}
@@ -88,10 +105,31 @@ def main():
     with tempfile.TemporaryDirectory(prefix='rove-renderer-',dir='/tmp') as directory:
         root=Path(__file__).resolve().parents[1]
         host=PersistentLuauHost(json.loads((root/'tests/fixtures/world_snapshot.json').read_text()))
+        if args.clipping:
+            result=host.call({'op':'execute','source':(root/'runtime/scripts/clipping_demo.luau').read_text(),'timeout_ms':1000})
+            if not result.get('ok') or result.get('task_errors'):raise RuntimeError(result)
+        if args.fonts:
+            if args.text_layout:
+                from text_layout_showcase import install_text_layout_showcase
+                install_text_layout_showcase(host)
+            else:
+                from font_showcase import install_font_showcase
+                install_font_showcase(host)
+        delayed=set()
+        def once(kind,seconds):
+            if kind not in delayed:delayed.add(kind);time.sleep(seconds)
+        def render_result():
+            once('render',args.render_delay)
+            if native_gui:return host.call({'op':'render'})
+            return {'ok':True,'values':[],'frame':render()}
+        def display_result(profile):
+            once('display',args.display_delay)
+            if native_gui:return host.call({'op':'update','delta':{'version':1,'delta':True,'actions':[],'display':profile}})
+            return {'ok':True,'values':[]}
         socket=ScriptConsole(Path(directory)/'fixture.sock',lambda source,timeout_ms:host.call({'op':'execute','source':source,'timeout_ms':timeout_ms}),
             events=lambda after:{'ok':True,'events':[],'cursor':after},
-            render=lambda:{'ok':True,'values':[],'frame':render()},gui_action=gui,
-            display=lambda profile:{'ok':True,'values':[]},leave=lambda:state.update(left=True))
+            render=render_result,gui_action=(lambda action:host.call({'op':'gui_action','action':action,'timeout_ms':100})) if native_gui else gui,
+            display=display_result,leave=lambda:state.update(left=True))
         app=Launcher(0,api=FixtureAPI(),controller=FixtureController(),socket_path=socket.path)
         web=app.surface;app.server.RequestHandlerClass=FixtureHandler
         web.deny_webgl=not args.allow_webgl
@@ -99,7 +137,7 @@ def main():
         if args.showcase:web.render_assets.fetcher=fetcher;web.fixture_state=fixture_state
         connected=web.connected;web.connected=lambda:not state['left'] and connected()
         web.start(open_browser=False)
-        print(app.url+'#/workspace',flush=True)
+        print(app.url+'workspace',flush=True)
         try:
             while True:socket.poll();time.sleep(.002)
         except KeyboardInterrupt:pass

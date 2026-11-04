@@ -6,9 +6,9 @@ import os
 import queue
 import signal
 import subprocess
-from platform_process import group_options, stop_group
 import threading
 import time
+from platform_process import group_options, stop_group
 
 from local_runtime import RUST_HOST, MAX_SOURCE_BYTES
 from world_snapshot import make_world_snapshot, make_world_delta
@@ -23,13 +23,17 @@ from chat_protocol import delivery_error
 
 
 class PersistentLuauHost:
-    def __init__(self, snapshot, *, memory_mb=None):
+    def __init__(self, snapshot, *, memory_mb=None, text_service_factory=None):
         if memory_mb is None:
             memory_mb = 512
         self.memory_mb = memory_mb
         if not RUST_HOST.is_file():
             raise RuntimeError('Build the Rust host before using persistent scripts')
         self.closed = False
+        self.text_service = None
+        self.text_service_factory = text_service_factory
+        self.failure_reason = None
+        self.failure_context = None
         self.lock = threading.RLock()
         self.responses = queue.Queue(maxsize=8)
         self.process = subprocess.Popen([str(RUST_HOST), 'session'], stdin=subprocess.PIPE,
@@ -57,11 +61,17 @@ class PersistentLuauHost:
             self.responses.put(error)
 
     def call(self, command):
-        data = json.dumps(command, ensure_ascii=True, allow_nan=False).encode() + b'\n'
-        if len(data) > 608 * 1024 * 1024: raise ValueError('Persistent request exceeds 608 MiB')
         with self.lock:
+            command=dict(command)
+            if self.text_service is not None and command.get('op') not in ('init','render','host_io','physics_feedback','close'):
+                ready=self.text_service.drain()
+                if ready:command['text_service_responses']=ready+command.get('text_service_responses',[])
+            data = json.dumps(command, ensure_ascii=True, allow_nan=False).encode() + b'\n'
+            if len(data) > 608 * 1024 * 1024: raise ValueError('Persistent request exceeds 608 MiB')
             if self.closed or self.process.poll() is not None:
-                raise RuntimeError('Persistent worker is no longer running; script state was lost')
+                reason = self.failure_reason or f'Persistent worker exited (status {self.process.poll()}); script state was lost'
+                raise RuntimeError(reason)
+            started = time.monotonic()
             try:
                 self.process.stdin.write(data)
                 self.process.stdin.flush()
@@ -72,9 +82,28 @@ class PersistentLuauHost:
                     raise RuntimeError('Invalid persistent runtime result')
                 if result.get('state_lost'):
                     raise RuntimeError(result.get('error', 'Persistent script state was lost'))
+                if result.get('text_service_requests') and self.text_service is None and self.text_service_factory is not False:
+                    from text_service import TextServiceQueue
+                    self.text_service=(self.text_service_factory or TextServiceQueue)()
+                if self.text_service is not None and 'active_text_service_requests' in result:
+                    self.text_service.submit(result.get('text_service_requests',[]),result['active_text_service_requests'])
                 return result
-            except Exception:
+            except Exception as error:
+                # queue.Empty has an empty string. Retaining that as a runtime
+                # failure makes callers retry a dead worker and lose the cause.
+                reason = ('Persistent worker response deadline exceeded (7 seconds)'
+                          if isinstance(error, queue.Empty) else str(error) or type(error).__name__)
+                self.failure_reason = reason
+                self.failure_context = {
+                    'operation': str(command.get('op', 'unknown'))[:64],
+                    'request_bytes': len(data),
+                    'elapsed_seconds': round(time.monotonic()-started, 6),
+                    'error_type': type(error).__name__,
+                    'process_status_before_cleanup': self.process.poll(),
+                }
                 self.close(graceful=False)
+                if isinstance(error, queue.Empty):
+                    raise TimeoutError(reason) from error
                 raise
 
     def host_io(self, action, **fields):
@@ -116,6 +145,7 @@ class PersistentLuauHost:
                 try: self.call({'op': 'close'})
                 except Exception: pass
             self.closed = True
+            if self.text_service is not None:self.text_service.close()
             if self.process.poll() is None:
                 try: self.process.wait(timeout=.5)
                 except subprocess.TimeoutExpired:
@@ -202,6 +232,9 @@ class PersistentClientScriptRuntime:
         if type(result.get('engine_pose_frames_applied')) is int:
             self.stats['engine_pose_frames_applied'] = (
                 self.stats.get('engine_pose_frames_applied',0)+result['engine_pose_frames_applied'])
+        if type(result.get('engine_owned_part_frames_applied')) is int:
+            self.stats['engine_owned_part_frames_applied'] = (
+                self.stats.get('engine_owned_part_frames_applied',0)+result['engine_owned_part_frames_applied'])
         if self.animation_outbox is not None:
             self.animation_outbox.submit(result.get('animation_intents', []))
             self.stats['animation_intents'] = self.animation_outbox.report()
@@ -219,7 +252,7 @@ class PersistentClientScriptRuntime:
         intents=result.get('movement_intents', [])
         authored_parts = getattr(self, 'authored_part_poses', None)
         if authored_parts is not None and self.world is not None:
-            authored_parts.observe(self.world, result.get('mutations', []), result.get('world_revision'))
+            authored_parts.observe(self.world, result.get('mutations', []), result.get('world_revision'), now=now)
         if self.world is not None and getattr(self.world, 'instances', None):
             if self.movement_preview is None:
                 self.movement_preview=RuntimePhysicsPrediction(
@@ -274,6 +307,12 @@ class PersistentClientScriptRuntime:
         for completed in result.get('completed_jobs', []):
             self.results[completed['job_id']] = completed
         if 'job_id' in result:self.submitted[result['job_id']]=result
+        # Diagnostics describe the scheduler snapshot attached to this host
+        # result. Never carry an older "sleeping" observation forward when a
+        # later response omitted that job or omitted diagnostics entirely.
+        for job_id, submitted in self.submitted.items():
+            if job_id not in self.results:
+                submitted.pop('diagnostic', None)
         for diagnostic in result.get('job_diagnostics', []):
             job_id = diagnostic.get('job_id')
             if job_id in self.submitted and job_id not in self.results:
@@ -404,6 +443,36 @@ class PersistentClientScriptRuntime:
             return False
         raise RuntimeError(response.get('error', fallback))
 
+    def _background_step_budget(self):
+        """Choose the test-profile slice from current authored-job states.
+
+        Large local tests need longer turns while authored roots are runnable,
+        but a waiting root gains nothing from those turns. Use the ordinary
+        background slice only when every currently active root is explicitly
+        asleep or waiting. Missing, stale, or mixed diagnostics keep the larger
+        slice so runnable authored code retains its existing throughput.
+        """
+        active_jobs = self.stats.get('active_jobs', 0)
+        if os.environ.get('RCR_LUAU_LARGE_TEST') != '1':
+            return self.background_budget_ms
+        if type(active_jobs) is int and active_jobs == 0:
+            return self.background_budget_ms
+        if type(active_jobs) is not int or active_jobs < 0:
+            return 250
+
+        active_ids = [job_id for job_id in self.submitted if job_id not in self.results]
+        if len(active_ids) != active_jobs:
+            return 250
+        blocked_states = {'sleeping', 'waiting'}
+        for job_id in active_ids:
+            submitted = self.submitted.get(job_id)
+            diagnostic = submitted.get('diagnostic') if isinstance(submitted, dict) else None
+            if (not isinstance(diagnostic, dict)
+                    or diagnostic.get('job_id') != job_id
+                    or diagnostic.get('scheduler_state') not in blocked_states):
+                return 250
+        return self.background_budget_ms
+
     def enable_animation_intents(self):
         """Collect authored track operations for a session-owned consumer."""
         if self.animation_outbox is None:
@@ -476,6 +545,14 @@ class PersistentClientScriptRuntime:
             raise ValueError('Invalid measured session statistics')
         return value.copy()
 
+    def _take_engine_owned_parts(self, world):
+        authored = getattr(self, 'authored_part_poses', None)
+        if authored is not None and getattr(authored, 'simulation', None) is not None:
+            initial = getattr(self.host, 'initial_result', {})
+            if not isinstance(initial, dict) or initial.get('engine_owned_part_feedback_version') != 1:
+                raise RuntimeError('Owned-part dynamics requires a worker with engine feedback version 1')
+        return authored.engine_updates(world) if authored is not None else None
+
     def _ensure(self):
         if self.failure: raise RuntimeError(self.failure)
         world = self.world_provider()
@@ -486,6 +563,9 @@ class PersistentClientScriptRuntime:
             initial_ready = 13 in world.tags
             snapshot = make_world_snapshot(world, self.user_id, job_id=self.job_id,
                                            include_script_sources=initial_ready)
+            if os.environ.get('RCR_BUILTIN_PLAYER_SCRIPTS', '1') == '1':
+                from builtin_player_scripts import player_scripts
+                snapshot['builtin_player_scripts'] = player_scripts()
             snapshot['chat_enabled'] = self.chat_bridge is not None
             snapshot['session_stats'] = self._session_statistics()
             snapshot['input_capabilities'] = self.input_capabilities.copy()
@@ -622,10 +702,13 @@ class PersistentClientScriptRuntime:
         delta, initial_ready, refresh_catalog, caught_up = self._world_update(world)
         animations = self.animation_assets.drain() if self.animation_assets else []
         engine_poses=self._take_engine_poses(world) if caught_up else None
-        if not delta['actions'] and 'session_stats' not in delta and not refresh_catalog and not animations and engine_poses is None and initial_ready == self.initial_replication_complete:
+        engine_owned_parts=self._take_engine_owned_parts(world) if caught_up else None
+        if not delta['actions'] and 'session_stats' not in delta and not refresh_catalog and not animations and engine_poses is None and engine_owned_parts is None and initial_ready == self.initial_replication_complete:
             return None
         if engine_poses is not None:
             delta['engine_poses']=engine_poses
+        if engine_owned_parts is not None:
+            delta['engine_owned_part_updates']=engine_owned_parts
         if animations:
             delta['animation_responses'] = animations
         catalog = script_catalog(world) if refresh_catalog else self.script_catalog
@@ -747,6 +830,7 @@ class PersistentClientScriptRuntime:
                                                 'timeout_ms': self.background_budget_ms}))
         except Exception as error:
             self.failure = str(error)
+            self.failure_context = getattr(self.host, 'failure_context', None) or self.failure_context
             self.close()
             raise
 
@@ -884,22 +968,23 @@ class PersistentClientScriptRuntime:
         """
         if self.failure:
             return None
+        completed = None
         try:
             if self._background_context is not None:
-                return self._finish_background()
+                completed = self._finish_background()
+                if completed is None or not self.remote_server_results:
+                    return completed
+                # The previous transaction has released the sole host lane.
+                # Deliver its result below while handing the free lane to an
+                # already-queued server reply, without another idle tick.
             if self.host is None:
                 # Initialization happens once, before any asynchronous calls.
                 return self.poll()
             now = time.monotonic()
-            if now-self.last_poll < .05:
+            if completed is None and now-self.last_poll < .05:
                 return None
             self.last_poll = now
-            budget = self.background_budget_ms
-            if os.environ.get('RCR_LUAU_LARGE_TEST') == '1' and self.stats.get('active_jobs', 0) > 0:
-                # This request runs on the asynchronous lane, keeping network
-                # receipt responsive. Reserve useful VM time for authored test
-                # work even when event backpressure is successfully prevented.
-                budget = 250
+            budget = self._background_step_budget()
             responses = [] if self.remote_server_results else self._prepare_chat_responses()
             if self.remote_server_results:
                 command = {'op': 'remote_server_results', 'responses': [
@@ -956,13 +1041,17 @@ class PersistentClientScriptRuntime:
                     revision = delta['sequence']
                     animations = self.animation_assets.drain() if self.animation_assets else []
                     engine_poses=self._take_engine_poses(world) if caught_up else None
+                    engine_owned_parts=self._take_engine_owned_parts(world) if caught_up else None
                     needs_update = (bool(delta['actions']) or refresh or bool(animations)
                                     or 'session_stats' in delta
                                     or engine_poses is not None
+                                    or engine_owned_parts is not None
                                     or initial_ready != self.initial_replication_complete)
                     if needs_update:
                         if engine_poses is not None:
                             delta['engine_poses']=engine_poses
+                        if engine_owned_parts is not None:
+                            delta['engine_owned_part_updates']=engine_owned_parts
                         if animations:
                             delta['animation_responses'] = animations
                         catalog = script_catalog(world) if refresh else self.script_catalog
@@ -998,9 +1087,10 @@ class PersistentClientScriptRuntime:
                     return None
                 raise RuntimeError('Background runtime transaction overlap')
             self._background_context = context
-            return None
+            return completed
         except Exception as error:
             self.failure = str(error)
+            self.failure_context = getattr(self.host, 'failure_context', None) or self.failure_context
             self.close()
             raise
 

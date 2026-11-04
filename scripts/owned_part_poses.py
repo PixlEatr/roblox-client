@@ -8,6 +8,7 @@ import collections
 import math
 import struct
 import json
+import time
 from functools import lru_cache
 from pathlib import Path
 
@@ -76,7 +77,7 @@ def _velocities(properties, creation=None, class_name=None):
 
 
 class OwnedPartPoses:
-    def __init__(self):
+    def __init__(self, *, simulate=False):
         # Materialize immutable constructor data before starting the network
         # loop. iCloud may offload this file; opening it for the first authored
         # pose can otherwise suspend packet processing for several minutes.
@@ -88,6 +89,13 @@ class OwnedPartPoses:
         self.velocity_sources = collections.Counter()
         self.coalesced = 0
         self.recent_submitted = collections.deque(maxlen=16)
+        self._topology_revision = None
+        self._topology_characters = set()
+        self._topology_connected = set()
+        self.simulation = None
+        if simulate:
+            from owned_part_simulation import OwnedPartSimulation
+            self.simulation = OwnedPartSimulation()
 
     def _bind(self, world):
         if self.world is None:
@@ -95,10 +103,17 @@ class OwnedPartPoses:
         if world is not self.world:
             raise ValueError('Authored part poses cannot cross world sessions')
 
-    def observe(self, world, mutations, revision):
+    def observe(self, world, mutations, revision, *, now=None):
         self._bind(world)
         if type(revision) not in (int, float) or not math.isfinite(revision) or revision < 0:
             return
+        if self.simulation is not None:
+            now = time.monotonic() if now is None else now
+            # Complete actual elapsed motion before applying new authored
+            # teleports. CFrame writes then preserve the resulting momentum.
+            if mutations:
+                self._queue_simulated(self.simulation.advance(world, now, force=True))
+            self.simulation.observe(world, mutations, revision, now)
         for change in mutations:
             if change.get('kind') != 'set' or change.get('property') != 'CFrame':
                 continue
@@ -133,15 +148,7 @@ class OwnedPartPoses:
         if not self.pending:
             return [], []
         parents = _parents(world)
-        characters = {v['properties'].get('Character') for v in world.instances.values()
-                      if _class_name(world, v) == 'Player'}
-        # Any received rigid edge excludes the part. Unknown Enabled state
-        # cannot justify treating a connected assembly as a single part.
-        connected = set()
-        for item in world.instances.values():
-            if (_is_a(_class_name(world, item), 'JointInstance', parents)
-                    or _class_name(world, item) == 'WeldConstraint'):
-                connected.update(item['properties'].get(name) for name in ('Part0', 'Part1'))
+        characters, connected = self._topology(world, parents)
         records, keys = [], []
         for key, (position, rotation, revision) in list(self.pending.items()):
             if len(records) >= limit:
@@ -156,6 +163,10 @@ class OwnedPartPoses:
                 reason = 'ownership_not_current'
             elif _node_snapshot(world, key, node)['properties'].get('Anchored') is not False:
                 reason = 'part_not_known_unanchored'
+            elif self.simulation is not None and (
+                    self.simulation.field(world, key, 'Anchored') is not False
+                    or (key, 'Parent') in self.simulation.local):
+                reason = 'local_anchor_or_parent_changed'
             elif key in connected or node['properties'].get('PhysicsRepRootPart') not in (None, key):
                 reason = 'connected_assembly_unsupported'
             elif max((world.property_versions.get(key, {}).get(name, 0)
@@ -189,7 +200,9 @@ class OwnedPartPoses:
                 del self.pending[key]
                 continue
             try:
-                (linear, angular), velocity_source = _velocities(node['properties'],world.creation.get(key),_class_name(world,node))
+                simulated = (self.simulation.velocities(key, (position, rotation, revision))
+                             if self.simulation is not None else None)
+                (linear, angular), velocity_source = simulated or _velocities(node['properties'],world.creation.get(key),_class_name(world,node))
                 if wire_format == 'isr':
                     from isr_sender import encode_pv, encode_record
                     records.append(encode_record(world.schema, key, node['class'],
@@ -214,6 +227,53 @@ class OwnedPartPoses:
                 del self.pending[key]
         return records, keys
 
+    def _topology(self, world, parents):
+        # The received journal makes a complete hierarchy walk unnecessary
+        # for ordinary pose/colour traffic. Direct authority, anchoring and
+        # ancestry checks remain in prepare() for every pending part.
+        previous = self._topology_revision
+        actions = getattr(world, 'actions', None)
+        rebuild = previous is None or actions is None
+        if not rebuild and previous != world.revision:
+            if not actions or previous < actions[0]['sequence']-1:
+                rebuild = True
+            else:
+                for action in reversed(actions):
+                    if action['sequence'] <= previous:
+                        break
+                    if (action['kind'] in ('create', 'remove')
+                            or {'Character', 'Part0', 'Part1'} & set(action.get('fields', {}))):
+                        rebuild = True
+                        break
+        if rebuild:
+            self._topology_characters = {
+                node['properties'].get('Character') for node in world.instances.values()
+                if _class_name(world, node) == 'Player'}
+            connected = set()
+            # Unknown Enabled state cannot justify ignoring a rigid edge.
+            for node in world.instances.values():
+                kind = _class_name(world, node)
+                if _is_a(kind, 'JointInstance', parents) or kind == 'WeldConstraint':
+                    connected.update(node['properties'].get(name) for name in ('Part0', 'Part1'))
+            self._topology_connected = connected
+        self._topology_revision = world.revision
+        return self._topology_characters, self._topology_connected
+
+    def advance(self, world, now):
+        self._bind(world)
+        if self.simulation is not None:
+            self._queue_simulated(self.simulation.advance(world, now))
+
+    def _queue_simulated(self, poses):
+        for key, pose in poses.items():
+            if key in self.pending or len(self.pending) < 64:
+                self.pending[key] = pose
+            else:
+                self.rejected['part_pose_queue_full'] += 1
+
+    def engine_updates(self, world):
+        return self.simulation.feedback(world) if self.simulation is not None else None
+
     def acknowledge(self, keys):
         for key in keys:
             pose = self.pending.pop(key, None)
@@ -227,4 +287,5 @@ class OwnedPartPoses:
                 'prepared_velocity_sources':dict(self.velocity_sources),
                 'writes_coalesced_before_send':self.coalesced,
                 'recent_submitted_poses':list(self.recent_submitted),
+                'local_dynamics':self.simulation.report() if self.simulation is not None else None,
                 'server_acceptance_confirmed': False, 'scope': 'owned_isolated_parts'}

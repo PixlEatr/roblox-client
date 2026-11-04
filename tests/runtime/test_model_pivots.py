@@ -142,15 +142,21 @@ m.PrimaryPart=p
 frame(m:GetPivot(),p.CFrame*CFrame.new(1,0,0))
 ''',data)
 
-    def test_pivot_events_only_report_cframe_for_parts(self):
+    def test_pivot_suppresses_derived_transform_events_but_updates_mass_observers(self):
         h=self.host()
         self.execute(h,'''getgenv().m=Instance.new("Model");getgenv().p=Instance.new("Part",m)
-getgenv().events={};getgenv().positionCalls=0;getgenv().orientationCalls=0
-p.Changed:Connect(function(key)table.insert(events,key)end)
+getgenv().events={};getgenv().massCalls=0
+getgenv().positionCalls=0;getgenv().orientationCalls=0;getgenv().rotationCalls=0
+p.Changed:Connect(function(key)
+ if key=="AssemblyCenterOfMass" then
+  massCalls+=1;vec(p.AssemblyCenterOfMass,p.Position)
+ else table.insert(events,key)end
+end)
 p:GetPropertyChangedSignal("Position"):Connect(function()positionCalls+=1 end)
 p:GetPropertyChangedSignal("Orientation"):Connect(function()orientationCalls+=1 end)
+p:GetPropertyChangedSignal("Rotation"):Connect(function()rotationCalls+=1 end)
 m:PivotTo(CFrame.new(10,20,30)*CFrame.Angles(0,.5,0))''')
-        self.assertEqual(self.execute(h,'return #events,events[1],positionCalls,orientationCalls')['values'],[1,'CFrame',0,0])
+        self.assertEqual(self.execute(h,'return #events,events[1],positionCalls,orientationCalls,rotationCalls,massCalls')['values'],[1,'CFrame',0,0,0,1])
 
     def test_repeated_moves_retain_offsets_and_external_changes_invalidate_cache(self):
         h=self.host()

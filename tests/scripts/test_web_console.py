@@ -14,6 +14,55 @@ from test_launcher import FakeAPI, FakeController
 
 
 class WebConsoleTests(unittest.TestCase):
+    def test_image_load_receipt_validates_token_and_forwards_without_source(self):
+        calls=[]
+        self.script_console.gui_action=lambda action:(calls.append(action) or {'ok':True})
+        action={'kind':'image_loaded','id':'icon','token':'a'*32}
+        self.assertEqual(self.request('/api/gui',raw=json.dumps(action))[0],200)
+        for patch in ({'token':'b'*31},{'token':'g'*32},{'token':True},{'loaded':True},{'id':None}):
+            self.assertEqual(self.request('/api/gui',raw=json.dumps({**action,**patch}))[0],400)
+        self.assertEqual(calls,[action])
+
+    def test_textbox_focus_routes_forward_only_typed_bounded_actions(self):
+        calls=[]
+        self.script_console.gui_action=lambda action:(calls.append(action) or {'ok':True})
+        focus={'kind':'text_focus','id':'box'}
+        edit={'kind':'text_edit','id':'box','revision':1,'text':'é'}
+        blur={'kind':'text_blur','id':'box','revision':1,'submitted':True}
+        selection={'kind':'text_select','id':'box','revision':1,'editorRevision':0,'cursor':3,'anchor':1}
+        edit_with_selection={**edit,'editorRevision':0,'cursor':3,'anchor':-1}
+        for action in (focus,edit,blur,selection,edit_with_selection):
+            self.assertEqual(self.request('/api/gui',raw=json.dumps(action))[0],200)
+        for action in ({**focus,'extra':True},{**edit,'text':'é'*2049},{**edit,'revision':True},
+                       {**edit,'revision':-1},{**blur,'submitted':1},{**selection,'cursor':0},
+                       {**selection,'anchor':0},{**edit_with_selection,'editorRevision':False}):
+            self.assertEqual(self.request('/api/gui',raw=json.dumps(action))[0],400)
+        self.assertEqual(calls,[focus,edit,blur,selection,edit_with_selection])
+
+    def test_gui_wheel_metadata_is_bounded_and_forwarded(self):
+        calls=[]
+        self.script_console.gui_action=lambda action:(calls.append(action) or {'ok':True,'values':[]})
+        action={'id':'child','kind':'wheel','delta':[0,40],'position':[120.5,80],'steps':-2}
+        self.assertEqual(self.request('/api/gui',raw=json.dumps(action))[0],200)
+        for patch in ({'steps':True},{'steps':1.5},{'steps':129},{'position':[float('nan'),10]},
+                      {'position':[10]},{'position':[40000,0]},{'position':['10',20]},{'extra':True}):
+            self.assertEqual(self.request('/api/gui',raw=json.dumps({**action,**patch}))[0],400)
+        self.assertEqual(self.request('/api/gui',raw=json.dumps(action),headers={'X-Console-Key':''})[0],403)
+        self.assertEqual(calls,[action]);self.assertEqual(self.runtime.executions,0)
+
+    def test_gui_scroll_route_validates_delta_and_never_executes_source(self):
+        calls=[]
+        self.script_console.gui_action=lambda action:(calls.append(action) or {'ok':True,'values':[]})
+        action={'id':'scroll','kind':'scroll','delta':[12.5,-48]}
+        status,body,_=self.request('/api/gui',raw=json.dumps(action))
+        self.assertEqual(status,200);self.assertTrue(json.loads(body)['ok'])
+        self.assertEqual(calls,[action]);self.assertEqual(self.runtime.executions,0)
+        for delta in ([True,1],[float('nan'),0],[float('inf'),0],[4097,0],[0],None,{'x':0,'y':20}):
+            self.assertEqual(self.request('/api/gui',raw=json.dumps({**action,'delta':delta}))[0],400)
+        self.assertEqual(self.request('/api/gui',raw=json.dumps({**action,'source':'return 1'}))[0],400)
+        self.assertEqual(self.request('/api/gui',raw=json.dumps(action),headers={'X-Console-Key':''})[0],403)
+        self.assertEqual(calls,[action]);self.assertEqual(self.request('/gui-scroll.js')[0],200)
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(dir='/tmp', prefix='luau-web-')
         self.addCleanup(self.temp.cleanup)
@@ -170,6 +219,25 @@ return 2+2
         self.web.render_assets.observe({})
         self.assertEqual(self.request('/api/render-asset', raw=payload)[0], 400)
         self.assertEqual(fetcher.call_count, 1)
+
+    def test_font_asset_route_loads_only_a_current_text_choice(self):
+        from unittest.mock import Mock
+        from test_render_fonts import sfnt,family,descriptor
+        fetcher=Mock(side_effect=[family(('rbxasset://fonts/Regular.ttf',400,'normal')),sfnt()])
+        self.web.render_assets.fetcher=fetcher
+        font=descriptor();payload=json.dumps({'kind':'font','reference':font['family'],'weight':400,'style':0})
+        self.assertEqual(self.request('/api/render-asset',raw=payload)[0],400)
+        self.web.render_assets.observe({'gui':[{'fontFace':font}]})
+        self.assertEqual(self.request('/api/render-asset',raw=payload,headers={'X-Console-Key':''})[0],403)
+        status,body,_=self.request('/api/render-asset',raw=payload)
+        self.assertEqual(status,200);self.assertEqual(json.loads(body)['mime'],'font/ttf')
+        self.assertEqual(fetcher.call_count,2)
+        for invalid in [{'kind':'font','reference':font['family']},
+                        {'kind':'font','reference':font['family'],'weight':True,'style':0},
+                        {'kind':'mesh','reference':'rbxassetid://1','weight':400,'style':0}]:
+            self.assertEqual(self.request('/api/render-asset',raw=json.dumps(invalid))[0],400)
+        self.assertEqual(self.request('/font-loader.js')[0],200)
+        self.assertEqual(self.request('/text-layout.js')[0],200)
 
     def test_late_results_endpoint_preserves_errors_and_requires_local_authorization(self):
         self.script_console.events=lambda after:{'ok':True,'values':[],

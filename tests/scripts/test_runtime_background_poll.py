@@ -79,6 +79,60 @@ class RuntimeBackgroundPollTests(unittest.TestCase):
                     runtime.poll_background();self.drain_completed(runtime)
                 self.assertEqual(host.calls[0],{'op':'poll','timeout_ms':expected})
 
+    def test_large_test_slice_returns_to_background_budget_only_when_all_jobs_wait(self):
+        cases = [
+            ('sleeping', ['sleeping', 'waiting'], 50),
+            ('mixed', ['sleeping', 'ready'], 250),
+            ('executing', ['sleeping', 'executing'], 250),
+            ('unknown_state', ['sleeping', 'unknown'], 250),
+            ('missing_diagnostic', ['sleeping', None], 250),
+        ]
+        for name, states, expected in cases:
+            with self.subTest(case=name):
+                host=GatedHost();runtime,world,key=self.make_runtime(host)
+                runtime.stats.update(active_jobs=len(states),pending_events=0)
+                runtime.submitted={job_id:{'state':'running','diagnostic':(
+                    {'job_id':job_id,'scheduler_state':state} if state is not None else None)}
+                    for job_id,state in enumerate(states,1)}
+                if name=='missing_diagnostic':
+                    runtime.submitted[2].pop('diagnostic')
+                self.touch_name(world,key,b'changed')
+                with patch.dict('os.environ',{'RCR_LUAU_LARGE_TEST':'1'}):
+                    runtime.poll_background();self.drain_completed(runtime)
+                self.assertEqual(host.calls[0]['timeout_ms'],expected)
+
+    def test_large_test_budget_uses_latest_active_job_set_after_completion(self):
+        host=GatedHost();runtime,world,key=self.make_runtime(host)
+        runtime.stats.update(active_jobs=1,pending_events=0)
+        runtime.submitted[1]={'state':'running','diagnostic':
+            {'job_id':1,'scheduler_state':'sleeping'}}
+        runtime._record(ok(job_id=2,state='running',active_jobs=1,
+            completed_jobs=[{'job_id':1,'completed':True,'ok':True,'state':'completed','values':[]}],
+            job_diagnostics=[{'job_id':2,'scheduler_state':'ready'}]))
+        self.touch_name(world,key,b'changed')
+        with patch.dict('os.environ',{'RCR_LUAU_LARGE_TEST':'1'}):
+            runtime.poll_background();self.drain_completed(runtime)
+        scheduling=next(call for call in host.calls if call['op'] in ('poll','update'))
+        self.assertEqual(scheduling['timeout_ms'],250)
+
+    def test_large_test_budget_discards_stale_scheduler_diagnostics(self):
+        host=GatedHost();runtime,_,_=self.make_runtime(host)
+        runtime.stats.update(active_jobs=1,pending_events=0)
+        runtime.submitted[1]={'state':'running','diagnostic':
+            {'job_id':1,'scheduler_state':'sleeping'}}
+        runtime._record(ok(active_jobs=1))
+        self.assertNotIn('diagnostic',runtime.submitted[1])
+        with patch.dict('os.environ',{'RCR_LUAU_LARGE_TEST':'1'}):
+            self.assertEqual(runtime._background_step_budget(),250)
+
+    def test_large_test_budget_treats_invalid_active_count_as_unknown(self):
+        runtime,_,_=self.make_runtime(GatedHost())
+        with patch.dict('os.environ',{'RCR_LUAU_LARGE_TEST':'1'}):
+            for active in (True,-1,'1',None):
+                with self.subTest(active=active):
+                    runtime.stats['active_jobs']=active
+                    self.assertEqual(runtime._background_step_budget(),250)
+
     def test_failed_runtime_does_not_report_cached_jobs_as_still_ready(self):
         runtime,_,_=self.make_runtime(GatedHost())
         runtime.submitted[4]={'ok':True,'state':'running','completed':False,

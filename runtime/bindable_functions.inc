@@ -23,7 +23,7 @@ int invoke_bindable(lua_State* L) {
         lua_pushthread(L);call.caller_ref=lua_ref(L,-1);lua_pop(L,1);
         auto bound=w.bindable_callbacks.find(call.node);
         if(bound!=w.bindable_callbacks.end()){
-            lua_getref(L,bound->second.reference);call.callback_ref=lua_ref(L,-1);lua_pop(L,1);call.owner=bound->second.owner;
+            lua_getref(L,bound->second.reference);call.callback_ref=lua_ref(L,-1);lua_pop(L,1);call.owner=bound->second.owner;call.identity=bound->second.identity;
         }
         w.scheduler->wait_signal(L);w.bindable_invocations.push_back(call);
     }catch(const std::exception& e){release_bindable_call(L,w,call);luaL_error(L,"Invoke failed: %s",e.what());return 0;}
@@ -36,7 +36,7 @@ void set_bindable_callback(lua_State* L,World& w,Node& node) {
     int reference=LUA_NOREF;
     if(!lua_isnil(L,3)){lua_pushvalue(L,3);reference=lua_ref(L,-1);lua_pop(L,1);}
     if(previous!=w.bindable_callbacks.end()){lua_unref(L,previous->second.reference);w.bindable_callbacks.erase(previous);}
-    if(reference!=LUA_NOREF)w.bindable_callbacks.emplace(node.id,BindableCallback{reference,w.scheduler?w.scheduler->owner(L):""});
+    if(reference!=LUA_NOREF)w.bindable_callbacks.emplace(node.id,BindableCallback{reference,w.scheduler?w.scheduler->owner(L):"",SourceScheduler::identity(L)});
 }
 void clear_owned_bindables(lua_State* L,World& w,const std::string& owner) {
     for(auto& call:w.remote_client_invocations)if(call.owner==owner&&(call.callee||call.callback_ref!=LUA_NOREF))call.cancelled=true;
@@ -60,7 +60,7 @@ void dispatch_bindable_functions(lua_State* from,World& w,bool cleanup_callbacks
             if(call.callback_ref==LUA_NOREF){
                 auto bound=w.bindable_callbacks.find(call.node);
                 if(bound==w.bindable_callbacks.end()){++it;continue;}
-                lua_getref(from,bound->second.reference);call.callback_ref=lua_ref(from,-1);lua_pop(from,1);call.owner=bound->second.owner;
+                lua_getref(from,bound->second.reference);call.callback_ref=lua_ref(from,-1);lua_pop(from,1);call.owner=bound->second.owner;call.identity=bound->second.identity;
             }
             if(w.scheduler->invocation_capacity()==0){++it;continue;}
             try {
@@ -68,7 +68,7 @@ void dispatch_bindable_functions(lua_State* from,World& w,bool cleanup_callbacks
                     lua_getref(target,call.arguments_ref);int table=lua_gettop(target);
                     for(int i=0;i<call.count;i++)lua_rawgeti(target,table,i+1);
                     lua_remove(target,table);return call.count;
-                },call.owner);
+                },call.owner,call.identity);
                 lua_unref(from,call.arguments_ref);call.arguments_ref=LUA_NOREF;
                 lua_unref(from,call.callback_ref);call.callback_ref=LUA_NOREF;
             }catch(const std::exception& e){error=e.what();}

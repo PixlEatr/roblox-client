@@ -1076,6 +1076,8 @@ reentry:
 
                 Closure* ccl = clvalue(ra);
                 L->ci->savedpc = pc;
+                if (LUAU_UNLIKELY(ccl->inactive))
+                    luaG_runerror(L, "inactive prototype cannot be called");
 
                 CallInfo* ci = incr_ci(L);
                 ci->func = ra;
@@ -1182,6 +1184,8 @@ reentry:
 
                 Closure* ccl = clvalue(ra);
                 L->ci->savedpc = pc;
+                if (LUAU_UNLIKELY(ccl->inactive))
+                    luaG_runerror(L, "inactive prototype cannot be called");
 
                 CallInfo* ci = incr_ci(L);
                 ci->func = ra;
@@ -4037,6 +4041,8 @@ int luau_precall(lua_State* L, StkId func, int nresults)
     }
 
     Closure* ccl = clvalue(func);
+    if (LUAU_UNLIKELY(ccl->inactive))
+        luaG_runerror(L, "inactive prototype cannot be called");
 
     CallInfo* ci = incr_ci(L);
     ci->func = func;

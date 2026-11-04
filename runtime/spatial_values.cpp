@@ -195,6 +195,17 @@ bool is_spatial_value(lua_State* L, int index) {
     return is_region(L, index);
 }
 
+bool read_region_bounds(lua_State* L, int index, std::array<double, 3>& minimum,
+                        std::array<double, 3>& maximum) {
+    if (!is_region(L, index)) return false;
+    const auto& region = *checked_region(L, index);
+    for (int axis = 0; axis < 3; ++axis) {
+        minimum[axis] = region.minimum[axis];
+        maximum[axis] = region.maximum[axis];
+    }
+    return true;
+}
+
 bool capture_spatial_value(lua_State* L, int index, nlohmann::json& value) {
     if (!is_region(L, index)) return false;
     const Region& region = *checked_region(L, index);

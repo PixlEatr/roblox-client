@@ -34,7 +34,7 @@ int render_dispatch_bridge(lua_State* L) {
                 if(!binding->active){++frame.group_index;continue;}
                 if(w.scheduler->callback_capacity()==0){lua_pushboolean(L,false);return 1;}
                 ++frame.group_index;
-                w.scheduler->callback_now(L,binding->callback,[&](lua_State* child){lua_pushnumber(child,frame.dt);return 1;},binding->owner);
+                w.scheduler->callback_now(L,binding->callback,[&](lua_State* child){lua_pushnumber(child,frame.dt);return 1;},binding->owner,binding->identity);
                 return 1;
             }
             // Snapshot one priority group at a time. Newly bound higher
@@ -91,7 +91,7 @@ int run_service_bind_render(lua_State* L) {
         ensure_render_dispatcher(L,w);
         auto binding=std::make_shared<RenderStepBinding>();
         binding->name.assign(name,length);binding->priority=static_cast<int>(priority);
-        binding->owner=w.scheduler->owner(L);binding->sequence=w.render_steps.next_sequence++;
+        binding->owner=w.scheduler->owner(L);binding->identity=SourceScheduler::identity(L);binding->sequence=w.render_steps.next_sequence++;
         binding->callback=lua_ref(L,4);w.render_steps.bindings.push_back(std::move(binding));return 0;
     }catch(const std::exception& error){luaL_error(L,"BindToRenderStep: %s",error.what());return 0;}
 }

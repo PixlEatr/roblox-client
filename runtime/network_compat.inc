@@ -5,7 +5,7 @@ NetworkJson network_value(lua_State* L,int index,int depth=0) {
     if(lua_isnil(L,index))return nullptr;
     if(lua_isboolean(L,index))return lua_toboolean(L,index)!=0;
     if(lua_type(L,index)==LUA_TNUMBER){auto n=lua_tonumber(L,index);if(!std::isfinite(n))throw std::runtime_error("nonfinite network option");if(std::floor(n)==n&&std::abs(n)<9007199254740992.0)return int64_t(n);return n;}
-    if(lua_type(L,index)==LUA_TSTRING){size_t size=0;auto* data=lua_tolstring(L,index,&size);if(size>192*1024)throw std::runtime_error("network option exceeds limit");return std::string(data,size);}
+    if(lua_type(L,index)==LUA_TSTRING){size_t size=0;auto* data=lua_tolstring(L,index,&size);if(size>1024*1024)throw std::runtime_error("network option exceeds limit");return std::string(data,size);}
     if(lua_istable(L,index)){NetworkJson result=NetworkJson::object();int count=0;lua_pushnil(L);while(lua_next(L,index)){if(++count>128||lua_type(L,-2)!=LUA_TSTRING)throw std::runtime_error("network options require bounded string keys");size_t size=0;auto* key=lua_tolstring(L,-2,&size);result[std::string(key,size)]=network_value(L,-1,depth+1);lua_pop(L,1);}return result;}
     throw std::runtime_error("unsupported network option type");
 }
@@ -40,6 +40,15 @@ local function await(request)
  end
 end
 local methods={GET=true,POST=true,PUT=true,PATCH=true,DELETE=true,HEAD=true,OPTIONS=true}
+local scriptBytecode,compileSource=getscriptbytecode,loadstring
+function decompile(script)
+ local bytes=scriptBytecode(script)
+ assert(#bytes<=512*1024,"bytecode exceeds 512 KiB")
+ local source=await({operation="decompile",BytecodeBase64=encode(bytes)}).Source
+ local fn,err=compileSource(source,"=decompiled-source")
+ assert(fn,"decompiler returned invalid source: "..tostring(err))
+ return source
+end
 local function requestHeaders(headers,cookies)
  if cookies==nil then return headers end
  assert(type(cookies)=="table","request Cookies must be a table")

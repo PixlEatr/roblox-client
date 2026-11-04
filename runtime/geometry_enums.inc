@@ -7,7 +7,12 @@ constexpr const char* kGeometryEnumsRegistry="Headless.GeometryEnums";
 constexpr const char* kGeometryItemsRegistry="Headless.GeometryEnumItems";
 enum GeometryEnumKind { kGeometryAxis, kGeometryNormal, kGeometryRotationOrder,
                         kGuiSizeConstraint, kGuiAutomaticSize, kGuiAspectType, kGuiDominantAxis, kClientFont, kClientMessageType,
-                        kGeometryTweenStyle, kGeometryEasingDirection, kTweenPlaybackState, kRenderPriority, kPartType, kActuatorRelativeTo, kVelocityConstraintMode, kForceLimitMode };
+                        kGeometryTweenStyle, kGeometryEasingDirection, kTweenPlaybackState, kRenderPriority, kPartType, kActuatorRelativeTo, kVelocityConstraintMode, kForceLimitMode, kFontWeight, kFontStyle,
+                        kGuiFillDirection, kGuiHorizontalAlignment, kGuiVerticalAlignment, kGuiSortOrder, kGuiFlexAlignment, kGuiItemLineAlignment,
+                        kTextXAlignment, kTextYAlignment, kTextDirection,
+                        kGuiScrollingDirection, kGuiScrollBarInset, kGuiVerticalScrollBarPosition, kGuiFlexMode, kGuiStartCorner, kRaycastFilterType, kTextTruncate,
+                        kApplyStrokeMode, kStrokeSizingMode, kBorderStrokePosition, kLineJoinMode, kGradientTileMode, kGradientType,
+                        kImageScaleType, kImageResamplerMode, kCompressionAlgorithm, kHashAlgorithm };
 struct GeometryEnumSpec { const char* name; int count; std::array<const char*,64> names; std::array<int,64> values{}; bool mapped=false; };
 constexpr GeometryEnumSpec kGeometryEnums[] = {
     {"Axis",3,{"X","Y","Z"}},
@@ -27,6 +32,34 @@ constexpr GeometryEnumSpec kGeometryEnums[] = {
     {"ActuatorRelativeTo",3,{"Attachment0","Attachment1","World"}},
     {"VelocityConstraintMode",3,{"Line","Plane","Vector"}},
     {"ForceLimitMode",2,{"Magnitude","PerAxis"}},
+    {"FontWeight",9,{"Thin","ExtraLight","Light","Regular","Medium","SemiBold","Bold","ExtraBold","Heavy"},{100,200,300,400,500,600,700,800,900},true},
+    {"FontStyle",2,{"Normal","Italic"}},
+    {"FillDirection",2,{"Horizontal","Vertical"}},
+    {"HorizontalAlignment",3,{"Center","Left","Right"}},
+    {"VerticalAlignment",3,{"Center","Top","Bottom"}},
+    {"SortOrder",3,{"Name","Custom","LayoutOrder"}},
+    {"UIFlexAlignment",5,{"None","Fill","SpaceAround","SpaceBetween","SpaceEvenly"}},
+    {"ItemLineAlignment",5,{"Automatic","Start","Center","End","Stretch"}},
+    {"TextXAlignment",3,{"Left","Right","Center"}},
+    {"TextYAlignment",3,{"Top","Center","Bottom"}},
+    {"TextDirection",3,{"Auto","LeftToRight","RightToLeft"}},
+    {"ScrollingDirection",3,{"X","Y","XY"},{1,2,4},true},
+    {"ScrollBarInset",3,{"None","ScrollBar","Always"}},
+    {"VerticalScrollBarPosition",2,{"Right","Left"}},
+    {"UIFlexMode",5,{"None","Grow","Shrink","Fill","Custom"}},
+    {"StartCorner",4,{"TopLeft","TopRight","BottomLeft","BottomRight"}},
+    {"RaycastFilterType",2,{"Exclude","Include"}},
+    {"TextTruncate",3,{"None","AtEnd","SplitWord"}},
+    {"ApplyStrokeMode",2,{"Contextual","Border"}},
+    {"StrokeSizingMode",2,{"FixedSize","ScaledSize"}},
+    {"BorderStrokePosition",3,{"Outer","Center","Inner"}},
+    {"LineJoinMode",3,{"Round","Bevel","Miter"}},
+    {"GradientTileMode",3,{"Clamp","Repeat","Mirror"}},
+    {"GradientType",4,{"Linear","Radial","Conical","Elliptical"}},
+    {"ScaleType",5,{"Stretch","Slice","Tile","Fit","Crop"}},
+    {"ResamplerMode",2,{"Default","Pixelated"}},
+    {"CompressionAlgorithm",1,{"Zstd"}},
+    {"HashAlgorithm",5,{"Blake2b","Blake3","Md5","Sha1","Sha256"}},
 };
 int geometry_numeric(int kind,int index){return kGeometryEnums[kind].mapped?kGeometryEnums[kind].values[index]:index;}
 struct GeometryEnumItem { int kind; int value; };
@@ -77,6 +110,9 @@ int geometry_enum_items(lua_State* L) {
 int geometry_enum_from_name(lua_State* L) {
     int kind=*static_cast<int*>(luaL_checkudata(L,1,kGeometryEnumMeta));
     auto name=geometry_enum_key(L,2);
+    if(kind==kRaycastFilterType&&(name=="Blacklist"||name=="Whitelist")) {
+        push_geometry_item(L,kind,name=="Whitelist"?1:0);return 1;
+    }
     for(int i=0;i<kGeometryEnums[kind].count;++i)
         if(name==kGeometryEnums[kind].names[i]){push_geometry_item(L,kind,i);return 1;}
     lua_pushnil(L);return 1;
@@ -91,6 +127,9 @@ int geometry_enum_from_value(lua_State* L) {
 int geometry_enum_index(lua_State* L) {
     int kind=*static_cast<int*>(luaL_checkudata(L,1,kGeometryEnumMeta));
     auto name=geometry_enum_key(L,2);
+    if(kind==kRaycastFilterType&&(name=="Blacklist"||name=="Whitelist")) {
+        push_geometry_item(L,kind,name=="Whitelist"?1:0);return 1;
+    }
     if(name=="GetEnumItems")lua_pushcfunction(L,geometry_enum_items,"GetEnumItems");
     else if(name=="FromName")lua_pushcfunction(L,geometry_enum_from_name,"FromName");
     else if(name=="FromValue")lua_pushcfunction(L,geometry_enum_from_value,"FromValue");
@@ -110,6 +149,16 @@ void geometry_enum_method(lua_State* L,const char* name,lua_CFunction f) {
 }
 void install_geometry_enums(lua_State* L) {
     int root=lua_gettop(L); // existing Enum table retains animation/chat enums
+    lua_getfield(L,LUA_REGISTRYINDEX,kGeometryEnumsRegistry);
+    const bool installed=lua_istable(L,-1);lua_pop(L,1);
+    if(installed) {
+        // Authored values also work without a World. Reuse their canonical
+        // enums when world installation extends the root later in startup.
+        for(int kind=0;kind<int(std::size(kGeometryEnums));++kind) {
+            push_geometry_enum(L,kind);lua_setfield(L,root,kGeometryEnums[kind].name);
+        }
+        return;
+    }
     luaL_newmetatable(L,kGeometryItemMeta);
     geometry_enum_method(L,"__index",geometry_item_index);
     geometry_enum_method(L,"__newindex",geometry_enum_readonly);

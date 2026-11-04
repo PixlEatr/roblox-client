@@ -488,6 +488,8 @@ typedef struct Closure
     uint8_t nupvalues;
     uint8_t stacksize;
     uint8_t preload;
+    // Local introspection views retain their Proto but cannot execute it.
+    uint8_t inactive;
 
     GCObject* gclist;
     struct LuaTable* env;

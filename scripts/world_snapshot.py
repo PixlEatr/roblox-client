@@ -11,6 +11,8 @@ from script_catalog import script_catalog
 from received_attributes import attribute_snapshot
 from received_tags import tag_snapshot
 from physics_rotation import RotationField, rotation_is_identity
+from collision_groups import part_group
+from no_collision_constraints import constructor_defaults as constraint_defaults
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -131,6 +133,19 @@ def _encode(value, type_id=None, depth=0):
     raise ValueError('Unsupported snapshot property type')
 
 
+def _received_value(world, value, type_id=None):
+    if type_id in (46, 47) and isinstance(value, dict) and set(value) == {'shared'}:
+        try:
+            key = bytes.fromhex(value['shared'])
+            if len(key) == 16 and key in world.shared:
+                return _encode(world.shared[key])
+        except (ValueError, TypeError):
+            pass
+        # Retain unresolved provenance. Never replace missing shared bytes with
+        # an empty string or a payload captured from a different world.
+    return _encode(value, type_id)
+
+
 def _node_snapshot(world, key, instance, *, creation=None, versions=None):
     cls = world.schema['classes'][instance['class']]
     types = {world.schema['properties'][pi]['name']: world.schema['properties'][pi]['type']
@@ -139,9 +154,14 @@ def _node_snapshot(world, key, instance, *, creation=None, versions=None):
     for name, value in instance['properties'].items():
         if name in ('Source', 'Bytecode', 'ScriptBytecode'):
             continue
-        properties[name] = _encode(value, types.get(name))
+        properties[name] = _received_value(world, value, types.get(name))
         origins[name] = 'received'
     creation = world.creation.get(key, {}) if creation is None else creation
+    if cls['name'] == 'NoCollisionConstraint':
+        for name, value in constraint_defaults(creation).items():
+            if name not in properties:
+                properties[name] = value
+                origins[name] = 'class_default'
     if (not {'Archivable','archivable'} & properties.keys()
             and all(creation.get(flag) for flag in ('fresh','complete'))
             and cls['name'] in _archivable_defaults()):
@@ -152,6 +172,16 @@ def _node_snapshot(world, key, instance, *, creation=None, versions=None):
         properties['Anchored'] = False
         origins['Anchored'] = 'class_default'
     versions = dict(world.property_versions.get(key, {}) if versions is None else versions)
+    if 'CollisionGroup' not in properties and 'CollisionGroupReplicate' in properties:
+        try:
+            properties['CollisionGroup'] = part_group(properties)
+        except ValueError:
+            # Keep the private bytes intact; consumers must report unavailable
+            # state instead of exporting a fabricated Default name.
+            pass
+        else:
+            origins['CollisionGroup'] = 'derived_received'
+            versions['CollisionGroup'] = versions.get('CollisionGroupReplicate', 0)
     if 'Size' not in properties and 'size' in properties and types.get('size') == 22:
         properties['Size'] = properties['size']
         origins['Size'] = 'derived_received'
@@ -184,6 +214,13 @@ def _node_snapshot(world, key, instance, *, creation=None, versions=None):
     name = raw_name.decode('utf-8', 'replace') if isinstance(raw_name, bytes) else str(raw_name)
     return {'id': instance_id(key), 'class_name': cls['name'], 'name': name,
             'parent': parent, 'properties': properties, 'origins': origins,
+            # A fresh cached/streamed record also creates an instance before
+            # applying its property list. Its transport has one list instead
+            # of two; that does not remove the class constructor. Keep these
+            # defaults separate from received fields, and exclude partial or
+            # reused records whose initialization state is unknown.
+            'constructor_defaults_known': all(creation.get(flag, False)
+                for flag in ('fresh', 'complete')),
             **attribute_snapshot(instance['properties'],instance.get('attributes'),creation),
             **tag_snapshot(instance['properties'],world.shared,creation),
             'property_revisions': versions}
@@ -212,7 +249,11 @@ def make_world_snapshot(world, user_id, *, job_id=None, include_script_sources=T
                 'script_sources': script_catalog(world) if include_script_sources else {},
                 'initial_replication_complete': 13 in world.tags,
                 'class_events': {cls['name']: [world.schema['events'][i]['name'] for i in cls.get('events', [])]
-                                 for cls in world.schema['classes']}}
+                                 for cls in world.schema['classes']},
+                'class_event_signatures': {cls['name']: {world.schema['events'][i]['name']: [p['type'] for p in world.schema['events'][i]['arguments']]
+                                                       for i in cls.get('events', [])} for cls in world.schema['classes']},
+                'class_property_types': {cls['name']: {world.schema['properties'][i]['name']: world.schema['properties'][i]['type']
+                                                     for i in cls.get('properties', [])} for cls in world.schema['classes']}}
     if len(json.dumps(snapshot, ensure_ascii=True, allow_nan=False).encode()) > MAX_SNAPSHOT_BYTES:
         raise ValueError('World snapshot exceeds 8 MiB')
     return snapshot
@@ -228,7 +269,18 @@ def make_world_delta(world, since_revision, *, max_actions=None, max_bytes=None)
     actions = []
     used_bytes = 256  # Envelope and final sequence; leave room for JSON separators.
     sequence = world.revision
-    for record in world.actions:
+    records = world.actions
+    if records and since_revision >= records[len(records) // 2]['sequence']:
+        # A caught-up consumer needs only the recent suffix. Walk it backwards
+        # to avoid scanning the retained history, then restore receipt order.
+        # Keep the forward path for a backlog so bounded batches stay cheap.
+        pending = []
+        for record in reversed(records):
+            if record['sequence'] <= since_revision:
+                break
+            pending.append(record)
+        records = reversed(pending)
+    for record in records:
         if record['sequence'] <= since_revision:
             continue
         if max_actions is not None and len(actions) >= max_actions:
@@ -246,7 +298,7 @@ def make_world_delta(world, since_revision, *, max_actions=None, max_bytes=None)
             types = {world.schema['properties'][i]['name']: world.schema['properties'][i]['type']
                      for i in cls.get('properties', [])}
             action['fields'] = {name: ({'$ref': instance_id(value)} if value else None)
-                                if name == 'Parent' else _encode(value, types.get(name))
+                                if name == 'Parent' else _received_value(world, value, types.get(name))
                                 for name, value in record['fields'].items()
                                 if name not in ('Source', 'Bytecode', 'ScriptBytecode')}
             if 'AttributesReplicate' in record['fields']:

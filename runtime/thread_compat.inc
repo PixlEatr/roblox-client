@@ -33,7 +33,9 @@ int thread_compat_script_from(lua_State* L,int index) {
 
 int thread_compat_script_thread(lua_State* L) {
     luaL_checktype(L,1,LUA_TTHREAD);
-    return thread_compat_script_from(L,1);
+    lua_getfield(L,LUA_REGISTRYINDEX,"Headless.ScriptFromThread");
+    if(lua_isfunction(L,-1)){lua_pushvalue(L,1);lua_call(L,1,1);return 1;}
+    lua_pushnil(L);return 1;
 }
 
 int thread_compat_calling_script(lua_State* L) {

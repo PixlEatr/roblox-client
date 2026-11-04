@@ -1,5 +1,6 @@
 #include "brickcolor_bindings.hpp"
 #include "color3_bindings.hpp"
+#include "platform_support.hpp"
 
 #include <lua.h>
 #include <lualib.h>
@@ -7,12 +8,12 @@
 #include <cmath>
 #include <cstdint>
 #include <cstring>
+#include <limits>
 
 namespace {
 constexpr const char* kMeta = "LocalRuntime.BrickColor";
 struct Entry { int number; const char* name; unsigned char r,g,b; };
 // IDs, names, and RGB channels measured in the 0.745 native palette initializer.
-// palette() and random() intentionally remain unsupported.
 constexpr Entry kEntries[] = {
     {1, "White", 242,243,243},
     {2, "Grey", 161,165,162},
@@ -224,6 +225,7 @@ constexpr Entry kEntries[] = {
     {1032, "Hot pink", 255,0,191},
 };
 struct Value { int number; };
+#include "brickcolor_palette.inc"
 
 const Entry* by_number(int number) {
     for (const auto& entry : kEntries) if (entry.number == number) return &entry;
@@ -234,11 +236,16 @@ const Entry* by_name(const char* name, size_t length) {
         if (std::strlen(entry.name) == length && std::memcmp(entry.name,name,length)==0) return &entry;
     return nullptr;
 }
-const Entry* exact_color(double r,double g,double b) {
+const Entry* closest_color(double r,double g,double b) {
+    const Entry* closest=nullptr;
+    double minimum=std::numeric_limits<double>::infinity();
     for (const auto& entry:kEntries) {
-        if(std::abs(r-entry.r/255.0)<1e-6&&std::abs(g-entry.g/255.0)<1e-6&&std::abs(b-entry.b/255.0)<1e-6)return &entry;
+        // The documented match uses total absolute channel distance, not
+        // Euclidean distance. Preserve catalog order for equal distances.
+        double distance=std::abs(r-entry.r/255.0)+std::abs(g-entry.g/255.0)+std::abs(b-entry.b/255.0);
+        if(distance<minimum){minimum=distance;closest=&entry;}
     }
-    return nullptr;
+    return closest;
 }
 void push_value(lua_State* L,const Entry* entry) {
     auto* value=static_cast<Value*>(lua_newuserdatatagged(L,sizeof(Value),0));
@@ -255,10 +262,10 @@ int create(lua_State* L) {
     int count=lua_gettop(L);const Entry* entry=nullptr;
     if(count==1&&lua_type(L,1)==LUA_TNUMBER) {
         double number=lua_tonumber(L,1);
-        if(!std::isfinite(number)||std::floor(number)!=number||number<0||number>65535) {
+        if(!std::isfinite(number)||std::floor(number)!=number) {
             luaL_error(L,"BrickColor.new number must be an integer palette id");return 0;
         }
-        entry=by_number(static_cast<int>(number));
+        if(number>=0&&number<=65535)entry=by_number(static_cast<int>(number));
     } else if(count==1&&lua_type(L,1)==LUA_TSTRING) {
         size_t size=0;const char* name=lua_tolstring(L,1,&size);entry=by_name(name,size);
     } else if(count==1&&lua_type(L,1)==LUA_TUSERDATA) {
@@ -272,13 +279,29 @@ int create(lua_State* L) {
             lua_getfield(L,1,fields[i]);channels[i]=lua_tonumber(L,-1);lua_pop(L,1);
             if(!std::isfinite(channels[i])){luaL_error(L,"Color3 channels must be finite");return 0;}
         }
-        entry=exact_color(channels[0],channels[1],channels[2]);
+        entry=closest_color(channels[0],channels[1],channels[2]);
     } else if(count==3) {
         double rgb[3];for(int i=0;i<3;i++){rgb[i]=luaL_checknumber(L,i+1);if(!std::isfinite(rgb[i])||rgb[i]<0||rgb[i]>1){luaL_error(L,"BrickColor channels must be normalized finite values");return 0;}}
-        entry=exact_color(rgb[0],rgb[1],rgb[2]);
+        entry=closest_color(rgb[0],rgb[1],rgb[2]);
     } else {luaL_error(L,"BrickColor.new expects a palette id, name, Color3, or three RGB numbers");return 0;}
-    if(!entry){luaL_error(L,"unsupported BrickColor palette value");return 0;}
+    if(!entry)entry=by_number(194);
     push_value(L,entry);return 1;
+}
+int palette(lua_State* L) {
+    if(lua_gettop(L)!=1){luaL_error(L,"BrickColor.palette expects one palette index");return 0;}
+    luaL_checktype(L,1,LUA_TNUMBER);
+    const double value=lua_tonumber(L,1);
+    if(!std::isfinite(value)||std::floor(value)!=value||value<0||value>=128){
+        luaL_error(L,"BrickColor.palette index must be an integer from 0 through 127");return 0;
+    }
+    push_value(L,by_number(kPalette[static_cast<int>(value)]));return 1;
+}
+int random_color(lua_State* L) {
+    if(lua_gettop(L)!=0){luaL_error(L,"BrickColor.random expects no arguments");return 0;}
+    uint32_t value;
+    if(!host_entropy(&value,sizeof(value))){luaL_error(L,"BrickColor.random entropy unavailable");return 0;}
+    // 128 divides the uint32 range exactly, so these seven bits are unbiased.
+    push_value(L,by_number(kPalette[value&127]));return 1;
 }
 int index(lua_State* L) {
     const Entry* entry=check_entry(L,1);const char* key=luaL_checkstring(L,2);
@@ -314,8 +337,13 @@ void install_brickcolor_bindings(lua_State* L) {
     lua_pushcfunction(L,equal,"__eq");lua_setfield(L,-2,"__eq");
     lua_pushliteral(L,"BrickColor");lua_setfield(L,-2,"__type");
     lua_pushliteral(L,"BrickColor");lua_setfield(L,-2,"__metatable");lua_pop(L,1);
-    lua_createtable(L,0,8);
+    lua_createtable(L,0,11);
     lua_pushcfunction(L,create,"new");lua_setfield(L,-2,"new");
+    lua_pushcfunction(L,palette,"palette");lua_setfield(L,-2,"palette");
+    lua_pushcfunction(L,random_color,"random");lua_setfield(L,-2,"random");
     set_constant(L,"White",1);set_constant(L,"Black",26);
+    set_constant(L,"Gray",194);set_constant(L,"DarkGray",199);
+    set_constant(L,"Red",21);set_constant(L,"Yellow",24);
+    set_constant(L,"Green",28);set_constant(L,"Blue",23);
     lua_setreadonly(L,-1,true);lua_setglobal(L,"BrickColor");
 }

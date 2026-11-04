@@ -50,11 +50,54 @@ fn timeout(stream: &mut MaybeTlsStream<TcpStream>) -> Result<(), String> {
         .set_write_timeout(Some(Duration::from_millis(200)))
         .map_err(|e| e.to_string())
 }
+fn websocket_url(raw: &str, base: Option<&url::Url>) -> Result<url::Url, String> {
+    let mut url = match base {
+        Some(base) => base.join(raw),
+        None => url::Url::parse(raw),
+    }.map_err(|e| e.to_string())?;
+    let scheme = match url.scheme() {
+        "ws" | "http" => "ws",
+        "wss" | "https" => "wss",
+        _ => return Err("WS(S) URL required".into()),
+    };
+    url.set_scheme(scheme).map_err(|_| "Invalid WebSocket URL")?;
+    if url.host_str().is_none() || url.fragment().is_some() || !url.username().is_empty() || url.password().is_some() {
+        return Err("WebSocket URL requires a host and cannot contain credentials or a fragment".into());
+    }
+    Ok(url)
+}
+fn connect_socket(raw: &str) -> Result<Socket, String> {
+    let mut url = websocket_url(raw, None)?;
+    let config = tungstenite::protocol::WebSocketConfig::default()
+        .max_message_size(Some(128 * 1024))
+        .max_frame_size(Some(128 * 1024));
+    for attempt in 0..=3 {
+        // Rebuild the handshake for each destination so Host and TLS SNI
+        // follow the redirected URL. No Roblox or previous-origin headers
+        // are attached to script WebSockets.
+        match tungstenite::client::connect_with_config(url.as_str(), Some(config), 0) {
+            Ok((socket, _)) => return Ok(socket),
+            Err(tungstenite::Error::Http(response)) if response.status().is_redirection() => {
+                if attempt == 3 { return Err("WebSocket redirect limit exceeded".into()); }
+                let location = response.headers().get("Location")
+                    .ok_or("WebSocket redirect is missing Location")?
+                    .to_str().map_err(|e| e.to_string())?;
+                let next = websocket_url(location, Some(&url))?;
+                if url.scheme() == "wss" && next.scheme() != "wss" {
+                    return Err("WebSocket redirect would downgrade TLS".into());
+                }
+                url = next;
+            }
+            Err(error) => return Err(error.to_string()),
+        }
+    }
+    unreachable!()
+}
 fn operation(v: Value) -> Result<Value, String> {
     match text(&v, "operation")? {
         "start" => {
             let request = v["request"].clone();
-            if !["http", "connect", "send", "close"].contains(&text(&request, "operation")?) {
+            if !["http", "connect", "send", "close", "decompile"].contains(&text(&request, "operation")?) {
                 return Err("invalid asynchronous operation".into());
             }
             let mut jobs = self::jobs().lock().map_err(|_| "job pool lock failed")?;
@@ -89,6 +132,7 @@ fn operation(v: Value) -> Result<Value, String> {
                 Ok(json!({"ready":false}))
             }
         }
+        "decompile" => crate::decompiler::decompile(&v),
         "http" => {
             let url = text(&v, "Url")?;
             if !(url.starts_with("https://") || url.starts_with("http://")) {
@@ -173,11 +217,7 @@ fn operation(v: Value) -> Result<Value, String> {
             {
                 return Err("WebSocket limit exceeded".into());
             }
-            let config = tungstenite::protocol::WebSocketConfig::default()
-                .max_message_size(Some(128 * 1024))
-                .max_frame_size(Some(128 * 1024));
-            let (mut socket, _) = tungstenite::client::connect_with_config(url, Some(config), 3)
-                .map_err(|e| e.to_string())?;
+            let mut socket = connect_socket(url)?;
             timeout(socket.get_mut())?;
             let mut pool = sockets().lock().map_err(|_| "socket pool lock failed")?;
             if pool.sockets.len() >= 16 {
@@ -284,6 +324,47 @@ mod tests {
 
     fn get(url: &str) -> Result<Value, String> {
         operation(json!({"operation":"http", "Url":url, "Method":"GET"}))
+    }
+
+    #[test]
+    fn websocket_follows_http_location_and_rebuilds_the_host_header() {
+        let destination = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let address = destination.local_addr().unwrap();
+        let echo = thread::spawn(move || {
+            let (stream, _) = destination.accept().unwrap();
+            let mut socket = tungstenite::accept_hdr(stream, |request: &tungstenite::handshake::server::Request, response| {
+                assert_eq!(request.headers().get("Host").unwrap(), address.to_string().as_str());
+                assert_eq!(request.uri().path(), "/echo");
+                Ok(response)
+            }).unwrap();
+            let message = socket.read().unwrap();
+            socket.send(message).unwrap();
+        });
+        let redirect = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let first = redirect.local_addr().unwrap();
+        let server = thread::spawn(move || {
+            let (mut stream, _) = redirect.accept().unwrap();
+            let mut bytes = Vec::new();
+            while !bytes.ends_with(b"\r\n\r\n") {
+                let mut byte = [0u8; 1]; stream.read_exact(&mut byte).unwrap(); bytes.push(byte[0]);
+                assert!(bytes.len() < 16384);
+            }
+            write!(stream, "HTTP/1.1 301 Moved Permanently\r\nLocation: http://{address}/echo\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").unwrap();
+        });
+        let mut socket = connect_socket(&format!("ws://{first}/start")).unwrap();
+        socket.send(Message::Text("redirect echo".into())).unwrap();
+        assert_eq!(socket.read().unwrap().into_text().unwrap(), "redirect echo");
+        server.join().unwrap(); echo.join().unwrap();
+    }
+
+    #[test]
+    fn websocket_normalizes_secure_and_relative_redirects() {
+        let base = websocket_url("wss://example.test/first", None).unwrap();
+        assert_eq!(websocket_url("https://other.test/echo", Some(&base)).unwrap().as_str(), "wss://other.test/echo");
+        assert_eq!(websocket_url("/next", Some(&base)).unwrap().as_str(), "wss://example.test/next");
+        for invalid in ["file:///tmp/data", "ws://", "wss://example.test/#fragment", "wss://user:pass@example.test/"] {
+            assert!(websocket_url(invalid, None).is_err(), "{invalid}");
+        }
     }
 
     #[test]

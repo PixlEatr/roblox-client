@@ -38,8 +38,31 @@ const Json* input_default(const Node& n,const std::string& key) {
     return nullptr;
 }
 bool input_event_name(const std::string& key) {
+    if(key=="WindowFocused"||key=="WindowFocusReleased")return true;
     return key=="InputBegan"||key=="InputChanged"||key=="InputEnded"||key=="LastInputTypeChanged"||
         key=="TouchStarted"||key=="TouchMoved"||key=="TouchEnded";
+}
+bool mouse_event_name(const std::string& key) {
+    return key=="Button1Down"||key=="Button1Up"||key=="Button2Down"||key=="Button2Up"||
+        key=="Move"||key=="WheelForward"||key=="WheelBackward";
+}
+Node* local_player_mouse(World& w) {
+    auto* player=find_node(w,w.local_player);
+    if(!player||player->destroyed)return nullptr;
+    auto found=w.client_services.player_mice.find(player->id);
+    if(found==w.client_services.player_mice.end())return nullptr;
+    auto* mouse=find_node(w,found->second);
+    return mouse&&!mouse->destroyed?mouse:nullptr;
+}
+void publish_mouse_event(World& w,int type,int state,double wheel=0) {
+    // GetMouse owns the instance lifetime; hardware input never creates one.
+    auto* mouse=local_player_mouse(w);if(!mouse)return;
+    const char* signal=nullptr;
+    if(type==0)signal=state==0?"Button1Down":state>=2?"Button1Up":nullptr;
+    else if(type==1)signal=state==0?"Button2Down":state>=2?"Button2Up":nullptr;
+    else if(type==4&&state==1)signal="Move";
+    else if(type==3&&state==1)signal=wheel>0?"WheelForward":wheel<0?"WheelBackward":nullptr;
+    if(signal)emit(w,*mouse,signal,Json::array());
 }
 int input_query(lua_State* L) {
     auto* h=checked_handle(L,1);auto& w=*h->world;
@@ -78,6 +101,9 @@ int input_query(lua_State* L) {
     }catch(const std::exception& e){luaL_error(L,"UserInputService: %s",e.what());return 0;}
 }
 bool input_index(lua_State* L,World& w,Node& n,const std::string& key) {
+    if(class_is_a(w,n.class_name,"Mouse")&&mouse_event_name(key)) {
+        push_signal(L,signal_for(w,n,key));return true;
+    }
     if(n.class_name!="UserInputService")return false;
     if(input_event_name(key)){push_signal(L,signal_for(w,n,key));return true;}
     constexpr const char* methods[]={"IsKeyDown","IsMouseButtonPressed","GetKeysPressed","GetMouseButtonsPressed","GetLastInputType","GetMouseLocation","GetMouseDelta"};
@@ -125,6 +151,22 @@ Json input_vector(const Json& event,const char* field) {
     }
     return Json{{"$vector3",result}};
 }
+// Shared dispatch for validated host device events and GUI input. Device
+// attachment/capability leases are owned by the caller, not signal delivery.
+void publish_input_event(World& w,const std::string& id,int type,int key,int state,int type_item,bool processed,double wheel=0) {
+    auto service=w.services.find("UserInputService");
+    Node* uis=service==w.services.end()?nullptr:find_node(w,service->second);
+    if(!uis||uis->destroyed)throw std::runtime_error("input service unavailable");
+    if(w.input.last_type!=type){w.input.last_type=type;emit(w,*uis,"LastInputTypeChanged",Json::array({input_enum_json("UserInputType",type_item)}));}
+    const Json args=Json::array({Json{{"$ref",id}},processed});
+    emit(w,*uis,state==0?"InputBegan":state==1?"InputChanged":"InputEnded",args);
+    if(type==9&&(state==0||state==2))emit(w,*uis,state==0?"WindowFocused":"WindowFocusReleased",Json::array());
+    if(type==7)emit(w,*uis,state==0?"TouchStarted":state==1?"TouchMoved":"TouchEnded",args);
+    // Legacy signals observe delivered mouse input without a processed argument
+    // or a sink result. Use the validated host values, not script-writable fields.
+    publish_mouse_event(w,type,state,wheel);
+    queue_context_input(w,id,type,key,state,processed);
+}
 void update_input_events(World& w,const Json& batch) {
     if(!batch.is_array()||batch.size()>128)throw std::runtime_error("input batch must contain at most 128 events");
     context_reserve(w,batch.size(),batch.size()*w.context_actions.bindings.size());
@@ -138,9 +180,10 @@ void update_input_events(World& w,const Json& batch) {
         if(e.state<0)throw std::runtime_error("invalid input phase");
         e.type_item=input_enum_item("UserInputType",value.at("input_type").get<std::string>());
         e.type=kUsiExportEnums[input_enum_kind("UserInputType")].items[e.type_item].value;
-        if(!(e.type>=0&&e.type<=4)&&e.type!=7&&e.type!=8)throw std::runtime_error("input bridge supports keyboard, mouse and touch events");
+        if(!(e.type>=0&&e.type<=4)&&e.type!=7&&e.type!=8&&e.type!=9)throw std::runtime_error("input bridge supports keyboard, mouse, touch and focus events");
         const char* capability=e.type==8?"KeyboardEnabled":e.type==7?"TouchEnabled":"MouseEnabled";
-        if(!input_capability(w,capability))throw std::runtime_error("input device capability is disabled");
+        if(e.type!=9&&!input_capability(w,capability))throw std::runtime_error("input device capability is disabled");
+        if(e.type==9&&e.state!=0&&e.state!=2)throw std::runtime_error("window focus requires begin or end phase");
         e.key_item=input_enum_item("KeyCode",value.value("key_code",std::string("None")));
         e.key=kUsiExportEnums[input_enum_kind("KeyCode")].items[e.key_item].value;
         if((e.type==8&&e.key==0)||(e.type!=8&&e.key!=0))throw std::runtime_error("key_code must identify a keyboard key only");
@@ -185,6 +228,8 @@ void update_input_events(World& w,const Json& batch) {
         }
         auto& node=w.nodes.at(id);
         auto set=[&](const char* field,const Json& v){if(v.is_null())return;clear_local_property(w,id,field);if(node.properties[field]!=v){node.properties[field]=v;property_events(w,node,field);}};
+        set("UserInputType",input_enum_json("UserInputType",e.type_item));
+        set("KeyCode",input_enum_json("KeyCode",e.key_item));
         set("UserInputState",input_enum_json("UserInputState",e.state));
         set("Position",e.position);
         Json delta=e.delta.is_null()?Json{{"$vector3",{0,0,0}}}:e.delta;
@@ -197,11 +242,9 @@ void update_input_events(World& w,const Json& batch) {
         if(e.state>=2)w.input.contacts.erase(e.identity);
         if(e.has_mouse)w.input.location=e.mouse;
         if(e.type==4&&!e.delta.is_null())for(int i=0;i<2;++i)w.input.pending_delta[i]=static_cast<float>(std::clamp(double(w.input.pending_delta[i])+e.delta["$vector3"][i].get<double>(),-double(std::numeric_limits<float>::max()),double(std::numeric_limits<float>::max())));
-        if(w.input.last_type!=e.type){w.input.last_type=e.type;emit(w,*uis,"LastInputTypeChanged",Json::array({input_enum_json("UserInputType",e.type_item)}));}
-        const Json args=Json::array({Json{{"$ref",id}},e.processed});
-        emit(w,*uis,e.state==0?"InputBegan":e.state==1?"InputChanged":"InputEnded",args);
-        if(e.type==7)emit(w,*uis,e.state==0?"TouchStarted":e.state==1?"TouchMoved":"TouchEnded",args);
-        queue_context_input(w,id,e.type,e.key,e.state,e.processed);
+        const Json& wheel=e.position.is_null()?e.delta:e.position;
+        const double wheel_steps=e.type==3&&!wheel.is_null()?wheel["$vector3"][2].get<double>():0;
+        publish_input_event(w,id,e.type,e.key,e.state,e.type_item,e.processed,wheel_steps);
     }
 }
 void cancel_disabled_inputs(World& w) {
@@ -209,6 +252,8 @@ void cancel_disabled_inputs(World& w) {
     Node* uis=service==w.services.end()?nullptr:find_node(w,service->second);
     for(auto it=w.input.contacts.begin();it!=w.input.contacts.end();) {
         const auto contact=it->second;
+        // Window focus is independent of whether a mouse is attached.
+        if(contact.type==9){++it;continue;}
         const char* capability=contact.type==8?"KeyboardEnabled":contact.type==7?"TouchEnabled":"MouseEnabled";
         if(input_capability(w,capability)){++it;continue;}
         auto* node=find_node(w,contact.node);it=w.input.contacts.erase(it);
@@ -220,6 +265,7 @@ void cancel_disabled_inputs(World& w) {
                 const Json args=Json::array({Json{{"$ref",node->id}},false});
                 emit(w,*uis,"InputEnded",args);
                 if(contact.type==7)emit(w,*uis,"TouchEnded",args);
+                publish_mouse_event(w,contact.type,3);
                 queue_context_input(w,node->id,contact.type,contact.key,3,false);
             }
         }

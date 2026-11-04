@@ -1,5 +1,6 @@
 //! Binary-safe source-script codecs. These callbacks never access a Lua state.
 use base64::{engine::general_purpose::STANDARD, Engine};
+use blake2::{digest::consts::U32, Blake2b, Digest};
 use std::{
     ffi::{c_char, c_int, c_void},
     ptr, slice,
@@ -13,12 +14,14 @@ const MAX_CODEC_SIZE: usize = 32 * 1024 * 1024;
 type CompressBound = unsafe extern "C" fn(usize) -> usize;
 type Compress = unsafe extern "C" fn(*mut u8, usize, *const u8, usize, c_int) -> usize;
 type Decompress = unsafe extern "C" fn(*mut u8, usize, *const u8, usize) -> usize;
+type FrameContentSize = unsafe extern "C" fn(*const u8, usize) -> u64;
 type IsError = unsafe extern "C" fn(usize) -> u32;
 
 struct Zstd {
     compress_bound: CompressBound,
     compress: Compress,
     decompress: Decompress,
+    frame_content_size: FrameContentSize,
     is_error: IsError,
 }
 
@@ -59,10 +62,12 @@ fn zstd() -> Option<&'static Zstd> {
                 let compress_bound = dlsym(handle, c"ZSTD_compressBound".as_ptr());
                 let compress = dlsym(handle, c"ZSTD_compress".as_ptr());
                 let decompress = dlsym(handle, c"ZSTD_decompress".as_ptr());
+                let frame_content_size = dlsym(handle, c"ZSTD_getFrameContentSize".as_ptr());
                 let is_error = dlsym(handle, c"ZSTD_isError".as_ptr());
                 if compress_bound.is_null()
                     || compress.is_null()
                     || decompress.is_null()
+                    || frame_content_size.is_null()
                     || is_error.is_null()
                 {
                     continue;
@@ -73,6 +78,9 @@ fn zstd() -> Option<&'static Zstd> {
                     ),
                     compress: std::mem::transmute::<*mut c_void, Compress>(compress),
                     decompress: std::mem::transmute::<*mut c_void, Decompress>(decompress),
+                    frame_content_size: std::mem::transmute::<*mut c_void, FrameContentSize>(
+                        frame_content_size,
+                    ),
                     is_error: std::mem::transmute::<*mut c_void, IsError>(is_error),
                 });
             }
@@ -91,6 +99,7 @@ pub unsafe extern "C" fn apply(
     length: usize,
     output: *mut *mut u8,
     output_length: *mut usize,
+    parameter: c_int,
 ) -> i32 {
     if output.is_null()
         || output_length.is_null()
@@ -99,8 +108,8 @@ pub unsafe extern "C" fn apply(
     {
         return 1;
     }
-    // SAFETY: the C++ binding supplies a readable Lua string, writable output
-    // slots, and retains the VM string until this synchronous call returns.
+    // SAFETY: the C++ binding supplies readable VM data and writable output
+    // slots, and retains the input until this synchronous call returns.
     let input = unsafe { slice::from_raw_parts(input, length) };
     let result = match operation {
         0 => STANDARD.encode(input).into_bytes(),
@@ -111,8 +120,8 @@ pub unsafe extern "C" fn apply(
         2 => {
             let Some(zstd) = zstd() else { return 3 };
             // SAFETY: the output allocation has the capacity required by zstd;
-            // input remains live for this synchronous call. Level zero selects
-            // the library's default rather than defining a wire format.
+            // input remains live for this synchronous call. Legacy calls pass
+            // zero for the library default, EncodingService passes a level.
             let capacity = unsafe { (zstd.compress_bound)(input.len()) };
             let mut result = vec![0; capacity];
             let written = unsafe {
@@ -121,7 +130,7 @@ pub unsafe extern "C" fn apply(
                     result.len(),
                     input.as_ptr(),
                     input.len(),
-                    0,
+                    parameter,
                 )
             };
             if unsafe { (zstd.is_error)(written) } != 0 {
@@ -130,25 +139,51 @@ pub unsafe extern "C" fn apply(
             result.truncate(written);
             result
         }
-        3 => {
+        3 | 4 | 5 => {
             let Some(zstd) = zstd() else { return 3 };
-            let mut result = vec![0; MAX_CODEC_SIZE];
-            // SAFETY: both buffers are valid for their supplied lengths. zstd
-            // reports an error for malformed input or output beyond the cap.
-            let written = unsafe {
-                (zstd.decompress)(
-                    result.as_mut_ptr(),
-                    result.len(),
-                    input.as_ptr(),
-                    input.len(),
-                )
+            let capacity = if operation == 3 {
+                MAX_CODEC_SIZE
+            } else {
+                // Both Zstd sentinel values for unknown size and invalid headers
+                // are greater than the output cap.
+                let size = unsafe { (zstd.frame_content_size)(input.as_ptr(), input.len()) };
+                if size > MAX_CODEC_SIZE as u64 {
+                    return 2;
+                }
+                size as usize
             };
-            if unsafe { (zstd.is_error)(written) } != 0 {
-                return 2;
+            if operation == 4 {
+                (capacity as u32).to_le_bytes().to_vec()
+            } else {
+                let mut result = vec![0; capacity];
+                // SAFETY: both buffers are valid for the supplied lengths.
+                let written = unsafe {
+                    (zstd.decompress)(
+                        result.as_mut_ptr(),
+                        result.len(),
+                        input.as_ptr(),
+                        input.len(),
+                    )
+                };
+                if unsafe { (zstd.is_error)(written) } != 0
+                    || (operation == 5 && written != capacity)
+                {
+                    return 2;
+                }
+                result.truncate(written);
+                result
             }
-            result.truncate(written);
-            result
         }
+        // Both EncodingService hash methods use the same binary digest.
+        // The parameter is the Roblox Enum.HashAlgorithm value.
+        6 | 7 => match parameter {
+            0 => Blake2b::<U32>::digest(input).to_vec(),
+            1 => blake3::hash(input).as_bytes().to_vec(),
+            2 => md5::Md5::digest(input).to_vec(),
+            3 => sha1::Sha1::digest(input).to_vec(),
+            4 => sha2::Sha256::digest(input).to_vec(),
+            _ => return 2,
+        },
         100 => crate::network::apply(input),
         101 => crate::host_io::set_clipboard(input),
         _ => return 1,
@@ -183,13 +218,13 @@ mod tests {
             let mut encoded = ptr::null_mut();
             let mut count = 0;
             assert_eq!(
-                unsafe { apply(0, input.as_ptr(), input.len(), &mut encoded, &mut count) },
+                unsafe { apply(0, input.as_ptr(), input.len(), &mut encoded, &mut count, 0) },
                 0
             );
             let mut decoded = ptr::null_mut();
             let mut decoded_count = 0;
             assert_eq!(
-                unsafe { apply(1, encoded, count, &mut decoded, &mut decoded_count) },
+                unsafe { apply(1, encoded, count, &mut decoded, &mut decoded_count, 0) },
                 0
             );
             assert_eq!(
@@ -204,7 +239,7 @@ mod tests {
         let mut output = ptr::null_mut();
         let mut length = 0;
         assert_eq!(
-            unsafe { apply(1, b"??".as_ptr(), 2, &mut output, &mut length) },
+            unsafe { apply(1, b"??".as_ptr(), 2, &mut output, &mut length, 0) },
             2
         );
     }
@@ -222,6 +257,7 @@ mod tests {
                     input.len(),
                     &mut encoded,
                     &mut encoded_length,
+                    0,
                 )
             },
             0
@@ -238,6 +274,7 @@ mod tests {
                     encoded_length,
                     &mut decoded,
                     &mut decoded_length,
+                    0,
                 )
             },
             0

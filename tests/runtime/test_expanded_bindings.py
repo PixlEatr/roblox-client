@@ -68,11 +68,11 @@ for _,entry in ipairs(expected) do
     assert(BrickColor.new(entry[3]/255,entry[4]/255,entry[5]/255)==value)
 end
 for _,number in ipairs({4,999,1033}) do
-    assert(not pcall(function()return BrickColor.new(number)end))
+    assert(BrickColor.new(number)==BrickColor.Gray())
 end
-assert(not pcall(function()return BrickColor.new("not in native palette")end))
-assert(not pcall(function()return BrickColor.palette(1)end))
-assert(not pcall(function()return BrickColor.random()end))
+assert(BrickColor.new("not in native palette")==BrickColor.Gray())
+assert(BrickColor.palette(1).Number==301)
+assert(typeof(BrickColor.random())=="BrickColor")
 return #expected
 ''')
         self.assertEqual(result['values'],[5])

@@ -135,5 +135,60 @@ root:ApplyImpulse(Vector3.new(10,0,0))
                 self.assertEqual(state.instances,original)
             finally:runtime.close()
 
+    def test_actual_bulk_move_reaches_prediction_before_impulse_without_editing_receipts(self):
+        import test_cframe_transforms as transforms
+        data,root=native_world();original=copy.deepcopy(data)
+        source='''
+local root=game:GetService("Players").LocalPlayer.Character.HumanoidRootPart
+workspace:BulkMoveTo({root},{CFrame.new(30,60,50)*CFrame.Angles(0,math.pi/2,0)},Enum.BulkMoveMode.FireCFrameChanged)
+root:ApplyImpulse(Vector3.new(10,0,0))
+'''
+        for result in transforms.CFrameTransformTests.run_script(self,source,data):
+            b=bridge(data);out=b.consume_batch(result['mutations'],result['movement_intents'])
+            self.assertTrue(out[0]['accepted'],out)
+            self.assertEqual(pose(b.controller),(30,60,50))
+            self.assertAlmostEqual(b.controller.yaw,math.pi/2)
+            b.step(.1);self.assertAlmostEqual(pose(b.controller)[0],30.5)
+            self.assertEqual(data,original)
+
+    def test_model_primary_move_and_world_translation_reach_prediction_before_impulse(self):
+        import test_cframe_transforms as transforms
+        data,root=native_world();original=copy.deepcopy(data)
+        source='''
+local char=game:GetService("Players").LocalPlayer.Character
+local root=char.HumanoidRootPart;char.PrimaryPart=root
+char:SetPrimaryPartCFrame(CFrame.new(30,60,50)*CFrame.Angles(0,math.pi/2,0))
+char:TranslateBy(Vector3.new(5,6,7))
+root:ApplyImpulse(Vector3.new(10,0,0))
+'''
+        for result in transforms.CFrameTransformTests.run_script(self,source,data):
+            b=bridge(data);out=b.consume_batch(result['mutations'],result['movement_intents'])
+            self.assertTrue(out[0]['accepted'],out)
+            self.assertEqual(pose(b.controller),(35,66,57))
+            self.assertAlmostEqual(b.controller.yaw,math.pi/2)
+            b.step(.1);self.assertAlmostEqual(pose(b.controller)[0],35.5)
+            self.assertEqual(data,original)
+
+    def test_scaled_character_geometry_updates_impulse_mass_before_prediction(self):
+        import test_cframe_transforms as transforms
+        from test_authored_mass_prediction import mass_world
+        data,root=mass_world(native=True)
+        root['properties']['Position']={'$vector3':list(root['properties']['CFrame']['$cframe']['position'])}
+        root['origins']['Position']='received';original=copy.deepcopy(data)
+        source='''
+local char=game:GetService("Players").LocalPlayer.Character
+local root=char.HumanoidRootPart;char.PrimaryPart=root;root.PivotOffset=CFrame.identity
+root.Size=Vector3.new(2,2,1);root.Shape=Enum.PartType.Block
+root.CustomPhysicalProperties=PhysicalProperties.new(1,0,0)
+char:ScaleTo(2);near(root.AssemblyMass,32)
+root:ApplyImpulse(Vector3.new(32,0,0))
+'''
+        for result in transforms.CFrameTransformTests.run_script(self,source,data):
+            b=bridge(data);out=b.consume_batch(result['mutations'],result['movement_intents'])
+            self.assertTrue(out[0]['accepted'],out)
+            self.assertEqual(pose(b.controller),(0,20,0))
+            b.step(.1);self.assertAlmostEqual(pose(b.controller)[0],.1)
+            self.assertEqual(data,original)
+
 
 if __name__=='__main__':unittest.main()

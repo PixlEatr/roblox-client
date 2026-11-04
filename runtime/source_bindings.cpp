@@ -1,15 +1,19 @@
 #include "source_bindings.hpp"
+#include "closure_bindings.hpp"
 #include "script_thread_integrity.hpp"
 #include "protected_script_load.hpp"
 #include "sha256.hpp"
 #include "local_source_trace.hpp"
 #include <Luau/Compiler.h>
+#include <Luau/Bytecode.h>
+#include <Luau/BytecodeUtils.h>
 #include <lualib.h>
 #include <chrono>
 #include <memory>
 #include <string>
 #include <vector>
 #include <array>
+#include <cstring>
 #include "platform_support.hpp"
 #include <cstdlib>
 #ifdef __APPLE__
@@ -23,20 +27,30 @@
 #include "lgc.h"
 #include "lmem.h"
 #include "lfunc.h"
+#include "ltable.h"
+#include <algorithm>
 #include "json.hpp"
 
 namespace {
+constexpr const char* kSourceBindingsRegistry="Headless.SourceBindings";
 int device_tick(lua_State* L) {
     const auto now=std::chrono::system_clock::now().time_since_epoch();
     lua_pushnumber(L,std::chrono::duration<double>(now).count());return 1;
 }
-int getgenv(lua_State* L) { lua_setsafeenv(L,LUA_GLOBALSINDEX,false); lua_pushvalue(L,LUA_GLOBALSINDEX); return 1; }
+int collectgarbage_count(lua_State* L) {
+    if(std::strcmp(luaL_checkstring(L,1),"count")!=0) {
+        luaL_error(L,"collectgarbage only supports the count option");return 0;
+    }
+    lua_pushnumber(L,lua_gc(L,LUA_GCCOUNT,0)+lua_gc(L,LUA_GCCOUNTB,0)/1024.0);
+    return 1;
+}
+int getgenv(lua_State* L) { lua_rawgetfield(L,LUA_REGISTRYINDEX,"Headless.ExecutorEnvironment"); return 1; }
 int iscclosure(lua_State* L) { luaL_checktype(L,1,LUA_TFUNCTION); lua_pushboolean(L,lua_iscfunction(L,1)); return 1; }
 int islclosure(lua_State* L) { luaL_checktype(L,1,LUA_TFUNCTION); lua_pushboolean(L,!lua_iscfunction(L,1)); return 1; }
 int loadstring(lua_State* L) {
     size_t length=0;
     const char* source=luaL_checklstring(L,1,&length);
-    const char* chunk=luaL_optstring(L,2,"=loadstring");
+    const char* chunk=luaL_optstring(L,2,source);
     if(length>local_test_source_limit(100*1024*1024)) { luaL_error(L,"loadstring source exceeds configured input limit"); return 0; }
     trace_local_source(source,length);
     auto* integrity=static_cast<ScriptThreadIntegrity*>(lua_touserdata(L,lua_upvalueindex(1)));
@@ -51,6 +65,7 @@ int loadstring(lua_State* L) {
     if(status!=0) {
         lua_pushnil(L); lua_insert(L,-2); return 2;
     }
+    mark_executor_closure(L,-1);
     return 1;
 }
 int codec(lua_State* L) {
@@ -96,6 +111,43 @@ void push_codec(lua_State* L, const SourceBindings* bindings, int operation) {
 }
 }
 
+int source_encoding_codec(lua_State* L,EncodingCodec operation,int input_index,int parameter) {
+    size_t length=0;
+    const bool string_hash=operation==EncodingCodec::StringHash;
+    if(string_hash)luaL_checktype(L,input_index,LUA_TSTRING);
+    const void* input=string_hash?static_cast<const void*>(lua_tolstring(L,input_index,&length)):
+        luaL_checkbuffer(L,input_index,&length);
+    lua_getfield(L,LUA_REGISTRYINDEX,kSourceBindingsRegistry);
+    const auto* bindings=static_cast<const SourceBindings*>(lua_touserdata(L,-1));
+    lua_pop(L,1);
+    if(!bindings)return luaL_error(L,"EncodingService codecs require the source host"),0;
+    unsigned char* output=nullptr;
+    size_t size=0;
+    const int status=bindings->codec(static_cast<unsigned int>(operation),
+        static_cast<const unsigned char*>(input),length,&output,&size,parameter);
+    if(status==2&&operation==EncodingCodec::DecompressedSize){lua_pushnil(L);return 1;}
+    if(status!=0) {
+        const char* message=status==1?"input exceeds codec limit":status==3?"Zstandard library unavailable":
+            operation==EncodingCodec::Base64Decode?"invalid Base64 input":
+            string_hash||operation==EncodingCodec::BufferHash?"unknown hash algorithm":
+            "invalid or oversized Zstandard data";
+        return luaL_error(L,"EncodingService: %s",message),0;
+    }
+    auto release=[bindings,size](unsigned char* pointer){bindings->release(pointer,size);};
+    std::unique_ptr<unsigned char,decltype(release)> owner(output,release);
+    if(string_hash) {
+        lua_pushlstring(L,reinterpret_cast<const char*>(output),size);
+    }else if(operation==EncodingCodec::DecompressedSize) {
+        const unsigned int decoded=unsigned(output[0])|(unsigned(output[1])<<8)|
+            (unsigned(output[2])<<16)|(unsigned(output[3])<<24);
+        lua_pushnumber(L,decoded);
+    }else {
+        void* buffer=lua_newbuffer(L,size);
+        if(size)std::memcpy(buffer,output,size);
+    }
+    return 1;
+}
+
 #include "local_compat.inc"
 #include "vm_debug_compat.inc"
 #include "network_compat.inc"
@@ -103,7 +155,11 @@ void push_codec(lua_State* L, const SourceBindings* bindings, int operation) {
 
 void install_source_bindings(lua_State* L, const SourceBindings* bindings,
                              ScriptThreadIntegrity* thread_integrity,ProtectedScriptStore* protected_scripts) {
+    lua_pushvalue(L,LUA_GLOBALSINDEX);lua_rawsetfield(L,LUA_REGISTRYINDEX,"Headless.ExecutorEnvironment");
+    lua_pushlightuserdata(L,const_cast<SourceBindings*>(bindings));
+    lua_setfield(L,LUA_REGISTRYINDEX,kSourceBindingsRegistry);
     lua_pushcfunction(L,device_tick,"tick");lua_setglobal(L,"tick");
+    lua_pushcfunction(L,collectgarbage_count,"collectgarbage");lua_setglobal(L,"collectgarbage");
     lua_pushcfunction(L,getgenv,"getgenv"); lua_setglobal(L,"getgenv");
     lua_pushcfunction(L,iscclosure,"iscclosure"); lua_setglobal(L,"iscclosure");
     lua_pushcfunction(L,islclosure,"islclosure"); lua_setglobal(L,"islclosure");
@@ -139,4 +195,24 @@ void install_source_bindings(lua_State* L, const SourceBindings* bindings,
     install_host_io(L,bindings);
     lua_pushcfunction(L,lz4_compress,"lz4compress");lua_setglobal(L,"lz4compress");
     lua_pushcfunction(L,lz4_decompress,"lz4decompress");lua_setglobal(L,"lz4decompress");
+    // These functions were installed by the executor; engine/library functions
+    // inherited from the base environment keep their original classification.
+    lua_pushnil(L);
+    while(lua_next(L,LUA_GLOBALSINDEX)) {
+        if(lua_isfunction(L,-1))mark_executor_closure(L,-1);
+        lua_pop(L,1);
+    }
+    for(const char* library:{"debug","cache","crypt","base64","Drawing","WebSocket","http","fs","filesystem"}) {
+        lua_getglobal(L,library);
+        if(lua_istable(L,-1)) {
+            lua_pushnil(L);
+            while(lua_next(L,-2)) {
+                bool engine_debug=std::strcmp(library,"debug")==0&&lua_type(L,-2)==LUA_TSTRING&&
+                    (std::strcmp(lua_tostring(L,-2),"info")==0||std::strcmp(lua_tostring(L,-2),"traceback")==0);
+                if(lua_isfunction(L,-1)&&!engine_debug)mark_executor_closure(L,-1);
+                lua_pop(L,1);
+            }
+        }
+        lua_pop(L,1);
+    }
 }

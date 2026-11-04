@@ -9,7 +9,7 @@ import unittest
 
 RUNTIME = Path(__file__).resolve().parents[2] / 'runtime'
 VENDOR = RUNTIME.parent / 'vendor' / 'luau'
-BUILD = RUNTIME / 'build'
+BUILD = Path(os.environ.get('RCR_LUAU_NATIVE_BUILD', str(RUNTIME / 'build')))
 ARCHIVES = ('Luau.Compiler', 'Luau.VM', 'Luau.Bytecode', 'Luau.Config',
             'Luau.Ast', 'Luau.Common')
 
@@ -18,7 +18,7 @@ class SchedulerFairnessTests(unittest.TestCase):
     def test_ready_callbacks_and_expired_timer_run_before_expensive_pump(self):
         includes = [VENDOR / 'VM' / 'include', VENDOR / 'Compiler' / 'include',
                     VENDOR / 'Ast' / 'include', VENDOR / 'Config' / 'include',
-                    VENDOR / 'Common' / 'include', VENDOR / 'VM' / 'src',
+                    VENDOR / 'Common' / 'include', VENDOR / 'Bytecode' / 'include', VENDOR / 'VM' / 'src',
                     RUNTIME / 'vendor', RUNTIME]
         libraries = [BUILD / f'lib{name}.a' for name in ARCHIVES]
         if (not VENDOR.is_dir() or not all(path.is_file() for path in libraries)):
@@ -36,7 +36,7 @@ class SchedulerFairnessTests(unittest.TestCase):
             for include in includes:
                 command += ['-I', str(include)]
             command += [str(Path(__file__).with_suffix('.cpp')),
-                        str(RUNTIME / 'source_scheduler.cpp')]
+                        str(RUNTIME / 'source_scheduler.cpp'), str(RUNTIME / 'closure_bindings.cpp')]
             command += [str(path) for path in libraries]
             command += ['-pthread', '-o', str(binary)]
             subprocess.run(command, check=True, timeout=180)

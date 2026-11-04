@@ -12,8 +12,8 @@ from unittest import mock
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / 'scripts'))
 import persistent_runtime
-DEFAULT_HOSTS = [ROOT / 'runtime/build/luau-host',
-                 ROOT / 'rust-client/target/release/headless-luau']
+from local_runtime import HOST, RUST_HOST
+DEFAULT_HOSTS = [HOST, RUST_HOST]
 HOSTS = [Path(p) for p in os.environ['CFRAME_TEST_HOSTS'].split(os.pathsep)] \
     if 'CFRAME_TEST_HOSTS' in os.environ else DEFAULT_HOSTS
 SNAPSHOT = json.loads((ROOT / 'tests/fixtures/world_snapshot.json').read_text())

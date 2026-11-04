@@ -12,7 +12,7 @@ from movement_camera import camera_movement_error
 from physics_forces import collect_received_force_sources, predicted_assembly_mass, received_character_motion_parts
 from authored_force_state import AuthoredForceState
 
-_AUTHORED_PROPERTIES = frozenset(('WalkSpeed', 'AutoRotate', 'Health', 'Sit', 'HipHeight', 'LeftLeg', 'PlatformStand'))
+_AUTHORED_PROPERTIES = frozenset(('WalkSpeed', 'JumpPower', 'JumpHeight', 'UseJumpPower', 'AutoRotate', 'Health', 'Sit', 'HipHeight', 'LeftLeg', 'PlatformStand'))
 
 
 def _owned_receivers(snapshot):
@@ -124,9 +124,16 @@ class PhysicsScriptBridge:
         self._connected = False
         self._last_controller_state = None
 
+    def animation_snapshot(self):
+        """Detached authored geometry for animation; no controller pose feedback."""
+        if self.snapshot is None or self._character_key is None:
+            return None
+        return self._force_state.animation_snapshot(self.snapshot,self._character_key[2])
+
     def _effective_snapshot(self, *, invalidate=False):
         """Overlay authored control values on a detached controller view only."""
         snapshot = self._force_state.snapshot(self.snapshot)
+        snapshot['removed_physics_instances']=tuple(self._force_state.removed)
         snapshot['allow_authored_motion']=True
         snapshot['motion_topology_history']=getattr(self.controller,'_motion_topology_history',())
         _,_,character_id,root_id=self._character_key
@@ -220,8 +227,8 @@ class PhysicsScriptBridge:
             previous=cursor
         def apply(items):
             if items:
-                self.apply_mutations(items,observed_revision=observed_revision)
-                if after_mutations is not None:after_mutations()
+                applied = self.apply_mutations(items,observed_revision=observed_revision)
+                if applied and after_mutations is not None:after_mutations()
         if not cursors:
             apply(mutations);return self.consume(intents)
         previous=0;outcomes=[]

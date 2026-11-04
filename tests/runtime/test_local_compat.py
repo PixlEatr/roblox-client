@@ -28,6 +28,7 @@ assert(readfile("ab/keep")=="yes");delfile("ab/keep");assert(not isfile("ab/keep
 
     def test_paths_limits_and_failed_writes_preserve_contents(self):
         self.run_script('''
+setworkspacequota(128*1024,1024*1024)
 for _,p in {"../bad","a/../../bad","/tmp/bad","C:\\bad","a"..string.char(0).."b"} do
     assert(not pcall(writefile,p,"no"))
 end
@@ -56,6 +57,7 @@ assert(not pcall(dofile,"script.luau"))
 
     def test_writes_create_missing_parents_without_partial_failed_directories(self):
         self.run_script('''
+setworkspacequota(128*1024,1024*1024)
 writefile("created/deep/file",string.char(0,255))
 assert(isfolder("created") and isfolder("created/deep"))
 assert(readfile("created/deep/file")==string.char(0,255))
@@ -107,7 +109,7 @@ assert(info.func==f and info.numparams==1 and info.is_vararg==1 and info.nups==1
 assert(type(info.source)=="string" and info.what=="Lua")
 assert(debug.getupvalue(f,1)==value and debug.getupvalues(f)[1]==value)
 debug.setupvalue(f,1,"changed");assert(f()=="changed")
-assert(debug.getupvalue(f,2)==nil)
+assert(not pcall(debug.getupvalue,f,2))
 assert(not pcall(debug.setupvalue,f,99,true))
 assert(not pcall(debug.getupvalue,f,0))
 assert(debug.getinfo(print).what=="C")
@@ -126,7 +128,8 @@ setrawmetatable(t,nil);assert(getrawmetatable(t)==nil and t.foo==nil)
 table.freeze(t);assert(isreadonly(t));assert(not pcall(function()t.foo=3 end))
 setreadonly(t,false);t.foo=3;assert(t.foo==3 and not isreadonly(t))
 setreadonly(t,true);assert(not pcall(function()t.foo=4 end))
-assert(not pcall(setrawmetatable,newproxy(),{}))
+local proxy=newproxy();local proxyMeta={__index={value=7}}
+assert(setrawmetatable(proxy,proxyMeta)==proxy and proxy.value==7)
 assert(identifyexecutor()=="Roblox Client Research" and getexecutorname==identifyexecutor)
 ''')
 

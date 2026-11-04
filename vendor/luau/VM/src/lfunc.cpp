@@ -71,6 +71,7 @@ Closure* luaF_newLclosure(lua_State* L, int nelems, LuaTable* e, Proto* p)
     Closure* c = luaM_newgco(L, Closure, sizeLclosure(nelems), L->activememcat, LUA_TFUNCTION);
     luaC_init(L, c, LUA_TFUNCTION);
     c->isC = 0;
+    c->inactive = 0;
     c->env = e;
     c->nupvalues = cast_byte(nelems);
     c->stacksize = p->maxstacksize;
@@ -86,6 +87,7 @@ Closure* luaF_newCclosure(lua_State* L, int nelems, LuaTable* e)
     Closure* c = luaM_newgco(L, Closure, sizeCclosure(nelems), L->activememcat, LUA_TFUNCTION);
     luaC_init(L, c, LUA_TFUNCTION);
     c->isC = 1;
+    c->inactive = 0;
     c->env = e;
     c->nupvalues = cast_byte(nelems);
     c->stacksize = LUA_MINSTACK;

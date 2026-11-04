@@ -67,6 +67,10 @@ int instance_extended_fire_proximity_prompt(lua_State* L) {
         luaL_error(L,"live ProximityPrompt required");return 0;
     }
     Json player=handle->world->local_player.empty()?Json(nullptr):Json{{"$ref",handle->world->local_player}};
+    if(handle->node->server_owned&&handle->world->persistent) {
+        try {enqueue_reflected_signal(*handle->world,*handle->node,"TriggeredActionReplicated",Json::array({player}));}
+        catch(const std::exception& error){return luaL_error(L,"fireproximityprompt failed: %s",error.what()),0;}
+    }
     emit(*handle->world,*handle->node,"Triggered",Json::array({player}));
     return 0;
 }
@@ -83,7 +87,7 @@ int instance_extended_fire_touch(lua_State* L) {
         luaL_error(L,"second argument must be a live BasePart");return 0;
     }
     int state=0;
-    if(lua_type(L,3)==LUA_TBOOLEAN)state=lua_toboolean(L,3)?1:0;
+    if(lua_type(L,3)==LUA_TBOOLEAN)state=lua_toboolean(L,3)?0:1;
     else {
         double value=luaL_checknumber(L,3);
         if(!std::isfinite(value)||(value!=0&&value!=1)) {
@@ -92,6 +96,17 @@ int instance_extended_fire_touch(lua_State* L) {
         state=static_cast<int>(value);
     }
     const char* event=state==0?"Touched":"TouchEnded";
+    auto& w=*part->world;
+    if(part->node==other->node)return 0;
+    if(w.persistent&&part->node->server_owned&&other->node->server_owned) {
+        // Explicit API request, distinct from contacts observed by the local
+        // solver. The session adapter verifies current received ownership.
+        Json request{{"touch",{{"first",part->node->id},{"second",other->node->id},{"began",state==0}}}};
+        auto size=request.dump().size();
+        if(w.remote_server_events.size()>=64||w.remote_server_event_bytes+size>256*1024)
+            return luaL_error(L,"touch replication queue limit exceeded"),0;
+        w.remote_server_events.push_back(std::move(request));w.remote_server_event_bytes+=size;
+    }
     emit(*part->world,*part->node,event,Json::array({Json{{"$ref",other->node->id}}}));
     if(part->node!=other->node)
         emit(*other->world,*other->node,event,Json::array({Json{{"$ref",part->node->id}}}));
@@ -101,14 +116,13 @@ int instance_extended_fire_touch(lua_State* L) {
 int instance_extended_is_hidden_property(lua_State* L) {
     auto* handle=checked_handle(L,1);
     size_t size=0;const char* raw=luaL_checklstring(L,2,&size);std::string key(raw,size);
-    bool alias=handle->node->class_name=="Fire"&&key=="size_xml";
-    std::string canonical=alias?"Size":key;
+    std::string canonical=hidden_property_name(*handle->node,key);
     const Json* descriptor=property_descriptor(*handle->node,canonical);
-    if(canonical!="Name"&&canonical!="Parent"&&canonical!="ClassName"&&!descriptor&&
+    if(canonical!="Tags"&&canonical!="Name"&&canonical!="Parent"&&canonical!="ClassName"&&!descriptor&&
        !handle->node->properties.contains(canonical)) {
         luaL_error(L,"unknown property");return 0;
     }
-    bool hidden=alias||key=="NetworkOwnerV3";
+    bool hidden=reflected_hidden_property(*handle->world,*handle->node,key);
     if(descriptor) {
         const std::string type=descriptor->value("engine_type","");
         hidden=hidden||type=="BinaryString"||type=="SharedString"||type=="SystemAddress";
@@ -121,8 +135,8 @@ int instance_extended_instance_cache(lua_State* L) {
     lua_newtable(L);int count=0;
     for(const auto& id:world->order) {
         Node& node=world->nodes.at(id);
-        lua_pushlightuserdata(L,&node);lua_rawget(L,LUA_REGISTRYINDEX);
-        if(!lua_isnil(L,-1))lua_rawseti(L,-3,++count);else lua_pop(L,1);
+        push_instance_cache(L);lua_pushlightuserdata(L,&node);lua_rawget(L,-2);lua_remove(L,-2);
+        if(!lua_isnil(L,-1))lua_rawseti(L,-2,++count);else lua_pop(L,1);
     }
     return 1;
 }
@@ -182,7 +196,7 @@ void install_instance_extended(lua_State* L,World& world) {
         lua_setfield(L,LUA_REGISTRYINDEX,kInstanceExtendedThreadStore);
     }
     lua_pop(L,1);
-    for(auto item:{std::pair<const char*,lua_CFunction>{
+    for(auto item:std::initializer_list<std::pair<const char*,lua_CFunction>>{
         {"setcallbackvalue",instance_extended_set_callback},
         {"setcallbackfunction",instance_extended_set_callback},
         {"setcallbackmember",instance_extended_set_callback},
@@ -199,7 +213,7 @@ void install_instance_extended(lua_State* L,World& world) {
         {"clonereference",instance_extended_clone_reference}}) {
         lua_pushcfunction(L,item.second,item.first);lua_setglobal(L,item.first);
     }
-    for(auto item:{std::pair<const char*,lua_CFunction>{
+    for(auto item:std::initializer_list<std::pair<const char*,lua_CFunction>>{
         {"getinstancelist",instance_extended_instance_cache},
         {"getinstancecache",instance_extended_instance_cache},
         {"get_hidden_gui",instance_extended_hidden_gui},

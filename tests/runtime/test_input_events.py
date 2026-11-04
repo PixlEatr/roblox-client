@@ -65,6 +65,21 @@ assert(not pcall(function()u.IsKeyDown(Instance.new("Part"),Enum.KeyCode.W)end))
 assert(not pcall(function()Instance.new("InputObject")end))
 ''')
 
+    def test_window_focus_is_independent_of_attached_devices(self):
+        self.execute('''local u=game:GetService("UserInputService");windowFocusLog={}
+u.WindowFocused:Connect(function(...)assert(select("#",...)==0);table.insert(windowFocusLog,"focus")end)
+u.WindowFocusReleased:Connect(function(...)assert(select("#",...)==0);table.insert(windowFocusLog,"blur")end)
+''')
+        self.host.call({'op':'update','delta':{'version':1,'delta':True,'actions':[],
+                        'input_capabilities':{'KeyboardEnabled':False,'MouseEnabled':False,'TouchEnabled':False}}})
+        self.deliver({'phase':'begin','input_type':'Focus'})
+        # Device updates cannot turn a focused window into a cancelled mouse.
+        self.host.call({'op':'update','delta':{'version':1,'delta':True,'actions':[],
+                                             'input_capabilities':{'MouseEnabled':False}}})
+        self.deliver({'phase':'end','input_type':'Focus'})
+        self.execute('assert(table.concat(windowFocusLog,",")=="focus,blur")')
+        self.deliver({'phase':'change','input_type':'Focus'},ok=False)
+
     def test_keyboard_lifecycle_identity_signals_processed_and_fresh_press(self):
         self.execute('''local u=game:GetService("UserInputService");inputLog={};inputTypes={}
 u.LastInputTypeChanged:Connect(function(t)table.insert(inputTypes,t)end)

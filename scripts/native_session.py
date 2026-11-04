@@ -15,6 +15,7 @@ import math
 import select
 import socket
 import ssl
+import sys
 import time
 import uuid
 
@@ -22,7 +23,8 @@ from aioquic.h3.connection import H3Connection
 from aioquic.h3.events import HeadersReceived, WebTransportStreamDataReceived, DatagramReceived
 from aioquic.quic.configuration import QuicConfiguration
 from datagram_delivery import DatagramTrackingQuicConnection as QuicConnection
-from aioquic.quic.events import ConnectionTerminated, HandshakeCompleted
+from aioquic.quic.events import ConnectionTerminated, HandshakeCompleted, PingAcknowledged
+from session_diagnostics import current, NULL, exit_reason, public_state
 
 from channels import reliable_header, parse_reliable_header
 from game_wire import CONTROL_CHANNEL, FrameDecoder, frame
@@ -35,7 +37,10 @@ from ping_telemetry import SessionPingTelemetry
 
 
 class NativeSession:
+    diagnostics = NULL
+
     def __init__(self, duration=15, capabilities=0):
+        self.diagnostics = current()
         if not math.isfinite(duration) or duration < 0:
             raise ValueError("Session duration must be nonnegative; 0 means no time limit")
         self.duration = duration
@@ -101,6 +106,9 @@ class NativeSession:
 
     def record(self, direction, application, channel, payload):
         elapsed = round(time.monotonic() - self.started, 6)
+        self.diagnostics.emit('application.frame', verbose=True, direction=direction,
+            application=application, channel=channel, bytes=len(payload),
+            message_id=payload[0] if payload else None, session_s=elapsed)
         self.capture_entry({"direction": direction, "application": application, "channel": channel,
                              "seconds": elapsed, "data_base64": base64.b64encode(payload).decode()})
         self.report["messages"].append({"direction": direction, "application": application, "channel": channel,
@@ -113,6 +121,13 @@ class NativeSession:
         self.record("sent", application, channel, payload)
 
     def close(self, reason="Session complete"):
+        # Call sites can pass arbitrary text; expose its source location rather
+        # than copying it into the shareable log.
+        caller=sys._getframe(1)
+        self.diagnostics.emit('close.requested', reason_length=len(reason),
+            caller={'file':caller.f_code.co_filename.replace('\\','/').rsplit('/',1)[-1],
+                    'line':caller.f_lineno,'function':caller.f_code.co_name})
+        del caller
         self.quic.close(reason_phrase=reason)
         self.finished = True
         self.report["local_close_requested"] = True
@@ -169,6 +184,8 @@ class NativeSession:
                         "application": app, "reason_class": int.from_bytes(payload[2:6], "big"),
                         "reason_code": int.from_bytes(payload[6:10], "big")}
                     self.report['server_application_close_at_seconds'] = round(time.monotonic() - self.started, 3)
+                    self.diagnostics.emit('server.application_close', **self.report['application_close'],
+                        session_s=self.report['server_application_close_at_seconds'])
                     self.close("Server closed game application")
             else:
                 self.dispatch_packet(on_packet, app, channel, payload, frame_ready_ns=frame_ready_ns)
@@ -181,11 +198,14 @@ class NativeSession:
             telemetry.observe_dispatch(application, channel, payload,
                                        received_ns=self._received_datagram_at_ns,
                                        frame_ready_ns=frame_ready_ns)
-        on_packet(self, application, channel, payload)
+        with self.diagnostics.stage('game.packet', application=application, channel=channel,
+                                    message_id=payload[0] if payload else None, bytes=len(payload)):
+            on_packet(self, application, channel, payload)
 
     def handle_event(self, event, on_ready, on_packet):
         if isinstance(event, HandshakeCompleted):
             self.report["quic_handshake_completed"] = True
+            self.diagnostics.emit('transport.handshake_completed')
             self.http = H3Connection(self.quic, enable_webtransport=True)
             self.connect_stream = self.quic.get_next_available_stream_id()
             caps = format(self.capabilities, "016x").encode("ascii")
@@ -194,6 +214,10 @@ class NativeSession:
                 (b":authority", (self.endpoint[0] + ":" + str(self.endpoint[1])).encode()),
                 (b":path", b"/wt?X-Rbx-Capabilities=" + caps), (b":protocol", b"webtransport-h3"),
                 (b"x-rbx-capabilities", caps)])
+        if isinstance(event, PingAcknowledged):
+            self.report['quic_keepalives_acknowledged'] = self.report.get('quic_keepalives_acknowledged',0)+1
+            self.report['last_quic_ack_at_seconds'] = round(time.monotonic()-self.started,3)
+            self.diagnostics.emit('transport.keepalive_acknowledged', ping_id=event.uid)
         if isinstance(event, ConnectionTerminated):
             self.report["termination"] = {"error_code": event.error_code, "frame_type": event.frame_type,
                                            "reason_length": len(event.reason_phrase)}
@@ -201,6 +225,7 @@ class NativeSession:
             # peer-supplied reason strings, which can contain session data.
             if event.reason_phrase == "Idle timeout":
                 self.report["termination"]["reason"] = "Idle timeout"
+            self.diagnostics.emit('transport.terminated', **self.report['termination'])
             self.finished = True
         if self.http is None:
             return
@@ -217,8 +242,13 @@ class NativeSession:
                     self.report["webtransport_session_established"] = True
                     self.send(CONTROL_CHANNEL, b"\0\0", application=0)
                     self.send(CONTROL_CHANNEL, b"\0\0", application=4)
-                    on_ready(self)
+                    self.diagnostics.emit('transport.webtransport_ready', http_status=200)
+                    with self.diagnostics.stage('game.ready'):
+                        on_ready(self)
                 elif not ready:
+                    self.diagnostics.emit('transport.webtransport_rejected',
+                        http_status=self.report['connect_http_status'],valid_capabilities=valid_caps,
+                        certificate_pin_verified=self.report['certificate_pin_verified'],stream_ended=received.stream_ended)
                     self.close("WebTransport was not established")
             elif isinstance(received, WebTransportStreamDataReceived):
                 self.receive_stream(received, on_packet)
@@ -267,6 +297,9 @@ class NativeSession:
                 raise SessionError("Session refused an unallocated destination")
             sock.sendto(self.header + data, self.endpoint)
             self.report["datagrams_sent"] += 1
+            self.report['last_udp_send_at_seconds'] = round(time.monotonic()-self.started,3)
+            self.diagnostics.emit('udp.sent',verbose=True,bytes=len(self.header)+len(data),
+                                  datagram_number=self.report['datagrams_sent'])
 
     def _drain_readable(self, sock, on_ready, on_packet, *, max_datagrams=64,
                         max_seconds=0.004, deadline=math.inf):
@@ -286,6 +319,9 @@ class NativeSession:
             self._received_datagram_at_ns = time.monotonic_ns()
             self.report["datagrams_received"] += 1
             self.report["bytes_received"] += len(data)
+            self.report['last_udp_receive_at_seconds'] = round(time.monotonic()-self.started,3)
+            self.diagnostics.emit('udp.received',verbose=True,bytes=len(data),
+                                  datagram_number=self.report['datagrams_received'])
             count += 1
             routing, payload = split_datagram(data)
             if routing:
@@ -307,6 +343,10 @@ class NativeSession:
             raise ValueError("Tick interval must be between 0.01 and 1 seconds")
         logging.getLogger("quic").disabled = True
         self.started = time.monotonic()
+        self.diagnostics.emit('transport.start', duration_s=self.duration,
+            unlimited=self.duration==0, quic_idle_timeout_s=15, keepalive_interval_s=2,
+            tick_interval_s=tick_interval)
+        next_diagnostics = self.started
         scheduler = self.report['local_scheduler'] = {
             'tick_count': 0, 'tick_seconds_total': 0.,
             'tick_seconds_max': 0., 'ticks_over_250ms': 0,
@@ -321,6 +361,10 @@ class NativeSession:
             with certificate_pins(self.pins, self.report):
                 self.quic.connect(self.endpoint, now=self.started)
                 while True:
+                    if time.monotonic() >= next_diagnostics:
+                        self.report['session_age_seconds'] = round(time.monotonic()-self.started,3)
+                        self.diagnostics.update(self.report)
+                        next_diagnostics = time.monotonic()+1
                     self._enforce_limits(deadline)
                     if not self.finished:
                         self._drain_readable(sock, on_ready, on_packet, deadline=deadline)
@@ -335,10 +379,25 @@ class NativeSession:
                     if now >= next_ping:
                         if self.report["quic_handshake_completed"] and not self.finished:
                             self.quic.send_ping(ping_id)
+                            self.report['quic_keepalives_sent'] = ping_id+1
+                            self.diagnostics.emit('transport.keepalive_sent',ping_id=ping_id)
                             ping_id += 1
                         next_ping = now + 2
+                    # Flush transport control output before running application
+                    # work. A slow game tick must not hold QUIC ACKs or ping
+                    # replies that were made ready while draining the socket.
+                    # Keep the post-tick flush below for packets queued by the
+                    # callback itself.
+                    finished_before_preflush = self.finished
+                    if not finished_before_preflush:
+                        self._flush_datagrams(sock, deadline)
+                    if self.finished:
+                        if finished_before_preflush:
+                            self._flush_datagrams(sock, deadline)
+                        break
                     if on_tick is not None and now >= next_tick and not self.finished:
-                        on_tick(self, now)
+                        with self.diagnostics.stage('game.tick'):
+                            on_tick(self, now)
                         completed_at = time.monotonic()
                         elapsed = max(0., completed_at-now)
                         scheduler['tick_count'] += 1
@@ -365,8 +424,14 @@ class NativeSession:
                     elif timer is not None and time.monotonic() >= timer:
                         self.quic.handle_timer(now=time.monotonic())
                     self._drain_events(on_ready, on_packet)
+        except KeyboardInterrupt:
+            self.report['interrupted'] = True
+            self.diagnostics.emit('session.interrupted')
+            self.close('User interrupted session')
+            raise
         except Exception as error:
             self.report["error_type"] = type(error).__name__
+            self.diagnostics.exception('transport.error',error)
             self.close("Local session processing stopped")
             for data, destination in self.quic.datagrams_to_send(time.monotonic()):
                 if destination == self.endpoint:
@@ -375,6 +440,12 @@ class NativeSession:
         finally:
             sock.close()
             self.report["elapsed_seconds"] = round(time.monotonic() - self.started, 3)
+            self.report['disconnect_category'] = exit_reason(self.report)
+            self.diagnostics.update(self.report)
+            self.diagnostics.emit('session.ended', reason=self.report['disconnect_category'],
+                                  state=public_state(self.report))
+            print(json.dumps({'disconnect_category':self.report['disconnect_category'],
+                              'elapsed_seconds':self.report['elapsed_seconds']}),flush=True)
             delivery_report = getattr(self.quic, 'datagram_delivery_report', None)
             if callable(delivery_report):
                 self.report['tracked_datagram_delivery'] = delivery_report()

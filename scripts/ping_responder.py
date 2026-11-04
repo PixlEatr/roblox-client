@@ -10,6 +10,7 @@ import time
 
 from ping_back import PingBackTelemetry, _unsigned, encode_ping_back_item
 from replication_ping import ping_packet
+from session_diagnostics import current
 
 
 class TelemetryUnavailable(RuntimeError):
@@ -194,6 +195,10 @@ class SessionPingHandler:
             ready = ready and telemetry['wire_telemetry_ready'] is True
         client.report['application_ping_replies_implemented'] = ready
         client.report['application_ping_missing_providers'] = list(self.missing)
+        state = self.responder.public_report()
+        if state != getattr(self, '_last_diagnostics', None):
+            current().emit('game.ping_state', **state)
+            self._last_diagnostics = state
 
     def receive(self, client, payload):
         try:

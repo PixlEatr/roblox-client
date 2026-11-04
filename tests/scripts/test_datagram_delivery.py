@@ -7,7 +7,8 @@ from aioquic.buffer import Buffer
 from aioquic.h3.connection import H3Connection
 from aioquic.quic.configuration import QuicConfiguration
 from aioquic.quic.connection import QuicConnection
-from aioquic.quic.events import DatagramFrameReceived, HandshakeCompleted
+from aioquic.quic.events import (ConnectionTerminated, DatagramFrameReceived,
+                                HandshakeCompleted, PingAcknowledged)
 from aioquic.quic.packet import pull_quic_header
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes
@@ -28,13 +29,15 @@ class DatagramDeliveryTests(unittest.TestCase):
             .not_valid_before(now-datetime.timedelta(days=1))
             .not_valid_after(now+datetime.timedelta(days=1)).sign(cls.key,hashes.SHA256()))
 
-    def pair(self):
+    def pair(self, *, idle_timeout=60):
         client=DatagramTrackingQuicConnection(configuration=QuicConfiguration(
-            is_client=True,verify_mode=ssl.CERT_NONE,alpn_protocols=['h3'],max_datagram_frame_size=65536))
+            is_client=True,verify_mode=ssl.CERT_NONE,alpn_protocols=['h3'],
+            max_datagram_frame_size=65536,idle_timeout=idle_timeout))
         client.connect(('127.0.0.1',4433),now=1.)
         initial=client.datagrams_to_send(now=1.)
         head=pull_quic_header(Buffer(data=initial[0][0]),host_cid_length=8)
-        config=QuicConfiguration(is_client=False,alpn_protocols=['h3'],max_datagram_frame_size=65536)
+        config=QuicConfiguration(is_client=False,alpn_protocols=['h3'],
+                                 max_datagram_frame_size=65536,idle_timeout=idle_timeout)
         config.certificate=self.cert;config.private_key=self.key
         server=QuicConnection(configuration=config,original_destination_connection_id=head.destination_cid)
         for data,_ in initial:server.receive_datagram(data,('127.0.0.1',12345),now=1.)
@@ -82,6 +85,31 @@ class DatagramDeliveryTests(unittest.TestCase):
         self.assertNotIn(b'lost-state',[e.data for e in self.server_events if isinstance(e,DatagramFrameReceived)])
         self.assertEqual(client.datagram_delivery_report()['framed'],1)
         self.assertEqual(client.datagram_delivery_report()['acknowledged'],0)
+
+    def test_quic_keepalive_pings_prevent_idle_timeout(self):
+        client,server=self.pair(idle_timeout=1)
+        acknowledged=[]
+        next_ping=self.now
+        ping_id=0
+
+        # Keep the transport alive for five negotiated idle-timeout periods.
+        # The fake clock advances in pump(), so this exercises aioquic's real
+        # frame/ACK and idle-timer paths without opening a network socket.
+        for _ in range(500):
+            if self.now >= next_ping:
+                client.send_ping(ping_id)
+                ping_id+=1
+                next_ping=self.now+0.5
+            self.pump(client,server)
+            acknowledged.extend(e.uid for e in self.client_events
+                                if isinstance(e,PingAcknowledged))
+            self.client_events[:]=[e for e in self.client_events
+                                   if not isinstance(e,PingAcknowledged)]
+            self.assertFalse(any(isinstance(e,ConnectionTerminated)
+                                 for e in self.client_events+self.server_events))
+
+        self.assertGreaterEqual(len(acknowledged),8)
+        self.assertEqual(len(set(acknowledged)),len(acknowledged))
 
     def test_scope_errors_do_not_watch_a_later_unrelated_datagram(self):
         client=DatagramTrackingQuicConnection(configuration=QuicConfiguration(is_client=True))

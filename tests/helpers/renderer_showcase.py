@@ -44,7 +44,8 @@ def make_showcase():
     part('Neon marker',[8,.8,-5],[.3,1.5,.3],[.1,.75,1],'Neon')
     # A real mesh shipped with the installed Roblox app, loaded through the
     # same scoped visual-asset endpoint as received world assets.
-    part('Mesh torso',[-7,1.8,6],[2,2,1],[.8,.55,.2],'SmoothPlastic',**{'class':'MeshPart','mesh':{'class':'MeshPart','id':'rbxasset://avatar/meshes/torso.mesh'}})
+    part('Mesh torso',[-7,1.8,6],[2,2,1],[.8,.55,.2],'SmoothPlastic',**{'class':'MeshPart','mesh':{'class':'MeshPart','id':'rbxasset://avatar/meshes/torso.mesh'},
+        'appearance':{'colorMap':'rbxassetid://900003','normalMap':'rbxassetid://900004','roughnessMap':'rbxassetid://900005','metalnessMap':'rbxassetid://900006','alphaMode':0,'color':{'$color3':[1,1,1]}}})
     part('Mesh pedestal',[-7,.5,6],[3,1,3],[.53,.54,.55],'Concrete')
     clothes={'shirt':'rbxassetid://900001','pants':'rbxassetid://900002'}
     rig=[]
@@ -56,7 +57,7 @@ def make_showcase():
     part('Hat brim',[0,5.12,3],[2.3,.15,1.8],[.16,.17,.2],'Fabric',mesh={'class':'CylinderMesh'})
     part('Hat crown',[0,5.55,3],[1.55,.8,1.35],[.16,.17,.2],'Fabric',mesh={'class':'CylinderMesh'})
     frame={'version':2,'parts':parts,'focus':{'$vector3':[0,2.8,3]},'players':[{'name':'Offline avatar','local':True}],
-           'lighting':{'ClockTime':14,'Brightness':2.4,'Ambient':{'$color3':[.34,.34,.34]},'OutdoorAmbient':{'$color3':[.65,.7,.8]},'FogStart':80,'FogEnd':240,'FogColor':{'$color3':[.74,.83,.9]},'GlobalShadows':True},
+           'lighting':{'ClockTime':14,'Brightness':2.4,'Ambient':{'$color3':[.34,.34,.34]},'OutdoorAmbient':{'$color3':[.65,.7,.8]},'EnvironmentDiffuseScale':.5,'EnvironmentSpecularScale':.8,'FogStart':80,'FogEnd':240,'FogColor':{'$color3':[.74,.83,.9]},'GlobalShadows':True},
            'gui':[],'meshBounds':0,'skippedParts':0,'skippedGui':0,'terrainUnsupported':False}
     start=time.monotonic()
     state={'moving':False,'sunset':False}
@@ -71,9 +72,16 @@ def make_showcase():
         return copy.deepcopy(frame)
     shirt=png(585,559,lambda x,y:(24+(x//8%2)*10,88+(y//8%2)*17,146+(x//8%2)*20,255))
     pants=png(585,559,lambda x,y:(34+x%3*2,42+y%3*2,59+x%4*2,255))
+    surface={
+        'rbxassetid://900003':png(64,64,lambda x,y:(26,94+(x//8+y//8)%2*35,154+(x//8+y//8)%2*35,255)),
+        'rbxassetid://900004':png(64,64,lambda x,y:(128+(x%8==0)*12,128+(y%8==0)*12,254,255)),
+        'rbxassetid://900005':png(64,64,lambda x,y:(150,150,150,255)),
+        'rbxassetid://900006':png(64,64,lambda x,y:(30,30,30,255)),
+    }
     def asset(ref,**kwargs):
         if ref=='rbxassetid://900001':return shirt
         if ref=='rbxassetid://900002':return pants
+        if ref in surface:return surface[ref]
         if ref.startswith('rbxasset://'):return fetch_visual_asset(ref,**kwargs)
         raise ValueError('Network disabled in offline rendering fixture')
     return frame,render,asset,state

@@ -18,7 +18,7 @@ export function mount(container,{forceSoftware=false,onBackendChange=()=>{},load
     const batches=new Map(),tracks=new Map(),textures=new Map(),matrix=new T.Matrix4(),color=new T.Color(),offset=new T.Vector3(),size=new T.Vector3(),rotation=new T.Quaternion();
     let destroyed=false,mode='follow',lastFocus=null,focusTrack=null,ready=false,lastFrame=null,dirty=false,lightingKey='',sky=null,pmrem=null,environment=null;
     let last=performance.now(),frames=0,fps=0,clock=14,shadowEnabled=true,meshBounds=0,skinnedMeshes=0;
-    const assets=new WorldAssets(loadAsset,()=>{dirty=true;});
+    const assets=new WorldAssets(loadAsset,()=>{dirty=true;},{anisotropy:renderer.capabilities?.getMaxAnisotropy?.()||1});
     const stats=()=>({...assets.stats,meshBounds,skinnedMeshes});
     function setupRenderer(){
         renderer.setPixelRatio(Math.min(devicePixelRatio,2));renderer.outputColorSpace=T.SRGBColorSpace;
@@ -39,7 +39,10 @@ export function mount(container,{forceSoftware=false,onBackendChange=()=>{},load
         for(let y=0;y<64;y++)for(let x=0;x<128;x++){const t=Math.pow(clamp(y/32,0,1),.7);tmp.copy(top).lerp(horizon,t).convertLinearToSRGB();const i=(y*128+x)*4;skyData[i]=tmp.r*255;skyData[i+1]=tmp.g*255;skyData[i+2]=tmp.b*255;skyData[i+3]=255;}
         sky?.dispose();sky=new T.DataTexture(skyData,128,64);sky.colorSpace=T.SRGBColorSpace;sky.mapping=T.EquirectangularReflectionMapping;sky.magFilter=T.LinearFilter;sky.needsUpdate=true;
         if(renderer.roveBackend==='webgl'){scene.background=sky;environment?.dispose();environment=pmrem.fromEquirectangular(sky);scene.environment=environment.texture;}
-        hemisphere.color.copy(rgb(data.OutdoorAmbient,[.5,.5,.5]));hemisphere.groundColor.copy(rgb(data.Ambient,[.25,.25,.25]));hemisphere.intensity=1.35;
+        const diffuseScale=clamp(finite(data.EnvironmentDiffuseScale,0),0,1),specularScale=clamp(finite(data.EnvironmentSpecularScale,0),0,1);
+        hemisphere.color.copy(rgb(data.OutdoorAmbient,[.5,.5,.5])).add(top.clone().multiplyScalar(diffuseScale*.6));
+        hemisphere.groundColor.copy(rgb(data.Ambient,[.25,.25,.25]));hemisphere.intensity=1.35;
+        scene.environmentIntensity=specularScale;
         sun.color.copy(rgb(data.ColorShift_Top,[1,.96,.88]));if(sun.color.r+sun.color.g+sun.color.b<.05)sun.color.set(0xfff4df);
         sun.intensity=clamp(finite(data.Brightness,2),0,10)*day;shadowEnabled=data.GlobalShadows!==false;
         sun.castShadow=shadowEnabled;sun.shadow.radius=1+clamp(finite(data.ShadowSoftness,.2),0,1)*3;
@@ -49,6 +52,7 @@ export function mount(container,{forceSoftware=false,onBackendChange=()=>{},load
         scene.fog=new T.Fog(rgb(data.FogColor,[.75,.82,.9]),fogStart,fogEnd);
         scene.userData.sunDirection=new T.Vector3(Math.cos(angle),Math.max(.05,Math.sin(angle)),.35).normalize();
         scene.userData.sunIntensity=sun.intensity;
+        scene.userData.lighting={sky:hemisphere.color.clone().multiplyScalar(hemisphere.intensity),ground:hemisphere.groundColor.clone().multiplyScalar(hemisphere.intensity),sun:sun.color.clone().multiplyScalar(sun.intensity),exposure:renderer.toneMappingExposure};
     }
     lighting();
     function frame(data){
@@ -62,13 +66,16 @@ export function mount(container,{forceSoftware=false,onBackendChange=()=>{},load
             if(partOpacity(part)<.001)continue;
             const shape=partShape(part),file=part.mesh?.id?assets.get('mesh',part.mesh.id):null;
             const map=part.mesh?.texture?assets.get('texture',part.mesh.texture):null;
+            const maps={};for(const channel of ['color','normal','roughness','metalness']){
+                const reference=part.appearance?.[channel+'Map'];if(reference)maps[channel]=assets.get('texture',reference,channel!=='color');
+            }
             let g=file||geometry[shape]||geometry.box;
             if((part.class==='MeshPart'||part.class==='UnionOperation'||shape==='file')&&!file)meshBounds++;
             if(file?.userData.skinned)skinnedMeshes++;
             const name=materialName(part.material);
             if(!textures.has(name))textures.set(name,materialTexture(name));
-            const key=[file?'mesh:'+part.mesh.id:shape,name,partOpacity(part).toFixed(3),finite(part.reflectance).toFixed(2),part.castShadow!==false,map?part.mesh.texture:''].join('|');
-            add(key,g,part,()=>makeMaterial(part,map,textures.get(name)),{file:!!file});
+            const key=[file?'mesh:'+part.mesh.id:shape,name,partOpacity(part).toFixed(3),finite(part.reflectance).toFixed(2),part.castShadow!==false,map?part.mesh.texture:'',JSON.stringify(part.appearance||null),...Object.values(maps).map(map=>map?.uuid||'')].join('|');
+            add(key,g,part,()=>makeMaterial(part,map,textures.get(name),maps),{file:!!file});
             let layer=0;
             for(const decal of [...(part.decals||[]),...clothingFaces(part)]){
                 const texture=assets.get('texture',decal.texture);if(!texture)continue;

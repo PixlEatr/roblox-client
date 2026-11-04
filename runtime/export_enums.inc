@@ -118,9 +118,19 @@ static const ExportEnumEntry kUsiCollisionFidelityItems[] = {
     {"Tunable", 4},
 };
 #include "input_enum_data.inc"
+#include "player_enum_data.inc"
+// Roblox creator-docs/enums/BulkMoveMode.yaml, checked with BulkMoveTo.
+static const ExportEnumEntry kBulkMoveModeItems[] = {
+    {"FireAllEvents", 0}, {"FireCFrameChanged", 1},
+};
+static const ExportEnumEntry kMeshTypeItems[] = {
+    {"Head",0},{"Torso",1},{"Wedge",2},{"Sphere",3},{"Cylinder",4},{"FileMesh",5},
+    {"Brick",6},{"Prism",7},{"Pyramid",8},{"ParallelRamp",9},{"RightAngleRamp",10},{"CornerWedge",11},
+};
 constexpr int kExportEnumStride=512;
 static_assert(std::size(kInputKeyCodeItems)<kExportEnumStride,"enum registry stride must fit KeyCode");
 static const ExportEnumSpec kUsiExportEnums[] = {
+#include "player_enum_specs.inc"
     {"SecurityCapability", kUsiSecurityCapabilityItems, std::size(kUsiSecurityCapabilityItems)},
     {"Material", kUsiMaterialItems, std::size(kUsiMaterialItems)},
     {"CollisionFidelity", kUsiCollisionFidelityItems, std::size(kUsiCollisionFidelityItems)},
@@ -131,6 +141,8 @@ static const ExportEnumSpec kUsiExportEnums[] = {
     {"ContextActionPriority", kInputContextActionPriorityItems, std::size(kInputContextActionPriorityItems)},
     {"ContextActionResult", kInputContextActionResultItems, std::size(kInputContextActionResultItems)},
     {"PlayerActions", kInputPlayerActionsItems, std::size(kInputPlayerActionsItems)},
+    {"BulkMoveMode", kBulkMoveModeItems, std::size(kBulkMoveModeItems)},
+    {"MeshType", kMeshTypeItems, std::size(kMeshTypeItems)},
 
 
 };

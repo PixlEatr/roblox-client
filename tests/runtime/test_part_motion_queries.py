@@ -13,6 +13,82 @@ class PartMotionQueryTests(unittest.TestCase):
     partial_snapshot = poses.JointPoseTests.partial_snapshot
     update = activation.JointActivationTests.update
 
+    def test_closest_point_uses_current_pose_and_preserves_interior_points(self):
+        self.run_script('''
+local p=Instance.new("Part")
+p.Size=Vector3.new(4,6,8)
+p.CFrame=CFrame.new(20,-3,15)*CFrame.Angles(.3,.4,.5)
+p.PivotOffset=CFrame.new(100,0,0)
+local inside=p.CFrame*Vector3.new(1,2,3)
+assert(p:GetClosestPointOnSurface(inside)==inside)
+vec(p:GetClosestPointOnSurface(p.CFrame*Vector3.new(7,5,-2)),p.CFrame*Vector3.new(2,3,-2))
+p.Size=Vector3.new(2,2,2)
+vec(p:GetClosestPointOnSurface(p.CFrame*Vector3.new(7,5,-2)),p.CFrame*Vector3.new(1,1,-1))
+local closest=p.GetClosestPointOnSurface
+assert(not pcall(closest,workspace,Vector3.zero))
+assert(not pcall(closest,p,"0,0,0"))
+assert(not pcall(closest,p,Vector3.xAxis/0))
+p:Destroy()
+assert(not pcall(closest,p,Vector3.zero))
+''')
+
+    def test_closest_point_uses_round_and_sloped_shapes(self):
+        self.run_script('''
+local p=Instance.new("Part")
+local sqrt3=math.sqrt(3)
+p.Shape=Enum.PartType.Ball
+p.Size=Vector3.new(8,4,2)
+vec(p:GetClosestPointOnSurface(Vector3.new(2.5,2*sqrt3,0)),Vector3.new(2,sqrt3,0))
+assert(p:GetClosestPointOnSurface(Vector3.new(1,1,0))==Vector3.new(1,1,0))
+p.Shape=Enum.PartType.Cylinder
+p.Size=Vector3.new(6,8,4)
+vec(p:GetClosestPointOnSurface(Vector3.new(10,2.5,2*sqrt3)),Vector3.new(3,2,sqrt3))
+vec(p:GetClosestPointOnSurface(Vector3.new(-10,1,1)),Vector3.new(-3,1,1))
+local wedge=Instance.new("WedgePart")
+wedge.Size=Vector3.new(4,4,4)
+vec(wedge:GetClosestPointOnSurface(Vector3.new(1,2,0)),Vector3.new(1,1,1))
+vec(wedge:GetClosestPointOnSurface(Vector3.new(4,2,0)),Vector3.new(2,1,1))
+vec(wedge:GetClosestPointOnSurface(Vector3.new(4,5,5)),Vector3.new(2,2,2))
+local corner=Instance.new("CornerWedgePart")
+corner.Size=Vector3.new(4,4,4)
+vec(corner:GetClosestPointOnSurface(Vector3.new(0,2,0)),Vector3.new(2/3,2/3,-2/3))
+assert(corner:GetClosestPointOnSurface(Vector3.new(0,-1,0))==Vector3.new(0,-1,0))
+''')
+
+    def test_closest_point_uses_decoded_mesh_and_respects_box_fidelity(self):
+        data=copy.deepcopy(transforms.SNAPSHOT)
+        mesh={'id':'closest-mesh','class_name':'MeshPart','name':'ClosestMesh',
+            'parent':'scope:workspace','properties':{
+                'CFrame':{'$cframe':{'position':[0,0,0],'rotation':[1,0,0,0,1,0,0,0,1]}},
+                'Size':{'$vector3':[2,2,2]},
+                'CollisionGeometry':{'kind':'triangle_mesh','vertices':[[0,0,0],[2,0,0],[0,2,0],[0,0,2]],
+                                     'triangles':[[0,2,1],[0,1,3],[0,3,2],[1,2,3]]}}}
+        box=copy.deepcopy(mesh)
+        box.update(id='closest-box',name='ClosestBox')
+        box['properties']['CollisionFidelity']={'$enum':{'type':'CollisionFidelity','value':2}}
+        missing=copy.deepcopy(mesh)
+        missing.update(id='closest-missing',name='ClosestMissing')
+        del missing['properties']['CollisionGeometry']
+        surface=copy.deepcopy(mesh)
+        surface.update(id='closest-open',name='ClosestOpen')
+        surface['properties']['CollisionGeometry']['triangles']=[[0,2,1]]
+        data['nodes'].extend([mesh,box,missing,surface])
+        self.run_script('''
+local mesh=workspace.ClosestMesh
+local inside=Vector3.new(.25,.25,.25)
+assert(mesh:GetClosestPointOnSurface(inside)==inside)
+vec(mesh:GetClosestPointOnSurface(Vector3.new(2,2,2)),Vector3.new(2/3,2/3,2/3))
+vec(mesh:GetClosestPointOnSurface(Vector3.new(-2,-3,1)),Vector3.new(0,0,1))
+assert(mesh:GetClosestPointOnSurface(Vector3.zero)==Vector3.zero)
+vec(workspace.ClosestOpen:GetClosestPointOnSurface(inside),Vector3.new(.25,.25,0))
+vec(workspace.ClosestBox:GetClosestPointOnSurface(Vector3.new(2,2,2)),Vector3.one)
+assert(not pcall(function()workspace.ClosestMissing:GetClosestPointOnSurface(Vector3.zero)end))
+mesh.Size=Vector3.new(4,2,2)
+mesh.CFrame=CFrame.new(10,0,0)*CFrame.Angles(0,0,math.pi/2)
+local projected=Vector3.new(10-2/3,4/3,2/3)
+vec(mesh:GetClosestPointOnSurface(projected+Vector3.new(-2,1,2)),projected)
+''',snapshot=data)
+
     def test_local_primitive_velocity_includes_rotation_about_moved_center(self):
         self.run_script('''
 local p=Instance.new("Part",workspace)

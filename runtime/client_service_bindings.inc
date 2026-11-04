@@ -67,7 +67,7 @@ int test_service_message(lua_State* L) {
 
 int player_get_mouse(lua_State* L) {
     auto* h=checked_handle(L,1);auto& world=*h->world;
-    if(h->node->class_name!="Player"||h->node->id!=world.local_player) {
+    if(h->node->class_name!="Player"||h->node->id!=world.local_player||h->node->destroyed) {
         luaL_error(L,"GetMouse requires LocalPlayer");return 0;
     }
     auto found=world.client_services.player_mice.find(h->node->id);
@@ -79,6 +79,7 @@ int player_get_mouse(lua_State* L) {
         if(world.nodes.size()>=kMaxNodes)throw std::runtime_error("world node limit exceeded");
         Node node;do{node.id="local:"+std::to_string(world.next_local_id++);}while(world.nodes.count(node.id));
         node.class_name="PlayerMouse";node.name="Mouse";node.server_owned=false;
+        node.properties["TargetFilter"]=nullptr;
         node.attributes_known=true;node.collection_tags_known=true;
         node.origins=Json{{"Name","local"},{"ClassName","local"},{"Parent","local"}};
         std::vector<Json> mutations{Json{{"kind","create"},{"node",node_record(node)}}};check_mutation_budget(world,mutations);

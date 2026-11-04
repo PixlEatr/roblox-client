@@ -59,6 +59,13 @@ class TerminalClientTests(unittest.TestCase):
         self.assertTrue(client.parse_args([]).no_physics is False)
         self.assertTrue(client.parse_args(['--no-physics']).no_physics)
 
+    def test_verbose_logs_default_and_explicit_override_reach_child(self):
+        self.assertEqual(client.parse_args([]).log_level,'verbose')
+        command=client.session_command(123,0)
+        self.assertEqual(command[command.index('--log-level')+1],'verbose')
+        command=client.session_command(123,0,log_level='normal')
+        self.assertEqual(command[command.index('--log-level')+1],'normal')
+
     def test_one_minute_walk_is_opt_in_and_requires_physics(self):
         self.assertNotIn('--walk-for-minute', client.session_command(123, 0))
         command = client.session_command(123, 0, walk_for_minute=True)
@@ -192,7 +199,7 @@ class TerminalClientTests(unittest.TestCase):
                 patch('webbrowser.open') as browser, redirect_stdout(io.StringIO()):
             self.assertEqual(client.main(), 0)
         backend.assert_called_once()
-        browser.assert_called_once_with('http://127.0.0.1:12345/#/workspace')
+        browser.assert_called_once_with('http://127.0.0.1:12345/workspace')
         terminal.assert_called_once_with(process, 1000, 0)
         stop.assert_called_once_with(process)
 

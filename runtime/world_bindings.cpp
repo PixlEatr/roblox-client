@@ -4,11 +4,13 @@
 #include "sha256.hpp"
 #include <class_registry_data.hpp>
 #include "source_scheduler.hpp"
+#include "source_bindings.hpp"
 #include "authored_bindings.hpp"
 #include "movement_bindings.hpp"
 #include "json_bindings.hpp"
 #include "vector_math_compat.hpp"
 #include "vector2_bindings.hpp"
+#include "spatial_values.hpp"
 
 #include <lualib.h>
 
@@ -16,8 +18,10 @@
 #include <array>
 #include <cassert>
 #include <cstring>
+#include <cstdlib>
 #include <cmath>
 #include <memory>
+#include <optional>
 #include <limits>
 #include <deque>
 #include <fstream>
@@ -25,6 +29,7 @@
 #include <sstream>
 #include <set>
 #include <stdexcept>
+#include <string_view>
 #include <unordered_set>
 
 namespace world_bindings {
@@ -50,8 +55,116 @@ const Json& constructors() {
     static const Json classes = Json::parse(kConstructorJson).at("classes");
     return classes;
 }
+#include "client_settings.inc"
 
 const Json* property_descriptor(const Node& node, const std::string& key) {
+    if(const auto* setting=client_setting_descriptor(node,key))return setting;
+    if((node.class_name=="Part"||node.class_name=="WedgePart"||node.class_name=="FormFactorPart")&&key=="formFactorRaw") {
+        static const Json field{{"type","Enum"},{"enum_type","FormFactor"},{"writable",true}};return &field;
+    }
+    if((node.class_name=="Script"||node.class_name=="LocalScript"||node.class_name=="ModuleScript")&&key=="isPlayerScript") {
+        static const Json field{{"type","boolean"},{"writable",true}};return &field;
+    }
+    if(node.class_name=="Player"&&key=="GameplayPaused") {
+        static const Json descriptor{{"type","boolean"},{"writable",true}};return &descriptor;
+    }
+    if(node.class_name=="SpecialMesh"&&key=="MeshType") {
+        static const Json enumeration{{"type","Enum"},{"writable",true}};return &enumeration;
+    }
+    if((node.class_name=="Mouse"||node.class_name=="PlayerMouse"||node.class_name=="PluginMouse")&&key=="TargetFilter") {
+        static const Json filter{{"type","Instance"},{"writable",true},{"value",nullptr}};return &filter;
+    }
+    if(node.class_name=="GetTextBoundsParams"&&key=="Font") {
+        static const Json font{{"type","Font"},{"writable",true}};return &font;
+    }
+    if(node.class_name=="TextLabel"||node.class_name=="TextButton"||node.class_name=="TextBox") {
+        static const Json font{{"type","Font"},{"writable",true}},enumeration{{"type","Enum"},{"writable",true}};
+        static const Json content{{"type","string"},{"writable",false}};
+        if(key=="FontFace")return &font;
+        if(key=="Font")return &enumeration;
+        if(key=="ContentText")return &content;
+        if(key=="TextStrokeColor3") {
+            static const Json stroke{{"type","Color3"},{"writable",true},{"value",Json{{"$color3",{0,0,0}}}}};
+            return &stroke;
+        }
+        if(key=="TextTruncate") {
+            static const Json truncate{{"type","Enum"},{"writable",true},
+                {"value",Json{{"$enum",{{"type","TextTruncate"},{"value",0},{"name","None"}}}}}};
+            return &truncate;
+        }
+        if(node.class_name=="TextBox"&&key=="PlaceholderColor3") {
+            static const Json placeholder{{"type","Color3"},{"writable",true},{"value",Json{{"$color3",{.7,.7,.7}}}}};
+            return &placeholder;
+        }
+    }
+    if(node.class_name=="UIStroke") {
+        if(key=="ApplyStrokeMode") {
+            static const Json mode{{"type","Enum"},{"writable",true},
+                {"value",Json{{"$enum",{{"type","ApplyStrokeMode"},{"value",0},{"name","Contextual"}}}}}};
+            return &mode;
+        }
+        if(key=="StrokeSizingMode") {
+            static const Json mode{{"type","Enum"},{"writable",true},
+                {"value",Json{{"$enum",{{"type","StrokeSizingMode"},{"value",0},{"name","FixedSize"}}}}}};
+            return &mode;
+        }
+        if(key=="BorderStrokePosition") {
+            static const Json position{{"type","Enum"},{"writable",true},
+                {"value",Json{{"$enum",{{"type","BorderStrokePosition"},{"value",1},{"name","Center"}}}}}};
+            return &position;
+        }
+        if(key=="LineJoinMode") {
+            static const Json join{{"type","Enum"},{"writable",true},
+                {"value",Json{{"$enum",{{"type","LineJoinMode"},{"value",0},{"name","Round"}}}}}};
+            return &join;
+        }
+        if(key=="BorderOffset") {
+            static const Json offset{{"type","UDim"},{"writable",true},{"value",Json{{"$udim",{0,0}}}}};
+            return &offset;
+        }
+    }
+    if(node.class_name=="UIGradient") {
+        static const Json white{{"$color3",{1,1,1}}};
+        static const Json color{{"type","ColorSequence"},{"writable",true},
+            {"value",Json{{"$color_sequence",Json::array({Json{{"$color_keypoint",{0,white}}},Json{{"$color_keypoint",{1,white}}}})}}}};
+        static const Json transparency{{"type","NumberSequence"},{"writable",true},
+            {"value",Json{{"$number_sequence",Json::array({Json{{"$number_keypoint",{0,0,0}}},Json{{"$number_keypoint",{1,0,0}}}})}}}};
+        static const Json offset{{"type","Vector2"},{"writable",true},{"value",Json{{"$vector2",{0,0}}}}};
+        static const Json tile{{"type","Enum"},{"writable",true},
+            {"value",Json{{"$enum",{{"type","GradientTileMode"},{"value",0},{"name","Clamp"}}}}}};
+        static const Json shape{{"type","Enum"},{"writable",true},
+            {"value",Json{{"$enum",{{"type","GradientType"},{"value",0},{"name","Linear"}}}}}};
+        if(key=="Color")return &color;
+        if(key=="Transparency")return &transparency;
+        if(key=="Offset")return &offset;
+        if(key=="TileMode")return &tile;
+        if(key=="Type")return &shape;
+    }
+    if(node.class_name=="ImageLabel"||node.class_name=="ImageButton") {
+        static const Json loaded{{"type","boolean"},{"writable",false},{"value",false}};
+        static const Json color{{"type","Color3"},{"writable",true},{"value",Json{{"$color3",{1,1,1}}}}};
+        static const Json point{{"type","Vector2"},{"writable",true},{"value",Json{{"$vector2",{0,0}}}}};
+        static const Json axis{{"$udim",{1,0}}};
+        static const Json tile{{"type","UDim2"},{"writable",true},{"value",Json{{"$udim2",{axis,axis}}}}};
+        static const Json scale{{"type","Enum"},{"writable",true},
+            {"value",Json{{"$enum",{{"type","ScaleType"},{"value",0},{"name","Stretch"}}}}}};
+        static const Json sampling{{"type","Enum"},{"writable",true},
+            {"value",Json{{"$enum",{{"type","ResamplerMode"},{"value",0},{"name","Default"}}}}}};
+        if(key=="ImageColor3")return &color;
+        if(key=="ImageRectOffset"||key=="ImageRectSize")return &point;
+        if(key=="TileSize")return &tile;
+        if(key=="ScaleType")return &scale;
+        if(key=="ResampleMode")return &sampling;
+        if(key=="IsLoaded")return &loaded;
+    }
+    // These compound values were omitted by the constructor capture. Declare
+    // their public writable types without inventing initial property values.
+    if(node.class_name=="ArcHandles"&&key=="Axes") {
+        static const Json axes{{"type","Axes"},{"writable",true}};return &axes;
+    }
+    if(node.class_name=="Handles"&&key=="Faces") {
+        static const Json faces{{"type","Faces"},{"writable",true}};return &faces;
+    }
     if(node.class_name=="InputObject"&&(key=="KeyCode"||key=="UserInputType"||key=="UserInputState"||key=="Position"||key=="Delta")) {
         static const Json enumeration{{"type","Enum"},{"writable",true}},vector{{"type","Vector3"},{"writable",true}};
         return key=="Position"||key=="Delta"?&vector:&enumeration;
@@ -109,6 +222,38 @@ const Json* received_color_alias(const Node& node,const Json& fields) {
     return &*value;
 }
 
+bool valid_utf8(const char* s,size_t n);
+std::string bytes_hex(const char* data,size_t size);
+
+// Native wire getter 10108232C prepends the group-ID byte to the public name.
+// The snapshot preserves non-UTF-8 wire strings as $bytes_hex. Decode the wire
+// representation before projecting the received name into the Luau property.
+Json received_collision_group_alias(const Node& node,const Json& fields) {
+    const Json* descriptor=property_descriptor(node,"CollisionGroup");
+    auto value=fields.find("CollisionGroupReplicate");
+    if(!descriptor||descriptor->value("type","")!="string"||value==fields.end())return nullptr;
+    std::string bytes;
+    if(value->is_string())bytes=value->get<std::string>();
+    else if(value->is_object()&&value->size()==1&&value->contains("$bytes_hex")&&(*value)["$bytes_hex"].is_string()) {
+        const auto& hex=(*value)["$bytes_hex"].get_ref<const std::string&>();
+        if(hex.size()%2||hex.size()>2*1024*1024)throw std::runtime_error("invalid CollisionGroupReplicate byte-string length");
+        auto nib=[](char c)->int{if(c>='0'&&c<='9')return c-'0';if(c>='a'&&c<='f')return c-'a'+10;if(c>='A'&&c<='F')return c-'A'+10;return -1;};
+        bytes.reserve(hex.size()/2);
+        for(size_t i=0;i<hex.size();i+=2) {
+            int a=nib(hex[i]),b=nib(hex[i+1]);
+            if(a<0||b<0)throw std::runtime_error("invalid CollisionGroupReplicate byte-string hex");
+            bytes.push_back(char((a<<4)|b));
+        }
+    } else throw std::runtime_error("received CollisionGroupReplicate must be a string or tagged byte-string");
+    if(bytes.empty())throw std::runtime_error("received CollisionGroupReplicate is missing its group ID");
+    // 1011B6A1C tests the interned Default name initialized by 1011AF1C0;
+    // only that name is omitted by the native wire getter, leaving one byte.
+    if(bytes.size()==1)return "Default";
+    bytes.erase(0,1);
+    if(valid_utf8(bytes.data(),bytes.size()))return bytes;
+    return Json{{"$bytes_hex",bytes_hex(bytes.data(),bytes.size())}};
+}
+
 const Json* humanoid_health_default(const Node& node,const std::string& key) {
     // Replicated Humanoids also begin with constructor health state. Missing
     // snapshot fields do not mean that the engine property does not exist.
@@ -123,6 +268,7 @@ struct SignalHandle { Signal* signal; };
 struct ConnectionHandle { Connection* connection; };
 bool connection_compat_index(lua_State* L,Connection& connection,const char* key);
 void enforce_scriptability(lua_State* L,World& w,Node& n,std::string& key);
+std::string hidden_property_name(const Node& n,const std::string& key);
 struct InstanceHandleValue {World* world;std::string id;};
 void push_chat_status(lua_State* L,int value) {
     if(value<1||value>9)throw std::runtime_error("unsupported TextChatMessageStatus");
@@ -173,15 +319,22 @@ bool has_meta(lua_State* L, int i, const char* name) {
 #include "tween_bindings.inc"
 #include "http_url_encode.inc"
 
+void push_instance_cache(lua_State* L) {
+    lua_rawgetfield(L,LUA_REGISTRYINDEX,"Headless.InstanceCache");
+    if(lua_istable(L,-1))return;
+    lua_pop(L,1);lua_newtable(L);lua_pushvalue(L,-1);
+    lua_rawsetfield(L,LUA_REGISTRYINDEX,"Headless.InstanceCache");
+}
 void push_node(lua_State* L, World& world, Node* node) {
+    push_instance_cache(L);const int cache=lua_gettop(L);
     lua_pushlightuserdata(L, node);
-    lua_rawget(L, LUA_REGISTRYINDEX);
-    if (lua_isuserdata(L, -1)) return;
+    lua_rawget(L, cache);
+    if (lua_isuserdata(L, -1)){lua_remove(L,cache);return;}
     lua_pop(L, 1);
     auto* h = static_cast<Handle*>(lua_newuserdatatagged(L, sizeof(Handle), 0));
     h->world = &world; h->node = node;
     luaL_getmetatable(L, kInstanceMeta); lua_setmetatable(L, -2);
-    lua_pushlightuserdata(L, node); lua_pushvalue(L, -2); lua_rawset(L, LUA_REGISTRYINDEX);
+    lua_pushlightuserdata(L, node); lua_pushvalue(L, -2); lua_rawset(L, cache);lua_remove(L,cache);
 }
 Node* find_node(World& world, const std::string& id) {
     auto it = world.nodes.find(id);
@@ -219,6 +372,8 @@ std::string instance_name(World& world, const Node& node) {
     return node.name;
 }
 bool display_property(World& world,const Node& node,const std::string& key);
+bool display_readonly_property(World& world,const Node& node,const std::string& key);
+bool mouse_projection_property(World&,const Node&,const std::string&);
 const Json* gui_default_property(World& world,const Node& node,const std::string& key);
 std::string gui_property_type(World& world,const Node& node,const std::string& key);
 std::string part_transform_origin(World&,const Node&,const std::string&);
@@ -238,7 +393,24 @@ void watch_part_mass(World&,Node&,const std::string&);
 bool assembly_root_index(lua_State*,World&,Node&,const std::string&);
 void watch_assembly_root(World&,Node&,const std::string&);
 void invalidate_joint_topology(World&,Node&,const std::string&);
+std::string text_font_origin(World&,const Node&,const std::string&);
+bool text_layout_node(const Node&);
+bool gui_image(const Node&);
+std::optional<std::string> text_content(World&,const Node&);
+const Json* completed_creation_default(World& world,const Node& node,const std::string& key) {
+    if(!node.constructor_defaults_known)return nullptr;
+    auto cls=world.class_property_types.find(node.class_name);
+    if(cls==world.class_property_types.end()||!cls->contains(key))return nullptr;
+    const auto* descriptor=property_descriptor(node,key);
+    return descriptor&&descriptor->contains("value")?&descriptor->at("value"):nullptr;
+}
 std::string origin(World& world, const Node& node, const std::string& key) {
+    if(!node.server_owned&&node.class_name=="UserGameSettings"&&client_setting_descriptor(node,key))return "local_settings";
+    if(key=="IsLoaded"&&gui_image(node))return "local_display";
+    if(key=="ContentText"&&text_layout_node(node))
+        return text_content(world,node)?"derived_local":"unavailable";
+    if(mouse_projection_property(world,node,key))
+        return key=="X"||key=="Y"?"local_input":key=="ViewSizeX"||key=="ViewSizeY"?"local_display":"local_camera";
     if(key=="Source"&&(node.class_name=="LocalScript"||node.class_name=="ModuleScript"||node.class_name=="Script")) {
         if(node.script_code.is_object()&&node.script_code.contains("source"))return node.script_code.value("authored_override",false)?"local":"received";
         return "class_default";
@@ -248,6 +420,7 @@ std::string origin(World& world, const Node& node, const std::string& key) {
     if(auto derived=joint_origin(world,node,key);!derived.empty())return derived;
     if(auto derived=attachment_origin(world,node,key);!derived.empty())return derived;
     if(auto derived=part_transform_origin(world,node,key);!derived.empty())return derived;
+    if(auto derived=text_font_origin(world,node,key);!derived.empty())return derived;
     if (node.class_name == "UserInputService" && (input_capability_key(key)||key=="MouseBehavior"||key=="MouseIconEnabled"||key=="MouseDeltaSensitivity")) return "local_input";
     if (node.class_name == "InputObject" && (key=="KeyCode"||key=="UserInputType"||key=="UserInputState"||key=="Position"||key=="Delta")) return "local_input";
     if (display_property(world,node,key)) return "local_display";
@@ -269,6 +442,7 @@ std::string origin(World& world, const Node& node, const std::string& key) {
         return "received";
     }
     if (key == "Name" || key == "ClassName" || key == "Parent") return "received";
+    if(completed_creation_default(world,node,key))return "class_default";
     auto d = world.defaults.find(node.class_name);
     auto o = world.default_origins.find(node.class_name);
     if (d != world.defaults.end() && d->is_object() && d->contains(key) && o != world.default_origins.end()
@@ -284,9 +458,14 @@ std::string origin(World& world, const Node& node, const std::string& key) {
 }
 const Json* input_default(const Node&,const std::string&);
 const Json* property_value(World& world, const Node& node, const std::string& key) {
+    if(key=="IsLoaded"&&gui_image(node)) {
+        static const Json loaded=true,unloaded=false;
+        return node.image_loaded?&loaded:&unloaded;
+    }
     if (const Json* v = local_value(world, node, key)) return v;
     auto p = node.properties.find(key);
     if (p != node.properties.end()) return &*p;
+    if(const auto* value=completed_creation_default(world,node,key))return value;
     auto d = world.defaults.find(node.class_name);
     auto o = world.default_origins.find(node.class_name);
     if (d != world.defaults.end() && d->is_object() && d->contains(key) && o != world.default_origins.end()
@@ -484,7 +663,9 @@ int get_full_name(lua_State* L) {
 Node* ensure_http_service(World& world);
 Node* ensure_client_service(World& world,const std::string& service);
 bool local_service_supported(const std::string& service) {
-    return service=="RunService"||service=="HttpService"||service=="ServerStorage"||service=="ServerScriptService"||service=="GuiService"||service=="UserInputService"||service=="ContextActionService"||service=="Lighting"||service=="CoreGui"||service=="Debris"||service=="CollectionService"||service=="TweenService"||service=="TestService"||service=="Stats";
+    if(service=="VRService"||service=="SoundService")return true;
+    if(service=="PhysicsService"||service=="EncodingService")return true;
+    return service=="TextService"||service=="RunService"||service=="HttpService"||service=="ServerStorage"||service=="ServerScriptService"||service=="GuiService"||service=="UserInputService"||service=="ContextActionService"||service=="Lighting"||service=="CoreGui"||service=="Debris"||service=="CollectionService"||service=="TweenService"||service=="TestService"||service=="Stats";
 }
 int gui_ten_foot_interface(lua_State* L) {
     auto* h=checked_handle(L,1);
@@ -493,8 +674,56 @@ int gui_ten_foot_interface(lua_State* L) {
     // This reports presentation mode; it is not an account/platform assertion.
     lua_pushboolean(L,false);return 1;
 }
+int encoding_codec(lua_State* L) {
+    auto* receiver=checked_handle(L,1);
+    if(receiver->node->class_name!="EncodingService"||receiver->node->destroyed)
+        return luaL_error(L,"EncodingService receiver required"),0;
+    const auto operation=static_cast<EncodingCodec>(lua_tointeger(L,lua_upvalueindex(1)));
+    int parameter=0;
+    switch(operation) {
+        case EncodingCodec::BufferHash:
+        case EncodingCodec::StringHash:
+            parameter=checked_geometry_value(L,3,kHashAlgorithm);
+            break;
+        case EncodingCodec::Compress: {
+            checked_geometry_value(L,3,kCompressionAlgorithm);
+            const double requested=luaL_optnumber(L,4,1);
+            if(!std::isfinite(requested)||std::trunc(requested)!=requested||requested < -7||requested > 22)
+                return luaL_argerror(L,4,"Zstandard level must be an integer from -7 to 22"),0;
+            parameter=static_cast<int>(requested);
+            break;
+        }
+        case EncodingCodec::Decompress:
+        case EncodingCodec::DecompressedSize:
+            checked_geometry_value(L,3,kCompressionAlgorithm);
+            break;
+        case EncodingCodec::Base64Encode:
+        case EncodingCodec::Base64Decode:
+            break;
+    }
+    return source_encoding_codec(L,operation,2,parameter);
+}
+bool encoding_service_index(lua_State* L,const std::string& key) {
+    constexpr std::pair<const char*,EncodingCodec> methods[]={
+        {"Base64Encode",EncodingCodec::Base64Encode},{"Base64Decode",EncodingCodec::Base64Decode},
+        {"CompressBuffer",EncodingCodec::Compress},{"DecompressBuffer",EncodingCodec::Decompress},
+        {"GetDecompressedBufferSize",EncodingCodec::DecompressedSize},
+        {"ComputeBufferHash",EncodingCodec::BufferHash},{"ComputeStringHash",EncodingCodec::StringHash},
+    };
+    for(const auto& [name,operation]:methods)if(key==name) {
+        lua_pushinteger(L,static_cast<int>(operation));
+        lua_pushcclosure(L,encoding_codec,name,1);
+        return true;
+    }
+    return false;
+}
 int get_service(lua_State* L) {
-    Handle* h=checked_handle(L,1); if(h->node->id!=h->world->game_id){luaL_error(L,"GetService requires DataModel");return 0;}
+    Handle* h=checked_handle(L,1);
+    if(h->node->id==kSettingsId) {
+        if(std::string(luaL_checkstring(L,2))!="UserGameSettings")return luaL_error(L,"unknown user settings service"),0;
+        push_node(L,*h->world,find_node(*h->world,kUserGameSettingsId));return 1;
+    }
+    if(h->node->id!=h->world->game_id){luaL_error(L,"GetService requires ServiceProvider");return 0;}
     std::string service=luaL_checkstring(L,2); auto it=h->world->services.find(service);
     if(it==h->world->services.end()&&local_service_supported(service)) {
         try {push_node(L,*h->world,ensure_client_service(*h->world,service));return 1;}
@@ -510,8 +739,23 @@ int make_user_settings(lua_State*L){
     Node*n=find_node(*w,kSettingsId);if(!n){luaL_error(L,"UserSettings model unavailable");return 0;}
     push_node(L,*w,n);return 1;
 }
+int global_stats(lua_State* L) {
+    auto& world=*static_cast<World*>(lua_touserdata(L,lua_upvalueindex(1)));
+    try {
+        auto it=world.services.find("Stats");
+        Node* stats=it==world.services.end()?ensure_client_service(world,"Stats"):find_node(world,it->second);
+        if(!stats||stats->destroyed)throw std::runtime_error("Stats service unavailable");
+        push_node(L,world,stats);return 1;
+    }catch(const std::exception& e){luaL_error(L,"stats: %s",e.what());return 0;}
+}
 int find_service(lua_State* L) {
-    Handle* h=checked_handle(L,1); if(h->node->id!=h->world->game_id){luaL_error(L,"FindService requires DataModel");return 0;}
+    Handle* h=checked_handle(L,1);
+    if(h->node->id==kSettingsId) {
+        if(std::string(luaL_checkstring(L,2))=="UserGameSettings")push_node(L,*h->world,find_node(*h->world,kUserGameSettingsId));
+        else lua_pushnil(L);
+        return 1;
+    }
+    if(h->node->id!=h->world->game_id){luaL_error(L,"FindService requires ServiceProvider");return 0;}
     std::string service=luaL_checkstring(L,2); auto it=h->world->services.find(service);
     if(it==h->world->services.end()) {
         Node* local=nullptr;
@@ -524,7 +768,8 @@ int cframe_components(lua_State* L) { auto* c=static_cast<CFrameValue*>(luaL_che
 int vector3_new(lua_State*L){
     if(lua_gettop(L)>3){luaL_error(L,"Vector3.new expects at most three numbers");return 0;}
     double x=lua_isnone(L,1)?0:luaL_checknumber(L,1),y=lua_isnone(L,2)?0:luaL_checknumber(L,2),z=lua_isnone(L,3)?0:luaL_checknumber(L,3);
-    if(!std::isfinite(x)||!std::isfinite(y)||!std::isfinite(z)){luaL_error(L,"Vector3 components must be finite");return 0;}
+    // Studio 0.745 preserves IEEE infinity and NaN in vectors. Geometry and
+    // movement consumers validate their own finite-input requirements.
     lua_pushvector(L,x,y,z);return 1;
 }
 #include "vector3_methods.inc"
@@ -585,6 +830,7 @@ int get_attribute(lua_State* L);
 int get_attributes(lua_State* L);
 int set_attribute(lua_State* L);
 int property_changed_signal(lua_State* L);
+int world_root_bulk_move(lua_State* L);
 int attribute_changed_signal(lua_State* L);
 int fire_bindable(lua_State* L);
 int fire_remote_server(lua_State* L);
@@ -639,6 +885,7 @@ void context_reserve(World&,size_t,size_t);
 #include "context_action_bindings.inc"
 #include "render_step_bindings.inc"
 #include "collection_bindings.inc"
+#include "instance_queries.inc"
 #include "service_lookup_events.inc"
 std::vector<Node*> ancestors(World& w,const std::string& parent) {
     std::vector<Node*> result;std::string id=parent;
@@ -647,6 +894,11 @@ std::vector<Node*> ancestors(World& w,const std::string& parent) {
 }
 void parent_events(World& w,Node& node,const std::string& old_parent,const std::string& new_parent) {
     if(old_parent==new_parent)return;
+    if(node.class_name=="ScrollingFrame")w.active_scroll_layouts.insert(node.id);
+    if(class_is_a(w,node.class_name,"GuiObject")) {
+        if(new_parent.empty())w.gui_parent_order.erase(node.id);
+        else w.gui_parent_order[node.id]=w.next_gui_parent_order++;
+    }
     collection_parent_events(w,node,old_parent,new_parent);
     player_membership_events(w,node,old_parent,new_parent);
     invalidate_joint_topology(w,node,"Parent");
@@ -666,6 +918,11 @@ void parent_events(World& w,Node& node,const std::string& old_parent,const std::
     for(auto* p:now)if(std::find(old.begin(),old.end(),p)==old.end())for(auto* n:subtree)emit(w,*p,"DescendantAdded",Json::array({Json{{"$ref",n->id}}}));
 }
 void property_events(World& w,Node& n,const std::string& key) {
+    bool image_unloaded=false;
+    if(key=="Image"&&gui_image(n)) {
+        n.image_load_token.clear();
+        image_unloaded=std::exchange(n.image_loaded,false);
+    }
     invalidate_joint_topology(w,n,key);
     // A direct received mass update already emits its signal here. Keep the
     // derived-value watch in sync so the next scheduler tick does not emit it twice.
@@ -677,10 +934,20 @@ void property_events(World& w,Node& n,const std::string& key) {
         if(canonical=="Value"){auto* v=property_value(w,n,key);emit(w,n,"Changed",Json::array({v?*v:Json(nullptr)}));}
     } else emit(w,n,"Changed",Json::array({canonical}));
     emit(w,n,"property:"+canonical);
+    if(image_unloaded)property_events(w,n,"IsLoaded");
 }
 #include "camera_projection.inc"
 #include "model_pivots.inc"
+#include "collision_groups.inc"
+#include "no_collision_constraints.inc"
+#include "world_ray_query.inc"
+#include "world_raycast_bindings.inc"
+#include "world_overlap_bindings.inc"
+#include "world_region_bindings.inc"
+#include "world_legacy_raycast_bindings.inc"
+#include "mouse_projection.inc"
 #include "gui_layout.inc"
+#include "textbox_focus.inc"
 #include "animation_bindings.inc"
 // State helpers are authored by the character-state workstream.
 #include "humanoid_states.inc"
@@ -764,8 +1031,13 @@ int is_loaded(lua_State* L) {
 }
 int humanoid_take_damage(lua_State* L);
 int part_is_grounded(lua_State* L);
+int part_closest_point_on_surface(lua_State* L);
+int world_root_spherecast(lua_State* L);
+int world_root_blockcast(lua_State* L);
 int part_velocity_at_position(lua_State* L);
 int instance_newindex(lua_State* L);
+int is_property_modified(lua_State* L);
+int reset_property_to_default(lua_State* L);
 int remove_instance(lua_State* L);
 int instance_get_actor(lua_State* L) {
     auto* handle=checked_handle(L,1);auto& world=*handle->world;Node* node=handle->node;
@@ -777,7 +1049,21 @@ int instance_get_actor(lua_State* L) {
 }
 // Unveil resolves deprecated Instance spellings before member dispatch. Keep
 // these aliases on the same implementations and property-change signals.
-std::string canonical_instance_member(std::string key) {
+std::string canonical_instance_member(std::string key,const Node* node=nullptr) {
+    if(node) {
+        const auto& c=node->class_name;
+        if(c=="Player"&&key=="character")return "Character";
+        if((c=="BodyGyro"||c=="BodyAngularVelocity")&&key=="maxTorque")return "MaxTorque";
+        if(c=="BodyGyro"&&key=="cframe")return "CFrame";
+        if(c=="BodyAngularVelocity"&&key=="angularvelocity")return "AngularVelocity";
+        if(c=="BodyThrust"&&key=="force")return "Force";
+        if(c=="BodyThrust"&&key=="location")return "Location";
+    }
+    if(node&&(node->class_name=="Mouse"||node->class_name=="PlayerMouse"||node->class_name=="PluginMouse")) {
+        if(key=="hit")return "Hit";
+        if(key=="target")return "Target";
+    }
+    if(node&&key=="TextWrap"&&(node->class_name=="TextLabel"||node->class_name=="TextButton"||node->class_name=="TextBox"))return "TextWrapped";
     static const std::unordered_map<std::string,std::string> aliases={
         {"className","ClassName"},{"archivable","Archivable"},
         {"children","GetChildren"},{"getChildren","GetChildren"},
@@ -798,8 +1084,31 @@ int body_velocity_last_force(lua_State* L) {
     lua_pushvector(L,0,0,0);return 1;
 }
 bool tween_playback_index(lua_State*,World&,Node&,const std::string&);
+int text_service_request(lua_State*);
+int text_service_continue(lua_State*,int);
+bool text_font_index(lua_State*,World&,Node&,const std::string&);
 int instance_index(lua_State* L) {
-    Handle* h=checked_handle(L,1); World& w=*h->world; Node& n=*h->node; std::string key=canonical_instance_member(luaL_checkstring(L,2));
+    Handle* h=checked_handle(L,1); World& w=*h->world; Node& n=*h->node; std::string key=canonical_instance_member(luaL_checkstring(L,2),&n);
+    if(key=="DataCost"&&!SourceScheduler::has_capability(L,"LocalUser"))return luaL_error(L,"DataCost: lacking capability LocalUser"),0;
+    if(n.id==kSettingsId&&key=="IsUserFeatureEnabled") {
+        lua_pushcfunction(L,[](lua_State* S)->int{checked_handle(S,1);luaL_error(S,"User feature '%s' is not configured in this client",luaL_checkstring(S,2));return 0;},"IsUserFeatureEnabled");return 1;
+    }
+    if(n.class_name=="UserGameSettings") {
+        if(key=="GetCameraYInvertValue") {
+            lua_pushcfunction(L,[](lua_State* S)->int{auto* h=checked_handle(S,1);if(h->node->class_name!="UserGameSettings"||h->node->destroyed){luaL_error(S,"live UserGameSettings receiver required");return 0;}const auto* value=property_value(*h->world,*h->node,"CameraYInverted");lua_pushinteger(S,value&&*value==true?-1:1);return 1;},"GetCameraYInvertValue");return 1;
+        }
+        if(key=="SetCameraYInvertVisible"||key=="SetGamepadCameraSensitivityVisible") {
+            lua_pushstring(L,key=="SetCameraYInvertVisible"?"IsUsingCameraYInverted":"IsUsingGamepadCameraSensitivity");
+            lua_pushcclosure(L,[](lua_State* S)->int{auto* h=checked_handle(S,1);if(h->node->class_name!="UserGameSettings"||h->node->destroyed){luaL_error(S,"live UserGameSettings receiver required");return 0;}std::string key=lua_tostring(S,lua_upvalueindex(1));if(h->node->properties[key]!=true){h->node->properties[key]=true;property_events(*h->world,*h->node,key);}return 0;},key.c_str(),1);return 1;
+        }
+    }
+    if(n.class_name=="VRService"&&key=="VREnabled") {
+        auto value=w.input_capabilities.find("VREnabled");lua_pushboolean(L,value!=w.input_capabilities.end()&&*value==true);return 1;
+    }
+    if(n.class_name=="DataModel"&&(key=="workspace"||key=="Workspace")) {
+        auto it=w.services.find("Workspace");
+        if(it!=w.services.end()){push_node(L,w,find_node(w,it->second));return 1;}
+    }
     if(n.class_name=="BodyForce"&&key=="force")key="Force";
     if(n.class_name=="BodyPosition") {
         if(key=="position")key="Position";
@@ -813,7 +1122,11 @@ int instance_index(lua_State* L) {
             lua_pushcfunction(L,body_velocity_last_force,"GetLastForce");return 1;
         }
     }
-    enforce_scriptability(L,w,n,key);
+    if(lua_toboolean(L,lua_upvalueindex(1)))key=hidden_property_name(n,key);else enforce_scriptability(L,w,n,key);
+    if(key=="Tags") {
+        try{auto tags=collection_tags(n);std::string bytes;for(const auto& tag:tags){if(!bytes.empty())bytes+='\0';bytes+=tag;}lua_pushlstring(L,bytes.data(),bytes.size());return 1;}
+        catch(const std::exception& e){return luaL_error(L,"Tags unavailable: %s",e.what()),0;}
+    }
     try{if(linear_velocity_index(L,w,n,key))return 1;}catch(const std::exception& e){luaL_error(L,"%s",e.what());return 0;}
     if(n.class_name=="VectorForce"&&key=="RelativeTo") {
         try {
@@ -852,6 +1165,16 @@ int instance_index(lua_State* L) {
     if(n.class_name=="UserInputService"&&input_capability_key(key)) {
         lua_pushboolean(L,input_capability(w,key));return 1;
     }
+    if(text_font_index(L,w,n,key))return 1;
+    if(key=="ContentText"&&text_layout_node(n)) {
+        auto content=text_content(w,n);
+        if(!content){luaL_error(L,"ContentText is unavailable until Text is known");return 0;}
+        lua_pushlstring(L,content->data(),content->size());return 1;
+    }
+    if(textbox_focus_index(L,w,n,key))return 1;
+    if(n.class_name=="TextService"&&(key=="GetFamilyInfoAsync"||key=="GetTextBoundsAsync")) {
+        lua_pushboolean(L,key=="GetTextBoundsAsync");lua_pushcclosurek(L,text_service_request,key.c_str(),1,text_service_continue);return 1;
+    }
     if(int kind=gui_enum_kind(w,n,key);kind>=0) {
         try{push_geometry_item(L,kind,gui_enum_value(w,n,key));return 1;}
         catch(const std::exception& e){luaL_error(L,"GUI enum unavailable: %s",e.what());return 0;}
@@ -861,12 +1184,35 @@ int instance_index(lua_State* L) {
         catch(const std::exception& e){luaL_error(L,"display layout unavailable: %s",e.what());return 0;}
     }
     if(n.class_name=="GuiService"&&key=="GetGuiInset"){lua_pushcfunction(L,gui_get_inset,"GetGuiInset");return 1;}
+    if((n.class_name=="UIListLayout"||n.class_name=="UIGridLayout")&&key=="ApplyLayout") {
+        lua_pushcfunction(L,gui_apply_layout,"ApplyLayout");return 1;
+    }
     try{if(animation_index(L,w,n,key))return 1;}catch(const std::exception& e){luaL_error(L,"animation member unavailable: %s",e.what());return 0;}
     if(key=="Name"){auto s=instance_name(w,n);lua_pushlstring(L,s.data(),s.size());return 1;}
     if(key=="ClassName"){lua_pushlstring(L,n.class_name.data(),n.class_name.size());return 1;}
     if(key=="Parent"){std::string p=parent_id(w,n);if(p.empty())lua_pushnil(L);else{Node* parent=find_node(w,p);if(!parent)lua_pushnil(L);else push_node(L,w,parent);}return 1;}
     if(camera_index(L,w,n,key))return 1;
+    try{if(collision_groups_index(L,w,n,key))return 1;}catch(const std::exception& e){luaL_error(L,"collision groups: %s",e.what());return 0;}
+    if(key=="GetNoCollisionConstraints"&&pivot_part(w,n)){lua_pushcfunction(L,get_no_collision_constraints,"GetNoCollisionConstraints");return 1;}
+    if((n.class_name=="Workspace"||n.class_name=="WorldModel")&&key=="Raycast") {lua_pushcfunction(L,world_root_raycast,"WorldRoot.Raycast");return 1;}
+    if(collision_world_root(n)&&key=="Spherecast") {lua_pushcfunction(L,world_root_spherecast,"WorldRoot.Spherecast");return 1;}
+    if(collision_world_root(n)&&key=="Blockcast") {lua_pushcfunction(L,world_root_blockcast,"WorldRoot.Blockcast");return 1;}
+    if(collision_world_root(n)&&(key=="GetPartBoundsInBox"||key=="GetPartBoundsInRadius")) {lua_pushlstring(L,key.data(),key.size());lua_pushcclosure(L,world_root_overlap,key.c_str(),1);return 1;}
+    if(collision_world_root(n)&&world_region_method(key)) {lua_pushlstring(L,key.data(),key.size());lua_pushcclosure(L,world_root_region,key.c_str(),1);return 1;}
+    if(collision_world_root(n)&&world_legacy_ray_method(key)) {lua_pushlstring(L,key.data(),key.size());lua_pushcclosure(L,world_root_legacy_ray,key.c_str(),1);return 1;}
+    if(collision_world_root(n)&&key=="BulkMoveTo"){lua_pushcfunction(L,world_root_bulk_move,"WorldRoot.BulkMoveTo");return 1;}
+    try{if(mouse_projection_index(L,w,n,key))return 1;}catch(const std::exception& e){luaL_error(L,"mouse projection: %s",e.what());return 0;}
     try{if(model_pivot_index(L,w,n,key))return 1;}catch(const std::exception& e){luaL_error(L,"model pivot unavailable: %s",e.what());return 0;}
+    if(n.class_name=="SpecialMesh"&&key=="MeshType") {
+        try {
+            const auto* value=property_value(w,n,key);
+            if(!value)throw std::runtime_error("MeshType is unavailable");
+            Json item=value->is_number_integer()?Json{{"$enum",{{"type","MeshType"},{"value",*value}}}}:*value;
+            if(!item.contains("$enum")||item["$enum"].value("type","")!="MeshType"||!push_ussi_export_enum_json(L,item))
+                throw std::runtime_error("invalid MeshType");
+            return 1;
+        }catch(const std::exception& e){return luaL_error(L,"SpecialMesh: %s",e.what()),0;}
+    }
     try{if(part_transform_index(L,w,n,key))return 1;}catch(const std::exception& e){luaL_error(L,"part transform unavailable: %s",e.what());return 0;}
     try{if(attachment_index(L,w,n,key))return 1;}catch(const std::exception& e){luaL_error(L,"attachment transform unavailable: %s",e.what());return 0;}
     try{if(joint_index(L,w,n,key))return 1;}catch(const std::exception& e){luaL_error(L,"joint state unavailable: %s",e.what());return 0;}
@@ -882,11 +1228,15 @@ int instance_index(lua_State* L) {
     if(n.class_name=="Players"&&(key=="PlayerAdded"||key=="PlayerRemoving")){w.player_membership_events_observed=true;push_signal(L,signal_for(w,n,key));return 1;}
     if(n.class_name=="Players" && key=="LocalPlayer"){Node* player=find_node(w,w.local_player);if(player)push_node(L,w,player);else lua_pushnil(L);return 1;}
     if(client_service_index(L,w,n,key)||collection_instance_index(L,w,n,key))return 1;
+    if(n.class_name=="EncodingService"&&encoding_service_index(L,key))return 1;
     if(n.class_name=="TweenService"&&key=="GetValue"){lua_pushcfunction(L,tween_service_get_value,"GetValue");return 1;}
     if(key=="GetService"){lua_pushcfunction(L,get_service,"GetService");return 1;}
     if(key=="FindService"){lua_pushcfunction(L,find_service,"FindService");return 1;}
     if(key=="GetChildren"){lua_pushcfunction(L,get_children,"GetChildren");return 1;}
     if(key=="GetDescendants"){lua_pushcfunction(L,get_descendants,"GetDescendants");return 1;}
+    if(key=="QueryDescendants"){lua_pushcfunction(L,query_descendants,"QueryDescendants");return 1;}
+    if(key=="IsPropertyModified"){lua_pushcfunction(L,is_property_modified,"IsPropertyModified");return 1;}
+    if(key=="ResetPropertyToDefault"){lua_pushcfunction(L,reset_property_to_default,"ResetPropertyToDefault");return 1;}
     if(key=="FindFirstChild"){lua_pushcfunction(L,find_child,"FindFirstChild");return 1;}
     if(key=="WaitForChild"){lua_pushcfunction(L,wait_for_child,"WaitForChild");return 1;}
     if(key=="FindFirstChildOfClass"){lua_pushcfunction(L,find_child_class,"FindFirstChildOfClass");return 1;}
@@ -919,6 +1269,9 @@ int instance_index(lua_State* L) {
     if(class_is_a(w,n.class_name,"BasePart")&&key=="IsGrounded") {
         lua_pushcfunction(L,part_is_grounded,"IsGrounded");return 1;
     }
+    if(class_is_a(w,n.class_name,"BasePart")&&key=="GetClosestPointOnSurface") {
+        lua_pushcfunction(L,part_closest_point_on_surface,"GetClosestPointOnSurface");return 1;
+    }
     if(class_is_a(w,n.class_name,"BasePart")&&key=="GetVelocityAtPosition") {
         lua_pushcfunction(L,part_velocity_at_position,"GetVelocityAtPosition");return 1;
     }
@@ -936,7 +1289,10 @@ int instance_index(lua_State* L) {
     if(n.class_name=="GuiService"&&key=="IsTenFootInterface"){lua_pushcfunction(L,gui_ten_foot_interface,"IsTenFootInterface");return 1;}
     if(n.class_name=="RunService" && (key=="Heartbeat"||key=="RenderStepped"||key=="PreRender")) {push_signal(L,signal_for(w,n,key));return 1;}
     if(n.class_name=="ClickDetector" && (key=="MouseClick"||key=="RightMouseClick"||key=="MouseHoverEnter"||key=="MouseHoverLeave")) {push_signal(L,signal_for(w,n,key));return 1;}
+    if((n.class_name=="ProximityPrompt"&&(key=="Triggered"||key=="TriggerEnded"||key=="PromptButtonHoldBegan"||key=="PromptButtonHoldEnded"))
+       ||(class_is_a(w,n.class_name,"BasePart")&&(key=="Touched"||key=="TouchEnded"))) {push_signal(L,signal_for(w,n,key));return 1;}
     if((class_is_a(w,n.class_name,"GuiButton")&&(key=="Activated"||key=="MouseButton1Click"||key=="MouseButton1Down"||key=="MouseButton1Up"))
+            ||(class_is_a(w,n.class_name,"GuiObject")&&(key=="InputBegan"||key=="InputChanged"||key=="InputEnded"||key=="MouseEnter"||key=="MouseLeave"||key=="MouseWheelForward"||key=="MouseWheelBackward"))
             ||(n.class_name=="TextBox"&&(key=="Focused"||key=="FocusLost"))) {push_signal(L,signal_for(w,n,key));return 1;}
     if(n.class_name=="BindableEvent" && key=="Event") {push_signal(L,signal_for(w,n,"Event"));return 1;}
     if(n.class_name=="BindableEvent" && key=="Fire") {lua_pushcfunction(L,fire_bindable,"Fire");return 1;}
@@ -947,7 +1303,7 @@ int instance_index(lua_State* L) {
     if(n.class_name=="RemoteFunction"&&key=="OnClientInvoke"){luaL_error(L,"OnClientInvoke is a write-only callback");return 0;}
     if(n.class_name=="TextChannel" && key=="SendAsync") {lua_pushcclosurek(L,send_chat,"SendAsync",0,send_chat_continue);return 1;}
     if(n.class_name=="TextChatService" && key=="SendUniverseChatMessageAsync") {lua_pushcclosurek(L,send_universe_chat,"SendUniverseChatMessageAsync",0,send_universe_chat_continue);return 1;}
-    if(key=="Changed")for(const char* property:{"AbsoluteSize","AbsolutePosition","AbsoluteRotation"})watch_display_property(w,n,property);
+    if(key=="Changed")for(const char* property:{"AbsoluteSize","AbsolutePosition","AbsoluteRotation","AbsoluteContentSize","AbsoluteCellSize","AbsoluteCellCount","AbsoluteCanvasSize","AbsoluteWindowSize","CanvasPosition"})watch_display_property(w,n,property);
     if(key=="Changed")for(const char* property:{"WorldCFrame","WorldPosition","WorldOrientation","WorldRotation","WorldAxis","WorldSecondaryAxis","TransformedCFrame","TransformedWorldCFrame"})watch_attachment_property(w,n,property);
     if(key=="Changed")watch_joint_property(w,n,"Active");
     if(key=="Changed")watch_assembly_root(w,n,"AssemblyRootPart");
@@ -973,6 +1329,9 @@ int instance_index(lua_State* L) {
     // The replication reader retains PhysicalProperties as a 5/6-scalar
     // array. Expose the typed source value without altering received data.
     if(const Json* descriptor=property_descriptor(n,key)) {
+        if(descriptor->contains("enum_type")&&value->is_number_integer()) {
+            push_json(L,w,Json{{"$enum",{{"type",descriptor->at("enum_type")},{"value",*value}}}});return 1;
+        }
         if(descriptor->value("type","")=="PhysicalProperties"&&value->is_array()) {
             try {
                 Json fields=*value;
@@ -997,6 +1356,7 @@ Json convert_lua_value(lua_State* L,World& w,int i,int depth=0,std::unordered_se
     case LUA_TSTRING:{size_t n;const char*s=lua_tolstring(L,i,&n);if(n>*budget)throw std::runtime_error("local value exceeds JSON size limit");*budget-=n;if(valid_utf8(s,n))return std::string(s,n);return Json{{"$bytes_hex",bytes_hex(s,n)}};}
     case LUA_TVECTOR:return vector_to_json(L,i);
     case LUA_TUSERDATA:
+        {Json raycast;if(capture_raycast_result(L,w,i,raycast))return raycast;}
         {Json geometry;if(capture_ussi_export_enum(L,i,geometry)||capture_ussi_security_capabilities(L,i,geometry)||capture_geometry_enum(L,i,geometry))return geometry;}
         {Json authored;if(capture_authored_value(L,i,authored))return authored;}
         if(has_meta(L,i,kPriorityMeta)){int value=*static_cast<int*>(lua_touserdata(L,i));return Json{{"$enum",Json{{"type","AnimationPriority"},{"name",kPriorityNames[priority_index(value)]},{"value",value}}}};}
@@ -1012,6 +1372,7 @@ Json convert_lua_value(lua_State* L,World& w,int i,int depth=0,std::unordered_se
     default:throw std::runtime_error("unsupported local property value");
     }
 }
+#include "property_defaults.inc"
 void check_mutation_budget(World& w, const std::vector<Json>& entries) {
     size_t bytes=0;
     for(const auto& entry:entries)bytes+=entry.dump().size();
@@ -1021,22 +1382,35 @@ void check_mutation_budget(World& w, const std::vector<Json>& entries) {
 void append_mutations(World& w, std::vector<Json> entries) {
     for(auto& entry:entries){w.mutation_bytes+=entry.dump().size();w.mutations.push_back(std::move(entry));}
 }
+#include "text_fonts.inc"
+#include "text_layout.inc"
+#include "rich_text.inc"
+#include "text_service.inc"
 #include "humanoid_health.inc"
 #include "humanoid_jump.inc"
 #include "part_transforms.inc"
 #include "engine_pose.inc"
+#include "engine_owned_parts.inc"
 #include "attachment_transforms.inc"
 #include "joint_graph.inc"
 #include "joint_poses.inc"
+#include "world_bulk_move.inc"
+#include "model_movement.inc"
+#include "model_scaling.inc"
 #include "part_mass_properties.inc"
 #include "part_motion_queries.inc"
+#include "closest_point_on_surface.inc"
+#include "world_spherecast.inc"
+#include "convex_cast.inc"
+#include "world_blockcast.inc"
 Json node_record(const Node& n) {
     return Json{{"id",n.id},{"class_name",n.class_name},{"name",n.name},
         {"parent",n.parent.empty()?Json(nullptr):Json(n.parent)},
         {"properties",n.properties},{"origins",n.origins},
         {"attributes",n.attributes},{"attributes_known",n.attributes_known},{"destroyed",n.destroyed},
         {"collection_tags",n.collection_tags},{"collection_tags_known",n.collection_tags_known},
-        {"server_owned",n.server_owned},{"property_revisions",n.revisions}};
+        {"server_owned",n.server_owned},{"constructor_defaults_known",n.constructor_defaults_known},
+        {"property_revisions",n.revisions}};
 }
 Node* ensure_client_service(World& w,const std::string& service) {
     // Client-local services do not require a server-replicated service object.
@@ -1095,6 +1469,7 @@ int clone_instance(lua_State* L) {
         std::vector<Node> copies;std::vector<Json> mutations;
         for(const auto& id:selected) {
             const Node& original=w.nodes.at(id);Node copy=original;
+            copy.image_load_token.clear();copy.image_loaded=false;
             if(copy.class_name=="LocalScript"||copy.class_name=="ModuleScript"||copy.class_name=="Script")copy.script_origin=id;
             copy.id=ids.at(id);copy.name=instance_name(w,original);copy.destroyed=false;copy.server_owned=false;
             auto parent=parent_id(w,original);copy.parent=id==h->node->id?"":ids.at(parent);
@@ -1113,7 +1488,19 @@ int clone_instance(lua_State* L) {
         }
         if(cloning_client_template)mutations.push_back(Json{{"kind","template_clone"},{"id",ids.at(h->node->id)},{"nodes",selected.size()}});
         check_mutation_budget(w,mutations);
-        for(auto& copy:copies){auto id=copy.id;w.nodes.emplace(id,std::move(copy));w.order.push_back(id);}
+        clone_model_scale_caches(w,ids);
+        // Clone traversal uses global creation order. Preserve the original
+        // siblings' parent-insertion order even after they were reparented.
+        std::vector<std::pair<uint64_t,std::string>> gui_copies;
+        for(const auto& id:selected)if(id!=h->node->id&&class_is_a(w,w.nodes.at(id).class_name,"GuiObject")) {
+            auto order=w.gui_parent_order.find(id);
+            gui_copies.emplace_back(order==w.gui_parent_order.end()?0:order->second,ids.at(id));
+        }
+        std::stable_sort(gui_copies.begin(),gui_copies.end(),[](const auto& a,const auto& b){return a.first<b.first;});
+        for(const auto& entry:gui_copies)w.gui_parent_order[entry.second]=w.next_gui_parent_order++;
+        for(auto& copy:copies){auto id=copy.id;
+            if(copy.class_name=="ScrollingFrame")w.active_scroll_layouts.insert(id);
+            w.nodes.emplace(id,std::move(copy));w.order.push_back(id);}
         w.next_local_id=next;append_mutations(w,std::move(mutations));
         push_node(L,w,find_node(w,ids.at(h->node->id)));return 1;
     }catch(const std::exception& e){luaL_error(L,"Clone failed: %s",e.what());return 0;}
@@ -1143,6 +1530,7 @@ void destroy_roots(World& w,const std::vector<std::string>& roots) {
         parent_events(w,node,parent_id(w,node),"");
         node.destroyed=true;node.parent.clear();node.origins["Parent"]="local";
         w.pivot_caches.erase(id);
+        w.model_scale_caches.erase(id);
         w.pending_motor_transforms.erase(id);w.motor_applied_transforms.erase(id);
         w.local_properties[id]["Parent"]=nullptr;
         for(auto& connection:w.connections)if(connection->signal->node==&node) {connection->connected=false;connection->auto_disconnected=true;}
@@ -1298,7 +1686,7 @@ int set_attribute(lua_State* L) {
         int type=lua_type(L,3);
         if(type!=LUA_TNIL && type!=LUA_TBOOLEAN && type!=LUA_TNUMBER && type!=LUA_TSTRING && type!=LUA_TVECTOR
             && !(type==LUA_TUSERDATA&&(has_meta(L,3,kCFrameMeta)||has_meta(L,3,kInstanceMeta)||has_meta(L,3,kInstanceHandleMeta)||
-                (is_authored_value(L,3)&&std::string(luaL_typename(L,3))!="DateTime"&&std::string(luaL_typename(L,3))!="Ray"&&std::string(luaL_typename(L,3))!="TweenInfo"&&std::string(luaL_typename(L,3))!="Region3"&&std::string(luaL_typename(L,3))!="PhysicalProperties"&&std::string(luaL_typename(L,3)).find("Keypoint")==std::string::npos&&std::string(luaL_typename(L,3)).find("int16")==std::string::npos))))throw std::runtime_error("unsupported attribute value type");
+                (is_authored_value(L,3)&&std::string(luaL_typename(L,3))!="Axes"&&std::string(luaL_typename(L,3))!="Faces"&&std::string(luaL_typename(L,3))!="DateTime"&&std::string(luaL_typename(L,3))!="Ray"&&std::string(luaL_typename(L,3))!="TweenInfo"&&std::string(luaL_typename(L,3))!="Region3"&&std::string(luaL_typename(L,3))!="PhysicalProperties"&&std::string(luaL_typename(L,3)).find("Keypoint")==std::string::npos&&std::string(luaL_typename(L,3)).find("int16")==std::string::npos))))throw std::runtime_error("unsupported attribute value type");
         if(!h->node->attributes.contains(name)&&h->node->attributes.size()>=1024)throw std::runtime_error("local attribute count limit exceeded");
         Json value=convert_lua_value(L,w,3);
         if(type==LUA_TUSERDATA&&has_meta(L,3,kInstanceMeta))value=Json{{"$instance_handle",value.at("$ref")}};
@@ -1312,7 +1700,7 @@ int set_attribute(lua_State* L) {
     return 0;
 }
 int property_changed_signal(lua_State* L) {
-    auto* h=checked_handle(L,1);std::string name=canonical_instance_member(luaL_checkstring(L,2));
+    auto* h=checked_handle(L,1);std::string name=canonical_instance_member(luaL_checkstring(L,2),h->node);
     if(h->node->class_name=="BodyForce"&&name=="force")name="Force";
     if(h->node->class_name=="BodyPosition") {
         if(name=="position")name="Position";
@@ -1353,6 +1741,7 @@ int connect_signal(lua_State* L) {
     lua_pushthread(L);connection->creator_ref=lua_ref(L,-1);lua_pop(L,1);
     connection->callback=lua_ref(L,2);connection->once=lua_toboolean(L,lua_upvalueindex(1));
     if(w.scheduler)connection->owner=w.scheduler->owner(L);
+    connection->identity=SourceScheduler::identity(L);
     auto* pointer=connection.get();w.connections.push_back(std::move(connection));
     auto* handle=static_cast<ConnectionHandle*>(lua_newuserdatatagged(L,sizeof(ConnectionHandle),0));handle->connection=pointer;
     luaL_getmetatable(L,kConnectionMeta);lua_setmetatable(L,-2);return 1;
@@ -1471,7 +1860,9 @@ void copy_bindable_value(lua_State* L,int index,std::unordered_set<const void*>&
     } else if(type==LUA_TBUFFER) {
         size_t size=0;const void* input=lua_tobuffer(L,index,&size);void* output=lua_newbuffer(L,size);
         if(size)std::memcpy(output,input,size);
-    } else if(type==LUA_TTHREAD || (type==LUA_TUSERDATA&&!has_meta(L,index,kInstanceMeta)&&!has_meta(L,index,kCFrameMeta)&&!has_meta(L,index,kInstanceHandleMeta)&&!has_meta(L,index,kChatStatusMeta)&&!has_meta(L,index,kPriorityMeta)&&!has_meta(L,index,kGeometryItemMeta)&&!has_meta(L,index,kUsiExportItemMeta)&&!has_meta(L,index,kUsiSecurityCapabilitiesMeta)&&!has_meta(L,index,kHumanoidStateItemMeta)&&!is_authored_value(L,index)))lua_pushnil(L);
+    } else if(type==LUA_TUSERDATA&&is_authored_value(L,index)&&std::strcmp(luaL_typename(L,index),"Font")==0) {
+        Json value;capture_authored_value(L,index,value);push_authored_value(L,value);
+    } else if(type==LUA_TTHREAD || (type==LUA_TUSERDATA&&!has_meta(L,index,kInstanceMeta)&&!has_meta(L,index,kCFrameMeta)&&!has_meta(L,index,kInstanceHandleMeta)&&!has_meta(L,index,kChatStatusMeta)&&!has_meta(L,index,kPriorityMeta)&&!has_meta(L,index,kGeometryItemMeta)&&!has_meta(L,index,kUsiExportItemMeta)&&!has_meta(L,index,kUsiSecurityCapabilitiesMeta)&&!has_meta(L,index,kHumanoidStateItemMeta)&&!has_meta(L,index,kRaycastResultMeta)&&!has_meta(L,index,kRaycastParamsMeta)&&!has_meta(L,index,kOverlapParamsMeta)&&!is_authored_value(L,index)))lua_pushnil(L);
     else lua_pushvalue(L,index);
 }
 #include "bindable_functions.inc"
@@ -1540,7 +1931,11 @@ int instance_handle_tostring(lua_State* L) {
     std::string text=node?instance_name(*h->world,*node):"nil";lua_pushlstring(L,text.data(),text.size());return 1;
 }
 int instance_newindex(lua_State* L){
-    Handle*h=checked_handle(L,1);World&w=*h->world;Node&n=*h->node;std::string key=canonical_instance_member(luaL_checkstring(L,2));Json value;
+    Handle*h=checked_handle(L,1);World&w=*h->world;Node&n=*h->node;std::string key=canonical_instance_member(luaL_checkstring(L,2),&n);Json value;
+    if(n.class_name=="Player") {
+        if(key=="GameplayPaused"&&!SourceScheduler::has_capability(L,"RobloxScript"))return luaL_error(L,"GameplayPaused: lacking capability RobloxScript"),0;
+        if((key=="Name"||key=="UserId")&&!SourceScheduler::has_capability(L,"WritePlayer"))return luaL_error(L,"Player identity: lacking capability WritePlayer"),0;
+    }
     if(n.class_name=="BodyForce"&&key=="force")key="Force";
     if(n.class_name=="BodyPosition") {
         if(key=="position")key="Position";
@@ -1550,7 +1945,11 @@ int instance_newindex(lua_State* L){
         if(key=="velocity")key="Velocity";
         if(key=="maxForce")key="MaxForce";
     }
-    enforce_scriptability(L,w,n,key);
+    if(lua_toboolean(L,lua_upvalueindex(1)))key=hidden_property_name(n,key);else enforce_scriptability(L,w,n,key);
+    if(pivot_model(w,n)&&key=="Scale") {luaL_error(L,"Scale is not scriptable; use ScaleTo");return 0;}
+    if((collision_world_root(n)||n.class_name=="PhysicsService")&&(key=="CollisionGroupData"||key=="CollisionGroups")) {
+        luaL_error(L,"collision group definitions can only be changed by the server");return 0;
+    }
     if(n.class_name=="Tween"&&(key=="PlaybackState"||key=="Instance"||key=="TweenInfo")) {
         luaL_error(L,"Tween property is read-only");return 0;
     }
@@ -1559,10 +1958,19 @@ int instance_newindex(lua_State* L){
         if(length>128*1024||n.destroyed){luaL_error(L,"invalid script source write");return 0;}
         n.script_code=Json{{"source",std::string(source,length)},{"authored_override",true}};property_events(w,n,"Source");return 0;
     }
-    if(display_property(w,n,key)){luaL_error(L,"display property is read-only");return 0;}
+    if(display_readonly_property(w,n,key)){luaL_error(L,"display property is read-only");return 0;}
+    if(mouse_projection_property(w,n,key)){luaL_error(L,"Mouse property is read-only");return 0;}
     if(n.class_name=="UserInputService"&&input_capability_key(key)){luaL_error(L,"input capability is read-only");return 0;}
     if(key=="ClassName" || key=="JobId" || (n.class_name=="TextChatMessage" && key!="Name" && key!="Parent")) {luaL_error(L,"property is read-only");return 0;}
     try{
+        validate_text_assignment(L,w,n,key);
+        if(n.class_name=="SpecialMesh"&&key=="MeshType") {
+            Json item;
+            if(!capture_ussi_export_enum(L,3,item)||item["$enum"]["type"]!="MeshType")
+                throw std::runtime_error("MeshType requires Enum.MeshType");
+        }
+        if(textbox_selection_write(L,w,n,key))return 0;
+        if(text_font_write(L,w,n,key))return 0;
         if(n.class_name=="VectorForce"&&key=="RelativeTo")checked_geometry_value(L,3,kActuatorRelativeTo);
         if(n.class_name=="LinearVelocity") {
             int kind=linear_velocity_enum_kind(key);if(kind>=0)checked_geometry_value(L,3,kind);
@@ -1570,12 +1978,14 @@ int instance_newindex(lua_State* L){
         if(n.class_name=="BindableFunction"&&key=="OnInvoke"){set_bindable_callback(L,w,n);return 0;}
         if(n.class_name=="RemoteFunction"&&key=="OnClientInvoke"){set_bindable_callback(L,w,n);return 0;}
         if(input_write(L,w,n,key))return 0;
+        if(collision_group_write(L,w,n,key))return 0;
         if(humanoid_state_write(L,w,n,key))return 0;
         if(humanoid_health_write(L,w,n,key))return 0;
         if(humanoid_jump_write(L,w,n,key))return 0;
         if(joint_pose_write(L,w,n,key))return 0;
         if(joint_part_write(L,w,n,key))return 0;
         validate_joint_assignment(L,w,n,key);
+        validate_no_collision_assignment(L,w,n,key);
         if(part_transform_write(L,w,n,key))return 0;
         if(part_mass_enum_write(L,w,n,key))return 0;
         if(attachment_write(L,w,n,key))return 0;
@@ -1615,9 +2025,13 @@ int instance_newindex(lua_State* L){
                 if(type=="boolean" && lua_type(L,3)!=LUA_TBOOLEAN)throw std::runtime_error("property must be a boolean");
                 if(type=="string" && lua_type(L,3)!=LUA_TSTRING)throw std::runtime_error("property must be a string");
                 if(type=="number" && lua_type(L,3)!=LUA_TNUMBER)throw std::runtime_error("property must be a number");
+                if(type=="Enum"&&descriptor->contains("enum_type")) {
+                    Json item;
+                    if(!capture_ussi_export_enum(L,3,item)||item["$enum"]["type"]!=descriptor->at("enum_type"))throw std::runtime_error("property has incorrect Enum type");
+                }
                 if(type=="Vector3" && !lua_isvector(L,3))throw std::runtime_error("property must be a Vector3");
                 if(type=="CFrame" && !has_meta(L,3,kCFrameMeta))throw std::runtime_error("property must be a CFrame");
-                if((type=="Color3"||type=="Vector2"||type=="UDim"||type=="UDim2"||type=="NumberRange"||type=="Rect"||type=="BrickColor"||type=="NumberSequence"||type=="ColorSequence")&&
+                if((type=="Font"||type=="Axes"||type=="Faces"||type=="Color3"||type=="Vector2"||type=="UDim"||type=="UDim2"||type=="NumberRange"||type=="Rect"||type=="BrickColor"||type=="NumberSequence"||type=="ColorSequence")&&
                     (!is_authored_value(L,3)||type!=luaL_typename(L,3)))throw std::runtime_error("property has incorrect datatype");
                 if(type=="PhysicalProperties"&&!lua_isnil(L,3)&&(!is_authored_value(L,3)||std::string(luaL_typename(L,3))!="PhysicalProperties"))throw std::runtime_error("property must be PhysicalProperties or nil");
                 if(type=="Instance" && !lua_isnil(L,3) && !has_meta(L,3,kInstanceMeta))throw std::runtime_error("property must be an Instance or nil");
@@ -1628,6 +2042,10 @@ int instance_newindex(lua_State* L){
                 if(key=="CFrame"&&!has_meta(L,3,kCFrameMeta))throw std::runtime_error("CFrame must be a CFrame");
             }
             value=convert_lua_value(L,w,3);
+            if(n.class_name=="ScrollingFrame"&&key=="CanvasPosition") {
+                GuiLayoutPass pass{w};auto metrics=pass.scroll(n,pass.box(n),&value);
+                value=display_vector(metrics.x,metrics.y);
+            }
             if(humanoid_jump_setting(n,key)&&key!="UseJumpPower") {
                 if(!value.is_number()||!std::isfinite(value.get<double>()))throw std::runtime_error("jump setting must be finite");
                 value=std::max(0.0,value.get<double>());
@@ -1640,6 +2058,8 @@ int instance_newindex(lua_State* L){
         }
         auto old_parent=parent_id(w,n);
         Json old_value=key=="Name"?Json(instance_name(w,n)):property_value(w,n,key)?*property_value(w,n,key):Json(nullptr);
+        const bool changes_content=text_layout_node(n)&&(key=="Text"||key=="RichText");
+        const auto old_content=changes_content?text_content(w,n):std::nullopt;
         if(key=="WorldPivot"&&pivot_model(w,n)) {
             try{old_value=pivot_encode(model_world_pivot(w,n));}catch(const std::exception&){} // Old geometry may be unavailable.
         }
@@ -1689,7 +2109,9 @@ int instance_newindex(lua_State* L){
         for(auto&[derived_key,derived_value]:derived)w.local_properties[n.id][derived_key]=derived_value;
         for(auto&entry:entries){w.mutation_bytes+=entry.dump().size();w.mutations.push_back(std::move(entry));}
         if(key=="Parent")parent_events(w,n,old_parent,parent_id(w,n));
-        else if(old_value!=value)property_events(w,n,key);
+        else if(old_value!=value&&!(n.class_name=="ScrollingFrame"&&key=="CanvasPosition"))property_events(w,n,key);
+        if(changes_content&&old_content!=text_content(w,n))property_events(w,n,"ContentText");
+        if(key=="Text"&&n.class_name=="TextBox"&&old_value!=value)authored_textbox_text_changed(w,n);
         for(const auto& [member,previous]:motion_members)if(previous!=value)property_events(w,*member,key);
         for(auto&[derived_key,derived_value]:derived)if(derived_key!="archivable"&&derived_key!="Archivable")property_events(w,n,derived_key);
         if(key=="Parent")refresh_current_camera(w);
@@ -1703,8 +2125,18 @@ int instance_new(lua_State*L){
     if(lua_gettop(L)<1||lua_gettop(L)>2){luaL_error(L,"Instance.new expects a class name and optional Parent");return 0;}
     size_t class_len=0;const char*raw=luaL_checklstring(L,1,&class_len);std::string cls(raw,class_len);
     const auto& classes=constructors();
-    auto constructor=classes.find(cls);
-    if(constructor==classes.end() || !constructor->value("creatable",false)){luaL_error(L,"class '%s' is not a supported creatable class",cls.c_str());return 0;}
+    auto found=classes.find(cls);
+    const Json* constructor=found==classes.end()?nullptr:&*found;
+    if(cls=="Player") {
+        if(!SourceScheduler::has_capability(L,"WritePlayer"))return luaL_error(L,"Player construction: lacking capability WritePlayer"),0;
+        // A local Player has no server identity or membership until explicitly
+        // parented; creating it never changes the authenticated LocalPlayer.
+        static const Json player{{"name","Player"},{"creatable",true},{"properties",{
+            {"Archivable",{{"value",true}}},{"UserId",{{"value",0}}},
+            {"Character",{{"value",nullptr}}},{"GameplayPaused",{{"value",false}}}}}};
+        constructor=&player;
+    }
+    if(!constructor || !constructor->value("creatable",false)){luaL_error(L,"class '%s' is not a supported creatable class",cls.c_str());return 0;}
     Handle*parent=nullptr;
     if(lua_gettop(L)==2&&!lua_isnil(L,2)){parent=checked_handle(L,2);if(parent->world!=w){luaL_error(L,"Parent belongs to a different world snapshot");return 0;}}
     if(w->nodes.size()>=kMaxNodes+1000){luaL_error(L,"local instance limit exceeded");return 0;}
@@ -1738,7 +2170,8 @@ int cframe_tostring(lua_State*L){auto*c=static_cast<CFrameValue*>(luaL_checkudat
 int cframe_equal(lua_State*L){auto*a=static_cast<CFrameValue*>(lua_touserdata(L,1));auto*b=static_cast<CFrameValue*>(lua_touserdata(L,2));bool aa=has_meta(L,1,kCFrameMeta),bb=has_meta(L,2,kCFrameMeta);bool eq=aa&&bb&&a&&b&&a->rotation_known==b->rotation_known&&a->p==b->p&&a->r==b->r;lua_pushboolean(L,eq);return 1;}
 int print_capture(lua_State*L){World*w=static_cast<World*>(lua_touserdata(L,lua_upvalueindex(1)));bool warn=lua_toboolean(L,lua_upvalueindex(2));size_t room=w->output.size()<kMaxPrinted?kMaxPrinted-w->output.size():0;auto append=[&](const char*s,size_t n){size_t take=std::min(n,room);if(take)w->output.append(s,take);room-=take;if(take<n)w->output_truncated=true;};if(warn)append("WARN: ",6);for(int i=1;i<=lua_gettop(L)&&room>0;i++){if(i>1)append("\t",1);size_t n=0;const char*s=luaL_tolstring(L,i,&n);append(s,n);lua_pop(L,1);}if(room>0)append("\n",1);else w->output_truncated=true;return 0;}
 #include "instance_compat.inc"
-int property_origin(lua_State*L){Handle*h=checked_handle(L,1);std::string k=luaL_checkstring(L,2);std::string s=origin(*h->world,*h->node,k);lua_pushlstring(L,s.data(),s.size());return 1;}
+#include "instance_extended_compat.inc"
+int property_origin(lua_State*L){Handle*h=checked_handle(L,1);std::string k=canonical_instance_member(luaL_checkstring(L,2),h->node);std::string s=origin(*h->world,*h->node,k);lua_pushlstring(L,s.data(),s.size());return 1;}
 int client_index(lua_State*L){World*w=static_cast<World*>(lua_touserdata(L,lua_upvalueindex(1)));const char*k=luaL_checkstring(L,2);if(std::strcmp(k,"snapshot")==0)lua_pushboolean(L,!w->persistent);else if(std::strcmp(k,"persistent")==0)lua_pushboolean(L,w->persistent);else if(std::strcmp(k,"sequence")==0){if(w->sequence>0)lua_pushnumber(L,w->sequence);else lua_pushnil(L);}else if(std::strcmp(k,"propertyOrigin")==0)lua_pushcfunction(L,property_origin,"propertyOrigin");else lua_pushnil(L);return 1;}
 
 } // namespace
@@ -1780,6 +2213,9 @@ bool push_tween_info_json(lua_State* L,const Json& value) {
 Json apply_engine_poses(World& world,const Json& poses) {
     return apply_engine_poses_impl(world,poses);
 }
+Json apply_engine_owned_parts(World& world,const Json& updates) {
+    return apply_engine_owned_parts_impl(world,updates);
+}
 
 namespace {
 void emit_humanoid_state_changed(lua_State* L, World& w, Node& humanoid,
@@ -1818,6 +2254,30 @@ int received_humanoid_state(World& w, Node& humanoid) {
     }
     return -1;
 }
+}
+
+bool capture_geometry_enum_item(lua_State* L,int index,Json& value) {
+    return capture_geometry_enum(L,index,value);
+}
+bool push_geometry_enum_item(lua_State* L,const char* type,int value) {
+    for(int kind=0;kind<int(std::size(kGeometryEnums));++kind)if(std::strcmp(type,kGeometryEnums[kind].name)==0)
+        for(int i=0;i<kGeometryEnums[kind].count;++i)if(geometry_numeric(kind,i)==value){push_geometry_item(L,kind,i);return true;}
+    return push_ussi_export_enum_json(L,Json{{"$enum",{{"type",type},{"value",value}}}});
+}
+bool read_geometry_enum_item(lua_State* L,int index,const char* type,int& value) {
+    if(has_meta(L,index,kUsiExportItemMeta)) {
+        auto* item=static_cast<UsiExportItemRef*>(lua_touserdata(L,index));
+        const auto& enumeration=kUsiExportEnums[item->kind];
+        if(std::strcmp(enumeration.name,type)!=0)return false;
+        value=enumeration.items[item->item].value;return true;
+    }
+    if(!has_meta(L,index,kGeometryItemMeta))return false;
+    auto* item=static_cast<GeometryEnumItem*>(lua_touserdata(L,index));
+    if(std::strcmp(kGeometryEnums[item->kind].name,type)!=0)return false;
+    value=geometry_numeric(item->kind,item->value);return true;
+}
+void install_geometry_value_enums(lua_State* L) {
+    lua_newtable(L);install_geometry_enums(L);install_enum_root(L);lua_setreadonly(L,-1,true);lua_setglobal(L,"Enum");
 }
 
 void update_physics_feedback(lua_State* L, World& w, const Json& feedback) {
@@ -1983,12 +2443,21 @@ Node parse_node_record(const Json& record) {
     if(record.contains("origins")){if(!record["origins"].is_object())throw std::runtime_error("node origins must be an object");n.origins=record["origins"];}
     if(record.contains("attributes")){if(!record["attributes"].is_object())throw std::runtime_error("node attributes must be an object");n.attributes=record["attributes"];}
     if(record.contains("property_revisions")){if(!record["property_revisions"].is_object())throw std::runtime_error("property revisions must be an object");n.revisions=record["property_revisions"];}
+    if(text_layout_node(n)&&n.properties.contains("TextWrap")&&!n.properties.contains("TextWrapped")) {
+        n.properties["TextWrapped"]=n.properties["TextWrap"];n.origins["TextWrapped"]="derived_received";
+        if(n.revisions.contains("TextWrap"))n.revisions["TextWrapped"]=n.revisions["TextWrap"];
+    }
     if(!n.properties.contains("Color"))if(const Json* color=received_color_alias(n,n.properties)) {
         n.properties["Color"]=*color;n.origins["Color"]="derived_received";
         if(n.revisions.contains("Color3uint8"))n.revisions["Color"]=n.revisions["Color3uint8"];
     }
+    if(!n.properties.contains("CollisionGroup"))if(Json group=received_collision_group_alias(n,n.properties);!group.is_null()) {
+        n.properties["CollisionGroup"]=std::move(group);n.origins["CollisionGroup"]="derived_received";
+        if(n.revisions.contains("CollisionGroupReplicate"))n.revisions["CollisionGroup"]=n.revisions["CollisionGroupReplicate"];
+    }
     n.attributes_known=record.value("attributes_known",record.contains("attributes"));
     n.destroyed=record.value("destroyed",false);n.server_owned=record.value("server_owned",true);
+    n.constructor_defaults_known=record.value("constructor_defaults_known",false);
     collection_read_state(n,record);
     if(n.destroyed&&!n.parent.empty())throw std::runtime_error("destroyed instance must have nil Parent");
     return n;
@@ -2013,6 +2482,18 @@ World parse_snapshot(const std::string& text) {
     if(root.contains("defaults"))w.defaults=root["defaults"];
     if(root.contains("default_origins"))w.default_origins=root["default_origins"];
     if(root.contains("class_events"))w.class_events=root["class_events"];
+    if(root.contains("class_event_signatures"))w.class_event_signatures=root["class_event_signatures"];
+    if(!w.class_event_signatures.is_object())throw std::runtime_error("class event signatures must be an object");
+    for(const auto& cls:w.class_event_signatures) {
+        if(!cls.is_object())throw std::runtime_error("class event signatures must contain objects");
+        for(const auto& types:cls) {
+            if(!types.is_array()||types.size()>256)throw std::runtime_error("invalid event argument signature");
+            for(const auto& type:types)if(!type.is_number_integer()||type.get<int>()<0||type.get<int>()>255)
+                throw std::runtime_error("invalid event argument type");
+        }
+    }
+    if(root.contains("class_property_types"))w.class_property_types=root["class_property_types"];
+    if(!w.class_property_types.is_object())throw std::runtime_error("class property types must be an object");
     if(!w.class_events.is_object())throw std::runtime_error("class events must be an object");
     for(const auto& list:w.class_events)if(!list.is_array())throw std::runtime_error("class events must contain arrays");
     if(!w.class_parents.is_object()||!w.defaults.is_object()||!w.default_origins.is_object())throw std::runtime_error("invalid class metadata/defaults");
@@ -2022,11 +2503,16 @@ World parse_snapshot(const std::string& text) {
     }
     for(const Json& record:root["nodes"]){
         Node n=parse_node_record(record);
+        if(n.class_name=="ScrollingFrame")w.active_scroll_layouts.insert(n.id);
+        if(class_is_a(w,n.class_name,"GuiObject")&&!n.parent.empty())w.gui_parent_order[n.id]=w.next_gui_parent_order++;
         if(!w.nodes.emplace(n.id,std::move(n)).second)throw std::runtime_error("duplicate node id");w.order.push_back(record["id"].get<std::string>());
     }
     for(const auto&[id,node]:w.nodes)if(node.class_name=="DataModel"){if(!w.game_id.empty())throw std::runtime_error("snapshot has multiple DataModel nodes");w.game_id=id;}
     if(w.game_id.empty()){Node game;game.id="__world_snapshot_datamodel__";game.class_name="DataModel";game.name="Game";w.game_id=game.id;w.nodes.emplace(game.id,std::move(game));}
-    Node settings;settings.id=kSettingsId;settings.class_name="UserSettings";settings.name="GlobalBasicSettings";w.nodes.emplace(settings.id,std::move(settings));
+    Node settings;settings.id=kSettingsId;settings.class_name="UserSettings";settings.name="GlobalBasicSettings";settings.server_owned=false;settings.attributes_known=true;settings.collection_tags_known=true;w.nodes.emplace(settings.id,std::move(settings));w.order.push_back(kSettingsId);
+    Node user_settings;user_settings.id=kUserGameSettingsId;user_settings.class_name="UserGameSettings";user_settings.name="GameSettings";user_settings.parent=kSettingsId;user_settings.server_owned=false;user_settings.attributes_known=true;user_settings.collection_tags_known=true;user_settings.properties=client_setting_defaults();
+    for(auto it=user_settings.properties.begin();it!=user_settings.properties.end();++it)user_settings.origins[it.key()]="local_settings";
+    w.nodes.emplace(user_settings.id,std::move(user_settings));w.order.push_back(kUserGameSettingsId);
     // Parent references to streamed-out instances remain unresolved; getters
     // produce nil while propertyOrigin returns `unresolved_reference`.
     for(auto it=root["services"].begin();it!=root["services"].end();++it){std::string id;if(it.value().is_string())id=it.value().get<std::string>();else if(it.value().is_object()&&it.value().contains("$ref")&&it.value()["$ref"].is_string())id=it.value()["$ref"].get<std::string>();else throw std::runtime_error("service values must be node ids or $ref records");if(!w.nodes.count(id)||id==w.game_id)throw std::runtime_error("service references unknown node");w.services.emplace(it.key(),id);Node& node=w.nodes.at(id);if(node.parent.empty()&&!node.destroyed)node.parent=w.game_id;}
@@ -2065,6 +2551,8 @@ void install(lua_State*L,World&w){
     luaL_newmetatable(L,kChatEnumMeta);lua_pushcfunction(L,chat_enum_index,"__index");lua_setfield(L,-2,"__index");lua_pushcfunction(L,chat_enum_string,"__tostring");lua_setfield(L,-2,"__tostring");lua_pushcfunction(L,chat_readonly,"__newindex");lua_setfield(L,-2,"__newindex");lua_pushliteral(L,"Enum");lua_setfield(L,-2,"__type");lua_pushliteral(L,"chat Enum");lua_setfield(L,-2,"__metatable");lua_pop(L,1);
     lua_newtable(L);lua_newuserdatatagged(L,1,0);luaL_getmetatable(L,kChatEnumMeta);lua_setmetatable(L,-2);lua_pushvalue(L,-1);lua_setfield(L,LUA_REGISTRYINDEX,"Headless.ChatStatusEnum");lua_setfield(L,-2,"TextChatMessageStatus");install_animation_enum(L);install_geometry_enums(L);install_humanoid_state_enum(L);install_ussi_export_enums(L,-1);install_enum_root(L);lua_setreadonly(L,-1,true);lua_setglobal(L,"Enum");
     install_tween_bindings(L);
+    install_world_raycast(L,w);
+    install_world_overlap(L,w);
     install_ussi_security_capabilities(L,LUA_GLOBALSINDEX);
     luaL_newmetatable(L,kSignalMeta);lua_pushcfunction(L,signal_index,"__index");lua_setfield(L,-2,"__index");lua_pushliteral(L,"RBXScriptSignal");lua_setfield(L,-2,"__type");lua_pushliteral(L,"headless signal");lua_setfield(L,-2,"__metatable");lua_pop(L,1);
     luaL_newmetatable(L,kConnectionMeta);lua_pushcfunction(L,connection_index,"__index");lua_setfield(L,-2,"__index");lua_pushliteral(L,"RBXScriptConnection");lua_setfield(L,-2,"__type");lua_pushliteral(L,"headless connection");lua_setfield(L,-2,"__metatable");lua_pop(L,1);
@@ -2088,6 +2576,15 @@ void install(lua_State*L,World&w){
     }
     lua_pushlightuserdata(L,&w);lua_pushcclosurek(L,print_capture,"print",1,nullptr);lua_setglobal(L,"print");
     lua_pushlightuserdata(L,&w);lua_pushboolean(L,1);lua_pushcclosurek(L,print_capture,"warn",2,nullptr);lua_setglobal(L,"warn");
+    lua_getglobal(L,"print");
+    lua_pushcclosure(L,[](lua_State* S)->int{
+        const char* prefix=luaL_optstring(S,1,"Current identity is");
+        lua_pushvalue(S,lua_upvalueindex(1));
+        lua_pushfstring(S,"%s %d",prefix,SourceScheduler::identity(S));
+        lua_call(S,1,0);return 0;
+    },"printidentity",1);lua_setglobal(L,"printidentity");
+    lua_pushlightuserdata(L,&w);lua_pushcclosure(L,global_stats,"stats",1);
+    lua_pushvalue(L,-1);lua_setglobal(L,"Stats");lua_setglobal(L,"stats");
     lua_pushlightuserdata(L,&w);lua_pushcclosurek(L,make_user_settings,"UserSettings",1,nullptr);lua_setglobal(L,"UserSettings");
     lua_createtable(L,0,0);
     lua_createtable(L,0,2);lua_pushlightuserdata(L,&w);lua_pushcclosurek(L,client_index,"client.__index",1,nullptr);lua_setfield(L,-2,"__index");lua_pushliteral(L,"world snapshot client");lua_setfield(L,-2,"__metatable");
@@ -2095,6 +2592,7 @@ void install(lua_State*L,World&w){
     lua_createtable(L,0,1);lua_pushlightuserdata(L,&w);lua_pushcclosurek(L,instance_new,"Instance.new",1,nullptr);lua_setfield(L,-2,"new");lua_setreadonly(L,-1,1);lua_setglobal(L,"Instance");
     lua_newtable(L);lua_pushlightuserdata(L,&w);lua_pushcclosurek(L,instance_handle_new,"InstanceHandle.new",1,nullptr);lua_setfield(L,-2,"new");lua_setreadonly(L,-1,true);lua_setglobal(L,"InstanceHandle");
     install_instance_compat(L,w);
+    install_instance_extended(L,w);
     assert(lua_gettop(L) == stack_base);
 }
 Json capture_value(lua_State* L,World& world,int index){return convert_lua_value(L,world,index);}
@@ -2107,6 +2605,7 @@ int clone_client_template(lua_State* L) {
     if(status!=LUA_OK){lua_error(L);return 0;}return 1;
 }
 void push_instance(lua_State* L,World& world,const std::string& id){auto* node=find_node(world,id);if(node)push_node(L,world,node);else lua_pushnil(L);}
+std::string instance_display_name(World& world,const std::string& id){return instance_name(world,world.nodes.at(id));}
 void push_player_scripts(lua_State* L,World& w) {
     auto* player=find_node(w,w.local_player);if(!player){lua_pushnil(L);return;}
     for(const auto& id:w.order){auto& node=w.nodes.at(id);if(!node.destroyed&&node.class_name=="PlayerScripts"&&parent_id(w,node)==player->id){push_node(L,w,&node);return;}}
@@ -2150,6 +2649,9 @@ void stop_script_tasks(lua_State* from,World& w,const std::string& owner) {
     for(auto it=w.chat_waiters.begin();it!=w.chat_waiters.end();) {
         if(owned(it->thread)){lua_unref(from,it->reference);it=w.chat_waiters.erase(it);}else ++it;
     }
+    for(auto it=w.text_service_waiters.begin();it!=w.text_service_waiters.end();) {
+        if(owned(it->thread)){lua_unref(from,it->reference);it=w.text_service_waiters.erase(it);}else ++it;
+    }
     w.scheduler->cancel_owner(owner);
     dispatch_remote_server_waiters(from,w);
 }
@@ -2179,7 +2681,7 @@ void dispatch_pending_events(lua_State* from,World& world) {
             auto& c=*event.connection;
             if(c.manually_disconnected||(!c.connected&&!c.auto_disconnected))continue;
             auto* connection=&c;
-            world.scheduler->callback(from,c.callback,push,[connection](){return !connection->manually_disconnected;},c.owner);
+            world.scheduler->callback(from,c.callback,push,[connection](){return !connection->manually_disconnected;},c.owner,c.identity);
             --capacity;
             if(c.once)c.connected=false;
         }
@@ -2198,6 +2700,7 @@ void progress_invocations(lua_State* from,World& world) {
 void dispatch_events(lua_State* from,World& world) {
     if(!world.scheduler)return;
     process_debris(world,std::chrono::steady_clock::now());
+    focused_textbox(world);
     flush_jump_requests(from,world);
     refresh_display_events(world);
     dispatch_bindable_functions(from,world);
@@ -2244,6 +2747,7 @@ void dispatch_events(lua_State* from,World& world) {
         if(service!=world.services.end())if(auto* node=find_node(world,service->second))
             emit(world,*node,"Heartbeat",Json::array({heartbeat_dt}));
     }
+    progress_text_service(from,world);
     for(auto it=world.chat_waiters.begin();it!=world.chat_waiters.end();) {
         bool finished=world.scheduler->completion(it->thread)!=LUA_YIELD;
         bool expired=std::chrono::steady_clock::now()>=it->deadline;
@@ -2273,6 +2777,9 @@ void dispatch_events(lua_State* from,World& world) {
 }
 void complete_remote_server(lua_State* from,World& w,const Json& responses) {
     complete_remote_server_impl(from,w,responses);
+}
+void complete_text_service(lua_State* from,World& w,const Json& responses) {
+    complete_text_service_impl(from,w,responses);
 }
 void complete_chat(lua_State* from,World& w,const Json& responses) {
     if(!w.chat_enabled||!w.persistent)throw std::runtime_error("chat bridge is disabled");
@@ -2365,23 +2872,31 @@ void update_snapshot(lua_State* from,World& w,const std::string& text) {
             Node* n=find_node(w,id);
             if(n&&!n->destroyed&&!w.locally_destroyed.count(id)) {
                 const auto& fields=action.at("fields");if(!fields.is_object())throw std::runtime_error("world fields must be an object");
+                const bool changes_content=text_layout_node(*n)&&(fields.contains("Text")||fields.contains("RichText"));
+                const auto old_content=changes_content?text_content(w,*n):std::nullopt;
                 const Json* received_color=fields.contains("Color")?nullptr:received_color_alias(*n,fields);
+                const Json received_group=fields.contains("CollisionGroup")?Json(nullptr):received_collision_group_alias(*n,fields);
                 if(fields.contains("Parent"))removal_children_ready=false;
                 const bool part_updated=apply_received_part_transform(w,*n,fields,sequence);
                 if(part_updated)received_part_poses.insert(id);
                 const bool attachment_updated=apply_received_attachment_transform(w,*n,fields,sequence);
+                const bool text_font_updated=apply_received_text_font(w,*n,fields,sequence);
                 if(joint_rigid(*n)&&n->class_name!="WeldConstraint"&&(fields.contains("C0")||fields.contains("C1")||(n->class_name=="Motor6D"&&fields.contains("Transform")))) {
                     remember_received_motor_transform(w,*n,fields);
                     received_joint_poses.insert(id);
                 }
                 for(auto it=fields.begin();it!=fields.end();++it) {
-                    const std::string name=it.key();const Json value=it.value();
+                    const std::string name=(text_layout_node(*n)&&it.key()=="TextWrap")?"TextWrapped":it.key();const Json value=it.value();
+                    if(text_layout_node(*n)&&it.key()=="TextWrap"&&fields.contains("TextWrapped"))continue;
+                    if(text_font_updated&&(name=="Font"||name=="FontFace"))continue;
                     if(attachment_updated&&attachment_local_key(name))continue;
                     if(attachment_node(w,*n)&&(attachment_world_key(name)||bone_computed_key(*n,name)))continue;
                     if(part_updated&&(part_transform_key(name)||(name=="ReplicationPV"&&value.is_object()&&value.contains("$cframe"))))continue;
                     if(name=="Source"||name=="Bytecode"||name=="ScriptBytecode")continue;
                     if(n->class_name=="UserInputService"&&input_capability_key(name))continue;
-                    if(display_property(w,*n,name))continue;
+                    if(display_readonly_property(w,*n,name))continue;
+                    if((name=="ContentText"&&text_layout_node(*n))||textbox_selection_key(*n,name)||
+                       (name=="IsLoaded"&&gui_image(*n)))continue;
                     if(n->class_name=="Camera"&&name=="ViewportSize")continue;
                     if(name=="Parent") {
                         std::string parent=value.is_null()?"":value.at("$ref").get<std::string>();
@@ -2396,8 +2911,9 @@ void update_snapshot(lua_State* from,World& w,const std::string& text) {
                         bool deferred_character=n->class_name=="Player"&&name=="Character"&&value.is_object()
                             &&value.contains("$ref")&&value["$ref"].is_string()&&!find_node(w,value["$ref"].get<std::string>());
                         if(old!=value&&!deferred_character) {
-                            property_events(w,*n,name);
+                            if(!(n->class_name=="ScrollingFrame"&&name=="CanvasPosition"))property_events(w,*n,name);
                             humanoid_received_health_change(w,*n,name,old,value);
+                            if(name=="Text"&&n->class_name=="TextBox")authored_textbox_text_changed(w,*n);
                         }
                         if(n->class_name=="Player"&&name=="Character"&&old!=value) {
                             w.pending_characters.erase(id);
@@ -2421,11 +2937,18 @@ void update_snapshot(lua_State* from,World& w,const std::string& text) {
                         }
                     }
                 }
+                if(changes_content&&old_content!=text_content(w,*n))property_events(w,*n,"ContentText");
                 if(received_color) {
                     const Json* previous=property_value(w,*n,"Color");bool changed=!previous||*previous!=*received_color;
                     clear_local_property(w,id,"Color");n->properties["Color"]=*received_color;
                     n->origins["Color"]="derived_received";n->revisions["Color"]=sequence;
                     if(changed)property_events(w,*n,"Color");
+                }
+                if(!received_group.is_null()) {
+                    const Json* previous=property_value(w,*n,"CollisionGroup");bool changed=!previous||*previous!=received_group;
+                    clear_local_property(w,id,"CollisionGroup");n->properties["CollisionGroup"]=received_group;
+                    n->origins["CollisionGroup"]="derived_received";n->revisions["CollisionGroup"]=sequence;
+                    if(changed)property_events(w,*n,"CollisionGroup");
                 }
                 if(action.contains("attribute_snapshot")) {
                     const auto& snapshot=action.at("attribute_snapshot");

@@ -6,6 +6,7 @@ revisions supersede older local edits, while unrelated receipts preserve them.
 import copy
 
 _FIELDS = {
+    'NoCollisionConstraint': frozenset(('Enabled','Part0','Part1','Parent','Name')),
     'BodyForce': frozenset(('Force','force','Parent','Name')),
     'BodyVelocity': frozenset(('Velocity','velocity','MaxForce','maxForce','P','Parent','Name')),
     'BodyPosition': frozenset(('Position','position','MaxForce','maxForce','P','D','Parent','Name')),
@@ -17,14 +18,21 @@ _FIELDS = {
                               'ApplyAtCenterOfMass','Parent','Name')),
     'Attachment': frozenset(('CFrame','Parent','Name')),
     'Folder': frozenset(('Parent','Name')),
-    'Model': frozenset(('Parent','Name')),
+    'Model': frozenset(('Parent','Name','Scale')),
+    'Animator': frozenset(('Parent','Name')),
+    'AnimationController': frozenset(('Parent','Name')),
+    'AnimationConstraint': frozenset(('Parent','Name','Enabled','Attachment0','Attachment1')),
 }
 for _joint in ('Motor6D','Motor','Weld','Snap','ManualWeld','WeldConstraint'):
     _FIELDS[_joint]=frozenset(('Parent','Name','Part0','Part1','Enabled'))
+    if _joint != 'WeldConstraint':
+        _FIELDS[_joint] |= frozenset(('C0','C1','Transform'))
 
 _MASS_PARTS=frozenset(('Part','MeshPart','UnionOperation','WedgePart','CornerWedgePart',
     'TrussPart','Seat','VehicleSeat','SpawnLocation','PartOperation','Platform','SkateboardPlatform','FlagStand'))
-_MASS_FIELDS=frozenset(('Size','Shape','Material','MaterialVariant','CustomPhysicalProperties','Massless','RootPriority','Anchored','CFrame','Position'))
+_MASS_FIELDS=frozenset(('Size','Shape','Material','MaterialVariant','CustomPhysicalProperties','Massless','RootPriority','Anchored','CFrame','Position','CollisionGroup','Parent','Name'))
+for _part in _MASS_PARTS:
+    _FIELDS[_part]=_MASS_FIELDS
 _POSE_FIELDS=('CFrame','Position')
 _POSE_RECEIPTS=('CFrame','Position','ReplicationPV','Orientation','Rotation')
 
@@ -190,12 +198,23 @@ class AuthoredForceState:
         self.applied_writes+=applied
         return applied
 
-    def snapshot(self,received):
-        result=copy.deepcopy(received);nodes=self._nodes(result)
+    def snapshot(self,received,*,node_ids=None,properties=None):
+        if node_ids is None:
+            result=copy.deepcopy(received)
+        else:
+            # Animation needs only the own rig, not environment mesh payloads,
+            # script data, or the controller's full collision projection.
+            result={'nodes':[copy.deepcopy({**n,'properties':{
+                k:v for k,v in n.get('properties',{}).items()
+                if properties is None or k in properties}})
+                for n in received.get('nodes',[]) if n.get('id') in node_ids]}
+        nodes=self._nodes(result)
         for (identifier,key),entry in sorted(self.overrides.items(),key=lambda item:item[1].get('write_sequence',0)):
-            if identifier in nodes:self._put(nodes[identifier],key,entry['value'])
+            if identifier in nodes and (properties is None or key in properties or key in ('Parent','Name')):
+                self._put(nodes[identifier],key,entry['value'])
         result['nodes']=[n for n in result['nodes'] if n.get('id') not in self.removed]
-        result['nodes'].extend(copy.deepcopy(list(self.local_nodes.values())))
+        result['nodes'].extend(copy.deepcopy([n for n in self.local_nodes.values()
+            if node_ids is None or n['id'] in node_ids]))
         for node in result['nodes']:
             if node.get('class_name') in _MASS_PARTS and any((node['id'],key) in self.overrides for key in _POSE_FIELDS):
                 node['authored_pose_generation']=self.pose_generations.get(node['id'],0)
@@ -203,3 +222,20 @@ class AuthoredForceState:
             if node.get('class_name')=='BodyPosition':
                 node['mover_target_generation']=self.target_generations.get(node['id'],0)
         return result
+
+    def animation_snapshot(self,received,character_id):
+        from collections import defaultdict
+        children=defaultdict(list)
+        for node in (*received.get('nodes',()),*self.local_nodes.values()):
+            identifier=node['id']
+            if identifier in self.removed:continue
+            edit=self.overrides.get((identifier,'Parent'))
+            parent=(edit['value'].get('$ref') if isinstance(edit['value'],dict) else None) if edit else node.get('parent')
+            children[parent].append(identifier)
+        selected=set();pending=[character_id]
+        while pending:
+            identifier=pending.pop()
+            if identifier in selected:continue
+            selected.add(identifier);pending.extend(children.get(identifier,()))
+        return self.snapshot(received,node_ids=selected,properties=frozenset((
+            'Scale','Enabled','C0','C1','CFrame','Part0','Part1','Attachment0','Attachment1')))

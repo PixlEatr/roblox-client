@@ -1,4 +1,8 @@
-"""FitWithinMaxSize aspect layout through the persistent Luau worker."""
+"""Aspect layout through the persistent Luau worker.
+
+Parent-scaling expectations follow the documented parent limit and dominant
+axis contract. They are offline regressions, not a captured Studio reference.
+"""
 import unittest
 from persistent_runtime import PersistentLuauHost
 from test_display_layout import layout_snapshot
@@ -78,7 +82,7 @@ a.AspectRatio=2
         self.run_luau('a:Destroy()')
         self.assertEqual(self.run_luau('return calls,f.AbsoluteSize.X,f.AbsoluteSize.Y'), [3,410,280])
 
-    def test_replicated_constraint_and_unverified_modes(self):
+    def test_replicated_constraint_and_parent_scaling(self):
         self.run_luau('a:Destroy()')
         result = self.host.call({'op': 'update', 'timeout_ms': 100, 'delta': {
             'version': 1, 'delta': True, 'actions': [{'sequence': 50, 'kind': 'create', 'node': {
@@ -89,10 +93,86 @@ a.AspectRatio=2
 local aspect=f.Aspect
 local width,height=f.AbsoluteSize.X,f.AbsoluteSize.Y
 aspect.AspectType=Enum.AspectType.ScaleWithParentSize
+return width,height,aspect.DominantAxis==Enum.DominantAxis.Height,
+ f.AbsoluteSize.X,f.AbsoluteSize.Y
+'''), [500,250,True,720,360])
+
+    def test_parent_scaling_uses_dominant_dimension_not_other_authored_dimension(self):
+        self.assertEqual(self.run_luau('''
+a.AspectType=Enum.AspectType.ScaleWithParentSize;a.AspectRatio=2
+f.Size=UDim2.fromOffset(300,0)
+local width,height=f.AbsoluteSize.X,f.AbsoluteSize.Y
+a.DominantAxis=Enum.DominantAxis.Height
+f.Size=UDim2.fromOffset(0,200)
+return width,height,f.AbsoluteSize.X,f.AbsoluteSize.Y,
+ f.Child.AbsoluteSize.X,f.Child.AbsoluteSize.Y
+'''), [300,150,400,200,200,100])
+
+    def test_parent_scaling_limits_both_axes_and_preserves_anchor(self):
+        self.assertEqual(self.run_luau('''
+a.AspectType=Enum.AspectType.ScaleWithParentSize;a.AspectRatio=2
+f.Size=UDim2.fromOffset(2000,2000)
+local wide=f.AbsoluteSize
+local p=f.AbsolutePosition
+a.AspectRatio=.5
+local tall=f.AbsoluteSize
+a.DominantAxis=Enum.DominantAxis.Height
+return wide.X,wide.Y,p.X,p.Y,tall.X,tall.Y,
+ f.AbsoluteSize.X,f.AbsoluteSize.Y
+'''), [980,490,0,135,380,760,380,760])
+
+    def test_parent_padding_and_cumulative_ui_scale(self):
+        self.assertEqual(self.run_luau('''
+a:Destroy()
+f.Size=UDim2.fromOffset(400,300)
+Instance.new("UIScale",f).Scale=2
+local padding=Instance.new("UIPadding",f)
+padding.PaddingLeft=UDim.new(0,10);padding.PaddingRight=UDim.new(0,30)
+padding.PaddingTop=UDim.new(0,20);padding.PaddingBottom=UDim.new(0,40)
+local child=f.Child
+child.Size=UDim2.fromOffset(2000,0)
+local aspect=Instance.new("UIAspectRatioConstraint",child)
+aspect.AspectType=Enum.AspectType.ScaleWithParentSize;aspect.AspectRatio=2
+local before=child.AbsoluteSize
+local scale=Instance.new("UIScale",child);scale.Scale=.5
+local after=child.AbsoluteSize
+scale.Scale=0
+return before.X,before.Y,after.X,after.Y,child.AbsoluteSize.X,child.AbsoluteSize.Y
+'''), [720,360,360,180,0,0])
+
+    def test_parent_resize_and_axis_changes_notify_dependents(self):
+        self.run_luau('''
+a.AspectType=Enum.AspectType.ScaleWithParentSize;a.AspectRatio=2
+getgenv().calls=0;getgenv().childCalls=0
+f:GetPropertyChangedSignal("AbsoluteSize"):Connect(function()calls+=1 end)
+f.Child:GetPropertyChangedSignal("AbsoluteSize"):Connect(function()childCalls+=1 end)
+a.DominantAxis=Enum.DominantAxis.Height
+''')
+        self.assertEqual(self.run_luau('return calls,childCalls,f.AbsoluteSize.X'), [1,1,720])
+        result=self.host.call({'op':'update','timeout_ms':100,'delta':{
+            'version':1,'delta':True,'actions':[], 'display':{'size':[800,600]}}})
+        self.assertTrue(result['ok'], result.get('error'))
+        self.assertEqual(self.run_luau('return calls,childCalls,f.AbsoluteSize.X,f.AbsoluteSize.Y'),
+                         [2,2,560,280])
+
+    def test_mode_switch_zero_parent_and_combined_constraint_boundary(self):
+        self.assertEqual(self.run_luau('''
+a.AspectType=Enum.AspectType.ScaleWithParentSize;a.AspectRatio=2
+a.DominantAxis=Enum.DominantAxis.Height
+local width=f.AbsoluteSize.X
+a.AspectType=Enum.AspectType.FitWithinMaxSize
+local fit=f.AbsoluteSize.X
+local bound=Instance.new("UISizeConstraint",f)
 local ok,err=pcall(function()return f.AbsoluteSize end)
-return width,height,aspect.DominantAxis==Enum.DominantAxis.Height,ok,
- string.find(err,"ScaleWithParentSize",1,true)~=nil
-'''), [500,250,True,False,True])
+bound:Destroy();a:Destroy()
+f.Size=UDim2.fromOffset(0,0)
+local child=f.Child
+local aspect=Instance.new("UIAspectRatioConstraint",child)
+aspect.AspectType=Enum.AspectType.ScaleWithParentSize
+child.Size=UDim2.fromOffset(100,100)
+return width,fit,ok,string.find(err,"combined size and aspect",1,true)~=nil,
+ child.AbsoluteSize.X,child.AbsoluteSize.Y
+'''), [720,500,False,True,0,0])
 
     def test_duplicate_constraints_are_explicit_and_detached_geometry_is_zero(self):
         self.assertEqual(self.run_luau('''
@@ -105,6 +185,25 @@ return ok,string.find(err,"multiple active GUI components",1,true)~=nil,
 
 
 class GuiAspectOneShotTests(unittest.TestCase):
+    def test_parent_scaling_in_both_compiled_workers(self):
+        from runtime.test_cframe_transforms import CFrameTransformTests
+        CFrameTransformTests.run_script(self, '''
+local screen=game:GetService("Players").LocalPlayer.Gui.Screen
+local frame=screen.Frame
+local aspect=Instance.new("UIAspectRatioConstraint",frame)
+aspect.AspectType=Enum.AspectType.ScaleWithParentSize
+aspect.DominantAxis=Enum.DominantAxis.Height
+aspect.AspectRatio=2
+assert(frame.AbsoluteSize==Vector2.new(720,360))
+assert(frame.AbsolutePosition==Vector2.new(130,200))
+assert(frame.Child.AbsoluteSize==Vector2.new(360,180))
+frame.Size=UDim2.fromOffset(0,2000)
+assert(frame.AbsoluteSize==Vector2.new(980,490))
+aspect.DominantAxis=Enum.DominantAxis.Width
+frame.Size=UDim2.fromOffset(300,0)
+assert(frame.AbsoluteSize==Vector2.new(300,150))
+''', layout_snapshot())
+
     def test_fit_and_enum_clone_in_both_compiled_workers(self):
         from runtime.test_cframe_transforms import CFrameTransformTests
         CFrameTransformTests.run_script(self, '''

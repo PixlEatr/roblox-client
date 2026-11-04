@@ -6,6 +6,7 @@ use std::net::TcpStream;
 extern crate headless_luau;
 
 mod codecs;
+mod decompiler;
 mod network;
 mod host_io;
 mod test_limits;

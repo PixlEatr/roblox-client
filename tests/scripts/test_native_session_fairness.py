@@ -77,6 +77,7 @@ class NativeSessionFairnessTests(unittest.TestCase):
 
         client = NativeSession.__new__(NativeSession)
         client.duration = 0.05
+        client.started = clock[0]
         client.endpoint = ("127.0.0.1", 9)
         client.header = b"header:"
         client.pins = []
@@ -328,6 +329,65 @@ class NativeSessionFairnessTests(unittest.TestCase):
         self.assertTrue(client.report["duration_limit_reached"])
         self.assertEqual([packet for packet, _ in fake_socket.sent],
                          [client.header + b"close"])
+
+    def test_transport_ack_flushes_before_slow_tick_and_tick_output_after(self):
+        clock = [0.0]
+        order = []
+        payloads = deque([b"incoming"])
+        client, fake_socket = self.make_fake_client(clock, payloads, order)
+        pending_outbound = deque()
+
+        def handle_event(event, _ready, _packet):
+            order.append(("event", event))
+            pending_outbound.append((b"transport-ack", client.endpoint))
+
+        def datagrams_to_send(_now):
+            return [pending_outbound.popleft()] if pending_outbound else []
+
+        client.handle_event = handle_event
+        client.quic.datagrams_to_send = datagrams_to_send
+        original_sendto = fake_socket.sendto
+
+        def sendto(data, destination):
+            order.append(("send", data[len(client.header):]))
+            original_sendto(data, destination)
+
+        fake_socket.sendto = sendto
+
+        def select_wait(read, write, error, timeout):
+            if payloads:
+                return [fake_socket], [], []
+            clock[0] += timeout
+            return [], [], []
+
+        def tick(_client, _now):
+            order.append(("tick", None))
+            if not any(item == ("queued", None) for item in order):
+                order.append(("queued", None))
+                pending_outbound.append((b"tick-output", client.endpoint))
+            clock[0] += 0.02
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "outputs/gamejoin").mkdir(parents=True)
+            with patch("native_session.socket.socket", return_value=fake_socket), \
+                    patch("native_session.select.select", side_effect=select_wait), \
+                    patch("native_session.split_datagram", side_effect=lambda data: ({}, data)), \
+                    patch("native_session.time.monotonic", side_effect=lambda: clock[0]), \
+                    patch("native_session.certificate_pins", side_effect=lambda *_: nullcontext()), \
+                    patch("native_session.write_private"), \
+                    patch("native_session.ROOT", root):
+                client.run(lambda _client: None, lambda *_args: None,
+                           report_name="synthetic", on_tick=tick,
+                           tick_interval=0.01)
+
+        self.assertLess(order.index(("send", b"transport-ack")),
+                        order.index(("tick", None)))
+        self.assertLess(order.index(("tick", None)),
+                        order.index(("send", b"tick-output")))
+        self.assertEqual([packet[len(client.header):]
+                          for packet, _ in fake_socket.sent],
+                         [b"transport-ack", b"tick-output"])
 
     def test_timer_handler_crossing_deadline_prevents_lua_tick(self):
         clock = [0.0]

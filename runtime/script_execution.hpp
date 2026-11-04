@@ -1,6 +1,7 @@
 #pragma once
 #include "world_bindings.hpp"
 #include "source_scheduler.hpp"
+#include "closure_bindings.hpp"
 #include <Luau/Compiler.h>
 #include <lualib.h>
 
@@ -11,6 +12,7 @@ class ScriptExecution {
     world_bindings::World& world;
     SourceScheduler& scheduler;
     Json catalog=Json::object(),local_sources=Json::object();
+    Json builtin_scripts=Json::array();
     int interface_ref=LUA_NOREF;
     bool initial_ready=true;
 
@@ -75,7 +77,7 @@ class ScriptExecution {
                 auto nibble=[](char c)->int{if(c>='0'&&c<='9')return c-'0';if(c>='a'&&c<='f')return c-'a'+10;return -1;};
                 for(size_t i=0;i<hex.size();i+=2){int a=nibble(hex[i]),b=nibble(hex[i+1]);if(a<0||b<0)throw std::runtime_error("invalid bytecode encoding");code.push_back(char(a*16+b));}
             }
-            auto name="="+world.nodes.at(id).name;
+            auto name="="+world_bindings::instance_display_name(world,id);
             if(world.load_script(L,name.c_str(),code,source)!=0){lua_pushnil(L);lua_insert(L,-2);lua_pushboolean(L,1);return 3;}
             lua_pushvalue(L,2);lua_setfenv(L,-2);return 1;
         }
@@ -96,6 +98,18 @@ class ScriptExecution {
             bool ready=code&&(code->contains("source")||code->contains("bytecode_hex")||(code->value("reason","")!="verification_pending"&&code->value("reason","")!="code_unavailable"));lua_pushboolean(L,ready);return 1;}
         if(operation==10){lua_pushboolean(L,initial_ready);return 1;}
         if(operation==11){return world_bindings::clone_client_template(L);}
+        if(operation==12) {
+            lua_createtable(L,builtin_scripts.size(),0);int list=lua_gettop(L),index=0;
+            for(const auto& entry:builtin_scripts) {
+                lua_createtable(L,0,3);
+                lua_createtable(L,entry.at("path").size(),0);int path=lua_gettop(L),part=0;
+                for(const auto& segment:entry.at("path")){const auto& name=segment.get_ref<const std::string&>();lua_pushlstring(L,name.data(),name.size());lua_rawseti(L,path,++part);}
+                lua_setfield(L,-2,"path");lua_pushstring(L,entry.at("class_name").get_ref<const std::string&>().c_str());lua_setfield(L,-2,"class_name");
+                if(entry.contains("source")){const auto& source=entry.at("source").get_ref<const std::string&>();lua_pushlstring(L,source.data(),source.size());lua_setfield(L,-2,"source");}
+                lua_rawseti(L,list,++index);
+            }
+            return 1;
+        }
         throw std::runtime_error("unknown script runtime operation");
     }
     void push_bridge(lua_State* L,int operation) {
@@ -106,15 +120,50 @@ public:
     ScriptExecution(lua_State* L,world_bindings::World& w,SourceScheduler& tasks,const Json& snapshot)
         :environment(L),world(w),scheduler(tasks) {
         initial_ready=snapshot.value("initial_replication_complete",true);
+        builtin_scripts=snapshot.value("builtin_player_scripts",Json::array());
+        if(!builtin_scripts.is_array()||builtin_scripts.size()>256||builtin_scripts.dump().size()>1024*1024)throw std::runtime_error("invalid builtin player script bundle");
+        for(const auto& entry:builtin_scripts) {
+            if(!entry.is_object()||!entry.contains("path")||!entry["path"].is_array()||entry["path"].empty()||entry["path"].size()>16)throw std::runtime_error("invalid builtin script path");
+            for(const auto& part:entry["path"])if(!part.is_string()||part.get_ref<const std::string&>().empty()||part.get_ref<const std::string&>().size()>128)throw std::runtime_error("invalid builtin script name");
+            const auto cls=entry.value("class_name","");
+            if(cls!="LocalScript"&&cls!="ModuleScript"&&cls!="Folder")throw std::runtime_error("invalid builtin script class");
+            if(cls!="Folder"&&(!entry.contains("source")||!entry["source"].is_string()||entry["source"].get_ref<const std::string&>().size()>128*1024))throw std::runtime_error("invalid builtin script source");
+        }
         update(snapshot.value("script_sources",Json::object()));
         static constexpr const char* bootstrap=R"SCRIPTS(
-local scan, compile, spawn, stop, ended, identify, playerScripts, codeReady, initialReady, cloneTemplate = ...
+local scan, compile, spawn, stop, ended, identify, playerScripts, codeReady, initialReady, cloneTemplate, builtinScripts, registerSource = ...
 local executor = getfenv()
-local base = setmetatable({_G={},shared=shared}, {__index=executor})
+-- Copy the engine root once and make it the actual fallback for authored and
+-- game scopes. Removing a global must not reveal it again through a fallback.
+local base = {}
+for key,value in getmetatable(executor).__index do base[key]=value end
+for key,value in executor do if base[key]==nil then base[key]=value end end
+base._G={};base.shared=shared
+setmetatable(executor,{__index=base})
 function getrenv() return base end
 local modules, scripts = {}, {}
 local copied = setmetatable({}, {__mode="k"})
 local bootstrapErrors = {}
+local builtinsInstalled = false
+local function installBuiltins(target)
+    if builtinsInstalled or not target then return end
+    local paths, overridden = {}, {}
+    for _, row in builtinScripts() do
+        local path = row.path
+        local root = path[1]
+        if #path == 1 and target:FindFirstChild(root) then overridden[root] = true end
+        if not overridden[root] then
+            local parent = #path == 1 and target or paths[table.concat(path, "/", 1, #path-1)]
+            assert(parent, "Builtin player script parent is missing")
+            local instance = Instance.new(row.class_name)
+            instance.Name = path[#path]
+            if row.source then registerSource(instance, row.source) end
+            instance.Parent = parent
+            paths[table.concat(path, "/")] = instance
+        end
+    end
+    builtinsInstalled = true
+end
 local function cloneableTree(root)
     if (root:IsA("LuaSourceContainer")) and not codeReady(root) then return false end
     for _, child in root:GetDescendants() do
@@ -150,6 +199,7 @@ local function prepareTemplates()
     local starter = game:FindService("StarterPlayer")
     local scripts = playerScripts()
     mirror(starter and starter:FindFirstChild("StarterPlayerScripts"), scripts)
+    installBuiltins(scripts)
     local ok, character = pcall(function()return player.Character end)
     if ok and character and character:IsDescendantOf(game) then
         mirror(starter and starter:FindFirstChild("StarterCharacterScripts"), character)
@@ -204,6 +254,7 @@ function require(module)
     return entry.value
 end
 base.require=require
+executor.require=nil
 function getscriptclosure(instance)
     local fn,message=compile(instance,environmentFor(instance));assert(fn,message);return fn
 end
@@ -315,9 +366,12 @@ return {reconcile=reconcile, status=status}
 )SCRIPTS";
         std::string code=Luau::compile(bootstrap);
         if(world.load_script(L,"=script-runtime",code,bootstrap)!=0)throw std::runtime_error("cannot load script runtime");
-        for(int operation:{0,1,2,3,4,7,8,9,10,11})push_bridge(L,operation);
-        if(lua_pcall(L,10,1,0)!=0)throw std::runtime_error(lua_tostring(L,-1));
+        for(int operation:{0,1,2,3,4,7,8,9,10,11,12,5})push_bridge(L,operation);
+        if(lua_pcall(L,12,1,0)!=0)throw std::runtime_error(lua_tostring(L,-1));
         interface_ref=lua_ref(L,-1);lua_pop(L,1);
+        for(const char* name:{"getrenv","getscriptclosure","getscriptfunction","getloadedmodules","getrunningscripts","getsenv"}) {
+            lua_getglobal(L,name);mark_executor_closure(L,-1);lua_pop(L,1);
+        }
         lua_getglobal(L,"client");lua_setreadonly(L,-1,false);
         push_bridge(L,5);lua_setfield(L,-2,"registerScriptSource");
         push_bridge(L,6);lua_setfield(L,-2,"scriptStatus");lua_setreadonly(L,-1,true);lua_pop(L,1);

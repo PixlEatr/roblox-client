@@ -130,6 +130,48 @@ int invoke_remote_server_continue(lua_State* L,int) {
     if(!success){if(lua_gettop(L)==0)lua_pushliteral(L,"InvokeServer failed");lua_error(L);return 0;}
     return lua_gettop(L);
 }
+void record_remote_call_diagnostic(lua_State* L,World& w,const Node& node,uint64_t request) noexcept {
+    if(!w.trace_remote_calls||w.remote_call_diagnostics.size()>=64)return;
+    try {
+        auto bounded=[](const char* value,size_t max)->std::string {
+            if(!value)return {};
+            size_t length=0;
+            while(length<max&&value[length])++length;
+            return std::string(value,length);
+        };
+        const std::string owner=w.scheduler?w.scheduler->owner(L):std::string();
+        Json item{{"request_id",request},{"node_id",bounded(node.id.c_str(),192)},
+                  {"node_name",bounded(node.name.c_str(),128)},
+                  {"scheduler_owner",bounded(owner.c_str(),128)},
+                  {"frames",Json::array()}};
+        // Build a bounded instance path from received snapshot nodes only.
+        std::vector<std::string> parts;
+        const Node* current=&node;
+        for(size_t depth=0;current&&depth<32;++depth) {
+            const std::string name=instance_name(w,*current);
+            parts.push_back(bounded(name.c_str(),128));
+            const auto parent=parent_id(w,*current);
+            current=parent.empty()?nullptr:find_node(w,parent);
+        }
+        std::string instance_path;
+        for(auto part=parts.rbegin();part!=parts.rend();++part) {
+            if(!instance_path.empty())instance_path.push_back('.');
+            if(instance_path.size()+part->size()>1024)break;
+            instance_path+=*part;
+        }
+        item["instance_path"]=std::move(instance_path);
+        for(int level=1;level<9;++level) {
+            lua_Debug frame{};
+            if(!lua_getinfo(L,level,"nsl",&frame))break;
+            const char* source=frame.source?frame.source:frame.short_src;
+            item["frames"].push_back(Json{{"source",bounded(source,256)},
+                {"name",bounded(frame.name,128)},{"line",frame.currentline}});
+        }
+        w.remote_call_diagnostics.push_back(std::move(item));
+    } catch(...) {
+        // Diagnostics must never affect InvokeServer execution.
+    }
+}
 int invoke_remote_server(lua_State* L) {
     auto* h=checked_handle(L,1);World& w=*h->world;
     RemoteServerWaiter waiter;
@@ -161,7 +203,9 @@ int invoke_remote_server(lua_State* L) {
         lua_pushthread(L);waiter.reference=lua_ref(L,-1);lua_pop(L,1);
         w.remote_server_calls.push_back(std::move(call));
         try {w.remote_server_waiters.push_back(waiter);}catch(...){w.remote_server_calls.erase(w.remote_server_calls.size()-1);throw;}
-        w.remote_server_call_bytes+=size;w.scheduler->wait_signal(L);
+        w.remote_server_call_bytes+=size;
+        record_remote_call_diagnostic(L,w,*h->node,waiter.request);
+        w.scheduler->wait_signal(L);
     }catch(const std::exception& error) {
         if(waiter.reference!=LUA_NOREF)lua_unref(L,waiter.reference);
         luaL_error(L,"InvokeServer failed: %s",error.what());return 0;
@@ -207,7 +251,7 @@ void complete_remote_server_impl(lua_State* from,World& w,const Json& responses)
             if(!ok){lua_pushlstring(target,error.data(),error.size());return 2;}
             for(const auto& value:values)push_remote_value(target,w,value);
             return int(values.size())+1;
-        });
+        },true);
         lua_unref(from,waiter->reference);w.remote_server_waiters.erase(waiter);
     }
 }
@@ -255,7 +299,7 @@ void queue_remote_client_invoke(lua_State* from,World& w,Node& node,const Json& 
     auto bound=w.bindable_callbacks.find(node.id);
     if(bound!=w.bindable_callbacks.end()) {
         lua_getref(from,bound->second.reference);call.callback_ref=lua_ref(from,-1);lua_pop(from,1);
-        call.owner=bound->second.owner;
+        call.owner=bound->second.owner;call.identity=bound->second.identity;
     }
     w.remote_client_invocations.push_back(std::move(call));
 }
@@ -269,14 +313,14 @@ void dispatch_remote_client_functions(lua_State* from,World& w) {
                 auto bound=w.bindable_callbacks.find(call.node);
                 if(bound==w.bindable_callbacks.end()){++it;continue;}
                 lua_getref(from,bound->second.reference);call.callback_ref=lua_ref(from,-1);lua_pop(from,1);
-                call.owner=bound->second.owner;
+                call.owner=bound->second.owner;call.identity=bound->second.identity;
             }
             if(w.scheduler->invocation_capacity()==0){++it;continue;}
             try {
                 call.callee=w.scheduler->invoke_callback(from,call.callback_ref,[&](lua_State* target) {
                     for(const auto& value:call.arguments)push_remote_value(target,w,value);
                     return static_cast<int>(call.arguments.size());
-                },call.owner);
+                },call.owner,call.identity);
                 lua_unref(from,call.callback_ref);call.callback_ref=LUA_NOREF;call.arguments=Json::array();
             }catch(const std::exception& e){call.error=e.what();}
         }

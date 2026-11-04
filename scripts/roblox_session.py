@@ -4,6 +4,7 @@ import json
 import os
 from pathlib import Path
 import stat
+from platform_files import read_private
 
 ROOT = Path(__file__).resolve().parent.parent
 ALLOWED_HOSTS = {"users.roblox.com", "games.roblox.com", "gamejoin.roblox.com", "apis.roblox.com",
@@ -17,13 +18,16 @@ class SessionError(Exception):
 
 
 class RobloxSession:
-    def __init__(self):
-        path = ROOT / "secrets/roblox-cookie.txt"
-        from platform_files import read_private
-        try:
-            cookie = read_private(path, 32768).decode('utf-8').strip()
-        except (OSError, ValueError):
-            raise SessionError("Cookie file must be a readable owner-only regular file") from None
+    def __init__(self, *, cookie=None):
+        if cookie is None:
+            path = ROOT / "secrets/roblox-cookie.txt"
+            try:
+                cookie = read_private(path, 32768).decode('utf-8').strip()
+            except (OSError, ValueError):
+                raise SessionError("Cookie file must be a readable owner-only regular file") from None
+        if not isinstance(cookie,str) or len(cookie)>32768:
+            raise SessionError('Invalid account session')
+        cookie=cookie.strip()
         if cookie.startswith(".ROBLOSECURITY="):
             cookie = cookie[len(".ROBLOSECURITY="):].rstrip(";")
         if not cookie or any(ord(c) < 33 or ord(c) > 126 or c == ";" for c in cookie):

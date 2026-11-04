@@ -1,5 +1,6 @@
 """Advance own-character gravity from received state, separate from replication."""
 from physics_ground import _is_part_descendant, _property_type_map, extract_ground
+from collision_groups import context_from_world
 from physics_script_bridge import PhysicsScriptBridge
 from physics_gravity import ReceivedGravity
 from physics_job_statistics import PhysicsJobStatistics
@@ -390,8 +391,10 @@ class RuntimePhysicsPrediction:
         self._character_children = set()
         self._environment_keys = set()
         self._geometry_keys = set()
+        self._no_collision_keys = set()
         self._class_by_key = {}
         self._geometry_dirty = False
+        self._collision_dirty = True
         self._platform_poses = {}
         self._platform_pose_at = None
         self._workspace_key = None
@@ -431,8 +434,10 @@ class RuntimePhysicsPrediction:
             self._character_children = set()
             self._environment_keys = set()
             self._geometry_keys = set()
+            self._no_collision_keys = set()
             self._class_by_key = {}
             self._geometry_dirty = False
+            self._collision_dirty = True
             self._platform_poses = {}
             self._platform_pose_at = None
             self._last_step = None
@@ -449,6 +454,7 @@ class RuntimePhysicsPrediction:
         own_dirty, full_refresh, geometry_dirty = self._changes_since(world)
         if full_refresh:
             self._refresh_keys(world, user_id)
+            self._collision_dirty = True
             own_dirty = True
             geometry_dirty = True
         if geometry_dirty:
@@ -466,7 +472,7 @@ class RuntimePhysicsPrediction:
         if own_dirty:
             snapshot = _snapshot_for_keys(world, self._player_key,
                                           self._character_key,
-                                          self._character_children)
+                                          self._character_children | self._no_collision_keys)
             self.bridge.update(snapshot)
         if (own_dirty or geometry_dirty) and self.bridge.controller is not None:
             environment_snapshot = _snapshot_for_keys(
@@ -507,6 +513,7 @@ class RuntimePhysicsPrediction:
                                              allow_visual_mesh_approximation=self.allow_visual_mesh_approximation,
                                              include_unanchored=True))
             self._geometry_revision = world.revision
+            self._collision_dirty = True
             self._geometry_at = now
             self._geometry_dirty = False
             previous_poses = self._platform_poses
@@ -520,6 +527,13 @@ class RuntimePhysicsPrediction:
             controller.update_surface_velocities(
                 _received_surface_velocities(world, self._geometry))
         if controller is not None and self._geometry is not None:
+            if self._collision_dirty:
+                update_context=getattr(controller,'update_collision_context',None)
+                if callable(update_context):
+                    root_key=next((key for key in self._character_children
+                                   if instance_id(key)==controller.root_id),None)
+                    update_context(context_from_world(world,self._geometry,self._character_key,root_key))
+                self._collision_dirty=False
             controller.update_geometry(self._geometry)
         admitted = self._job_scheduler.admit(now)
         self._gravity.apply(world.instances.get(self._workspace_key), controller, observe=admitted)
@@ -584,6 +598,7 @@ class RuntimePhysicsPrediction:
             key for key, name in self._class_by_key.items()
             if name in ('Terrain', 'MeshPart') or _is_part_descendant(name)
         }
+        self._no_collision_keys={key for key,name in self._class_by_key.items() if name=='NoCollisionConstraint'}
         workspaces = [key for key, name in self._class_by_key.items() if name == 'Workspace']
         self._workspace_key = workspaces[0] if len(workspaces) == 1 else None
 
@@ -641,6 +656,11 @@ class RuntimePhysicsPrediction:
         for action in pending:
             key = action.get('key')
             kind = action.get('kind')
+            if kind in ('create','remove') or (kind=='set' and
+                    {'CollisionGroupData','CollisionGroups','CollisionGroup',
+                     'CollisionGroupReplicate','UseWorkspaceCollisionGroups','CanCollide','Parent'}
+                    & action.get('fields',{}).keys()):
+                self._collision_dirty=True
             class_name = self._class_by_key.get(key)
             if kind == 'create':
                 node = action.get('instance', {})
@@ -648,6 +668,8 @@ class RuntimePhysicsPrediction:
                 if isinstance(class_id, int) and 0 <= class_id < len(classes):
                     class_name = classes[class_id]['name']
                     self._class_by_key[key] = class_name
+                if class_name=='NoCollisionConstraint':
+                    self._no_collision_keys.add(key);own_dirty=True;self._collision_dirty=True
                 if class_name in _ENVIRONMENT_CLASSES:
                     self._environment_keys.add(key)
                     geometry_dirty = True
@@ -663,6 +685,8 @@ class RuntimePhysicsPrediction:
                     self._character_children.add(key)
                     own_dirty = True
             elif kind == 'remove':
+                if key in self._no_collision_keys:
+                    self._no_collision_keys.discard(key);own_dirty=True;self._collision_dirty=True
                 if key in (self._player_key, self._character_key, self._workspace_key):
                     full_refresh = True
                 if key in self._character_children:
@@ -676,6 +700,8 @@ class RuntimePhysicsPrediction:
                     geometry_dirty = True
             elif kind == 'set':
                 fields = action.get('fields', {})
+                if class_name=='NoCollisionConstraint' and {'Enabled','Part0','Part1','Parent'} & fields.keys():
+                    own_dirty=True;self._collision_dirty=True
                 if key == self._player_key:
                     if {'Character', 'UserId'} & fields.keys():
                         full_refresh = True
@@ -766,8 +792,10 @@ class RuntimePhysicsPrediction:
         self._character_children = set()
         self._environment_keys = set()
         self._geometry_keys = set()
+        self._no_collision_keys = set()
         self._class_by_key = {}
         self._geometry_dirty = False
+        self._collision_dirty = True
         self._platform_poses = {}
         self._platform_pose_at = None
         self._workspace_key = None

@@ -6,7 +6,7 @@ const esbuild=require('../../ui/node_modules/esbuild');
 const root=path.resolve(__dirname,'../../ui');
 function load(source){const result=esbuild.buildSync({entryPoints:[path.join(root,source)],bundle:true,platform:'node',format:'cjs',write:false,logLevel:'silent'});const module=new Module(path.join(root,'renderer-test.cjs'));module.filename=path.join(root,'renderer-test.cjs');module.paths=Module._nodeModulePaths(root);module._compile(result.outputFiles[0].text,module.filename);return module.exports;}
 const {createWorldRenderer}=load('world-renderer-factory.js');
-const {clipTriangle,rasterTriangle,packedColor,SoftwareWorldRenderer}=load('software-world-renderer.js');
+const {clipTriangle,rasterTriangle,sampleTexture,packedColor,SoftwareWorldRenderer}=load('software-world-renderer.js');
 const THREE=load('node_modules/three/build/three.cjs');
 const {partShape,partOpacity,makeMaterial,decalMaterial,materialName,primitiveGeometries,PoseTrack,transformOf}=load('world-appearance.js');
 const {clothingFaces}=load('world-clothing.js');
@@ -108,12 +108,44 @@ test('classic clothing maps front torso and both limbs to different template reg
 });
 test('software rasterizer applies texture UVs, alpha, and clothing crop transforms',()=>{
     const pixels=new Uint32Array(16*16),depth=new Float32Array(16*16);depth.fill(Infinity);
-    const map={image:{width:2,height:1,data:new Uint8Array([255,0,0,255,0,255,0,255])},repeat:{x:.5,y:1},offset:{x:.5,y:0},flipY:true};
+    const map={image:{width:2,height:1,data:new Uint8Array([255,0,0,255,0,255,0,255])},repeat:{x:.5,y:1},offset:{x:.75,y:0},flipY:true};
     rasterTriangle([[0,0,0,1,0,0],[16,0,0,1,0,0],[0,16,0,1,0,0]],16,16,pixels,depth,[255,255,255],1,map);
     assert.equal(pixels[2*16+2],packedColor(0,255,0));
     depth.fill(Infinity);map.image.data[7]=0;pixels.fill(packedColor(0,0,255));
     rasterTriangle([[0,0,0,1,0,0],[16,0,0,1,0,0],[0,16,0,1,0,0]],16,16,pixels,depth,[255,255,255],1,map);
     assert.equal(pixels[2*16+2],packedColor(0,0,255));
+});
+test('software textures filter between texels in linear color and clamp their edges',()=>{
+    const map={image:{width:2,height:1,data:new Uint8Array([255,0,0,255,0,255,0,255])}};
+    assert.deepEqual(sampleTexture(map,.5,.5),[.5,.5,0,1]);
+    assert.deepEqual(sampleTexture(map,0,.5),[1,0,0,1]);
+    map.wrapS=1000;assert.deepEqual(sampleTexture(map,0,.5),[.5,.5,0,1]);
+});
+test('SurfaceAppearance uses its PBR maps and preserves the part under overlay alpha',()=>{
+    const texture=new THREE.DataTexture(new Uint8Array([255,0,0,0]),1,1);
+    const maps={color:texture,normal:texture,roughness:texture,metalness:texture};
+    const overlay=makeMaterial({appearance:{alphaMode:0,color:{$color3:[1,1,1]}}},null,null,maps);
+    assert.equal(overlay.normalMap,texture);assert.equal(overlay.roughness,1);assert.equal(overlay.metalness,1);
+    assert.equal(overlay.transparent,false);assert.equal(overlay.alphaTest,0);
+    const pixels=new Uint32Array(16*16),depth=new Float32Array(16*16);depth.fill(Infinity);
+    const triangle=[[0,0,0,1,0,0],[16,0,0,1,0,0],[0,16,0,1,0,0]];
+    rasterTriangle(triangle,16,16,pixels,depth,[0,0,255],1,texture,{tint:[1,1,1],light:[1,1,1],overlay:true});
+    assert.equal(pixels[2*16+2],packedColor(0,0,255));assert.equal(depth[2*16+2],0);
+    const cutout=makeMaterial({appearance:{alphaMode:1}},null,null,maps);assert.equal(cutout.transparent,true);
+    pixels.fill(0);depth.fill(Infinity);
+    rasterTriangle(triangle,16,16,pixels,depth,[0,0,255],1,texture,{tint:[1,1,1],light:[1,1,1],overlay:false});
+    assert.equal(pixels[2*16+2],0);assert.equal(depth[2*16+2],Infinity);
+    overlay.dispose();cutout.dispose();texture.dispose();
+});
+test('software scene lighting respects a dark environment and colored ambient light',()=>{
+    const canvas=new Canvas(),renderer=new SoftwareWorldRenderer({canvas});renderer.setSize(80,80);
+    const scene=new THREE.Scene(),camera=new THREE.PerspectiveCamera(60,1,.1,100);camera.position.z=5;
+    const mesh=new THREE.Mesh(new THREE.BoxGeometry(2,2,2),new THREE.MeshStandardMaterial());scene.add(mesh);
+    scene.userData.lighting={sky:new THREE.Color(0,0,0),ground:new THREE.Color(0,0,0),sun:new THREE.Color(0,0,0),exposure:1};
+    renderer.render(scene,camera);const i=(40*80+40)*4;assert.deepEqual([...canvas.image.data.slice(i,i+3)],[0,0,0]);
+    scene.userData.lighting.sky.setRGB(1,0,0);scene.userData.lighting.ground.setRGB(1,0,0);
+    renderer.render(scene,camera);assert.deepEqual([...canvas.image.data.slice(i,i+3)],[255,0,0]);
+    renderer.dispose();mesh.geometry.dispose();mesh.material.dispose();
 });
 test('visual assets deduplicate loads and contain failures without retry storms',async()=>{
     let calls=0,finish;const loaded=new Promise(resolve=>finish=resolve);

@@ -14,33 +14,40 @@ public:
     SourceScheduler(lua_State* main,Clock::time_point deadline,bool persistent=false):main_(main),deadline_(deadline),persistent_(persistent){}
     void install(lua_State* thread);
     int run(lua_State* root,int arguments,std::function<void()> pump={});
-    lua_State* callback(lua_State* from,int reference,const std::function<int(lua_State*)>& arguments,std::function<bool()> guard={},const std::string& owner="");
+    lua_State* callback(lua_State* from,int reference,const std::function<int(lua_State*)>& arguments,std::function<bool()> guard={},const std::string& owner="",int identity=-1);
     // Starts a callback immediately until it yields, completes, or exhausts
     // its scheduling slice. Leaves the child thread on the caller's stack.
-    lua_State* callback_now(lua_State* from,int reference,const std::function<int(lua_State*)>& arguments,const std::string& owner);
+    lua_State* callback_now(lua_State* from,int reference,const std::function<int(lua_State*)>& arguments,const std::string& owner,int identity=-1);
     void wait_signal(lua_State* thread);
-    void wake_signal(lua_State* thread,const std::function<int(lua_State*)>& arguments);
+    void wake_signal(lua_State* thread,const std::function<int(lua_State*)>& arguments,bool response_ready=false);
     const std::vector<std::string>& errors() const{return errors_;}
     void start(lua_State* root,int arguments=0);
     int completion(lua_State* root) const;
     const char* task_state(lua_State* thread) const;
-    struct Progress {size_t resumes=0,yields=0,interruptions=0;double execution_ms=0;};
+    struct Progress {size_t resumes=0,yields=0,interruptions=0;double execution_ms=0;bool response_priority_active=false;};
     Progress task_progress(lua_State* thread) const;
     // Persistent hosts open a frame before executing authored code. Timers
     // created in it cannot resume until a later frame has begun.
     void begin_frame(){++frame_;frame_open_=true;}
+    // should_yield is a side-effect-free pending-output check. When it is
+    // true, the host must drain that output before calling step again.
+    // Unfinished tasks and invocations remain queued across this handoff.
     void step(Clock::time_point deadline,std::function<void()> pump={},size_t max_resumes=256,
               std::function<void(Clock::time_point)> set_interrupt_deadline={},
-              std::function<void()> progress_invocations={});
+              std::function<void()> progress_invocations={},
+              std::function<bool()> should_yield={});
     void release_root(lua_State* root);
     size_t pending() const;
     size_t callback_capacity();
     size_t invocation_capacity();
     void clear_errors(){errors_.clear();}
     std::string owner(lua_State* thread) const;
+    static int identity(lua_State* thread);
+    static void set_identity(lua_State* thread,int identity);
+    static bool has_capability(lua_State* thread,const std::string& capability);
     lua_State* spawn_owned(lua_State* from,int function_index,const std::string& owner);
     void cancel_owner(const std::string& owner);
-    lua_State* invoke_callback(lua_State* from,int reference,const std::function<int(lua_State*)>& arguments,const std::string& owner);
+    lua_State* invoke_callback(lua_State* from,int reference,const std::function<int(lua_State*)>& arguments,const std::string& owner,int identity=-1);
     void release_invocation(lua_State* thread);
 private:
     // Thread provenance survives ordinary coroutine.resume and scheduler
@@ -51,6 +58,7 @@ private:
         // A coroutine.resume/wrap frame retains this child on its VM stack
         // while propagating LUA_BREAK. Resume the child before that frame.
         lua_State* interrupted_child=nullptr;
+        int identity=8;
     };
     static void thread_lifecycle(lua_State* parent,lua_State* thread);
     static void coroutine_interrupt(lua_State* parent,lua_Debug* debug);
@@ -66,6 +74,8 @@ private:
         Clock::duration uninterrupted_cpu{};
         Progress progress;
         bool retained=false;
+        bool response_ready=false;
+        Clock::duration response_priority_cpu{};
         bool report_errors=true;
         size_t sleeping_frame=0;
     };
@@ -77,6 +87,7 @@ private:
     std::unordered_map<lua_State*,Task> tasks_;
     std::deque<Task*> ready_;
     bool prefer_authored_=true;
+    bool prefer_response_=true;
     size_t frame_=0;
     bool frame_open_=false;
     std::vector<std::string> errors_;
@@ -88,6 +99,7 @@ private:
     void enqueue(Task& task);
     Task* dequeue();
     static int task_api(lua_State* L);
+    static int identity_api(lua_State* L);
     static int task_api_inner(lua_State* L);
     static int legacy_wait_api(lua_State* L);
     static int legacy_wait_continue(lua_State* L,int status);

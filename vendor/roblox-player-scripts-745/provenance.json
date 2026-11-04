@@ -1,0 +1,343 @@
+{
+  "repository": "MaximumADHD/Roblox-Client-Tracker",
+  "commit": "de521910e9616a0a3add5fad22bef66a9e406e41",
+  "client_version": "0.745.0.7451137",
+  "origin": "Published extracted client script sources; source files preserved verbatim.",
+  "files": [
+    {
+      "path": "StarterPlayerScripts/PlayerModule.module.lua",
+      "repository_path": "scripts/PlayerScripts/StarterPlayerScripts/PlayerModule.module.lua",
+      "git_blob_sha1": "d0666833fb98001134375a10e528e2a67ea8faac",
+      "bytes": 793,
+      "sha256": "13129a0ea1ae1ef7923072ed3243333c1bc192b1aca591e52033f6bfe1b57d5a"
+    },
+    {
+      "path": "StarterPlayerScripts/PlayerModule.module/CameraModule.lua",
+      "repository_path": "scripts/PlayerScripts/StarterPlayerScripts/PlayerModule.module/CameraModule.lua",
+      "git_blob_sha1": "a86b371c9f9e5dc50825995f9cc862f86c9d41df",
+      "bytes": 25338,
+      "sha256": "a81c2a5251d7136e3a8853f99b0c9a6b2df5cc67fa682dc16f5c108ebcc09e56"
+    },
+    {
+      "path": "StarterPlayerScripts/PlayerModule.module/CameraModule/BaseCamera.lua",
+      "repository_path": "scripts/PlayerScripts/StarterPlayerScripts/PlayerModule.module/CameraModule/BaseCamera.lua",
+      "git_blob_sha1": "5480c7b8f37d731351ffaae377f70deab1894831",
+      "bytes": 24180,
+      "sha256": "1a20353c2dfb07603dc3ff2e5e0a1c27841ab8fd249d6affed66b841fea47cdf"
+    },
+    {
+      "path": "StarterPlayerScripts/PlayerModule.module/CameraModule/BaseOcclusion.lua",
+      "repository_path": "scripts/PlayerScripts/StarterPlayerScripts/PlayerModule.module/CameraModule/BaseOcclusion.lua",
+      "git_blob_sha1": "d569ce0d41383e0e21b9a74451d35160b0afbbd1",
+      "bytes": 1408,
+      "sha256": "3d1dfa19839c0ce10f92376966ef3dd89ce4a48021454b5bd65fc7e28d139c5a"
+    },
+    {
+      "path": "StarterPlayerScripts/PlayerModule.module/CameraModule/CameraInput.lua",
+      "repository_path": "scripts/PlayerScripts/StarterPlayerScripts/PlayerModule.module/CameraModule/CameraInput.lua",
+      "git_blob_sha1": "33e9e2d363c0ec11b4ed24f6970b8ceafab2706a",
+      "bytes": 17552,
+      "sha256": "b61702cc5be3b9f2deee830d3a949892d3e65175ee8df4ea239056e1b94ef1d7"
+    },
+    {
+      "path": "StarterPlayerScripts/PlayerModule.module/CameraModule/CameraToggleStateController.lua",
+      "repository_path": "scripts/PlayerScripts/StarterPlayerScripts/PlayerModule.module/CameraModule/CameraToggleStateController.lua",
+      "git_blob_sha1": "c36a167fa2a3a433a90bb01489b5324f6048e9c0",
+      "bytes": 2487,
+      "sha256": "52390fb6a110501707b8cb0ca5d5b2a03d68a707a57e2706c2f11fe196689e78"
+    },
+    {
+      "path": "StarterPlayerScripts/PlayerModule.module/CameraModule/CameraUI.lua",
+      "repository_path": "scripts/PlayerScripts/StarterPlayerScripts/PlayerModule.module/CameraModule/CameraUI.lua",
+      "git_blob_sha1": "f8f369ad8e946d58d44a7fff5599181fd430586f",
+      "bytes": 747,
+      "sha256": "b299edf3a783387c9278b32a19b2b0f389f742b20aa0b2874dfd0b4408e413e8"
+    },
+    {
+      "path": "StarterPlayerScripts/PlayerModule.module/CameraModule/CameraUtils.lua",
+      "repository_path": "scripts/PlayerScripts/StarterPlayerScripts/PlayerModule.module/CameraModule/CameraUtils.lua",
+      "git_blob_sha1": "ba3428bfeeaf80452d74ae2dac01528c9667672f",
+      "bytes": 9012,
+      "sha256": "d0f3e906706d19fea0cc9ef21be55ac5c90bc734e92f566652966a8986f099e9"
+    },
+    {
+      "path": "StarterPlayerScripts/PlayerModule.module/CameraModule/ClassicCamera.lua",
+      "repository_path": "scripts/PlayerScripts/StarterPlayerScripts/PlayerModule.module/CameraModule/ClassicCamera.lua",
+      "git_blob_sha1": "2d0e24a91370ccda900e65cf49dfa07826814b89",
+      "bytes": 8368,
+      "sha256": "bd14f6cec23a4f601ba11de0357cd5eb872f083d40de2097e128434f833a2c52"
+    },
+    {
+      "path": "StarterPlayerScripts/PlayerModule.module/CameraModule/Invisicam.lua",
+      "repository_path": "scripts/PlayerScripts/StarterPlayerScripts/PlayerModule.module/CameraModule/Invisicam.lua",
+      "git_blob_sha1": "00887efab57e7ad15477f5d1513926c3760baae8",
+      "bytes": 22534,
+      "sha256": "9e64da1bee850e6f3935f6ee404719c93f7a386b6b718777a605652f1b0df504"
+    },
+    {
+      "path": "StarterPlayerScripts/PlayerModule.module/CameraModule/LegacyCamera.lua",
+      "repository_path": "scripts/PlayerScripts/StarterPlayerScripts/PlayerModule.module/CameraModule/LegacyCamera.lua",
+      "git_blob_sha1": "01a11af557a9e334a888420c4a3ea7bcb8f1a54b",
+      "bytes": 3858,
+      "sha256": "a70c2648ce4aa7952abde3bc8ce874066ff7bd901d0593ee314eab09f6c1d6ac"
+    },
+    {
+      "path": "StarterPlayerScripts/PlayerModule.module/CameraModule/MouseLockController.lua",
+      "repository_path": "scripts/PlayerScripts/StarterPlayerScripts/PlayerModule.module/CameraModule/MouseLockController.lua",
+      "git_blob_sha1": "43b6f9233161ee42969cd298fd99adb4b763c161",
+      "bytes": 7109,
+      "sha256": "769bd21e9f7775e825385eaac928803eb1a55db118e4616d452a65032e7c3e6a"
+    },
+    {
+      "path": "StarterPlayerScripts/PlayerModule.module/CameraModule/OrbitalCamera.lua",
+      "repository_path": "scripts/PlayerScripts/StarterPlayerScripts/PlayerModule.module/CameraModule/OrbitalCamera.lua",
+      "git_blob_sha1": "ceb4b5cbd3bdc9304807088db322bf8d7aff94c5",
+      "bytes": 12814,
+      "sha256": "a473caf471a21f1634af2ea8a949be18bb79911337e329927cd03e0b774adb70"
+    },
+    {
+      "path": "StarterPlayerScripts/PlayerModule.module/CameraModule/Poppercam.lua",
+      "repository_path": "scripts/PlayerScripts/StarterPlayerScripts/PlayerModule.module/CameraModule/Poppercam.lua",
+      "git_blob_sha1": "5b8eb0de54d6f57dd4c02f6d78c85ed37d87c8b6",
+      "bytes": 3487,
+      "sha256": "7a021cfbbcb0851312e0fe26917c3e0721088c0a72e84ca65074247198afb4b7"
+    },
+    {
+      "path": "StarterPlayerScripts/PlayerModule.module/CameraModule/TransparencyController.lua",
+      "repository_path": "scripts/PlayerScripts/StarterPlayerScripts/PlayerModule.module/CameraModule/TransparencyController.lua",
+      "git_blob_sha1": "99cafb2498bb0ad0ad75338587a8f7a43a2f8378",
+      "bytes": 6715,
+      "sha256": "5dde017f99bdad91c648e19b690c2aac6daf89b0ba3d4eb27b343df3b02eab71"
+    },
+    {
+      "path": "StarterPlayerScripts/PlayerModule.module/CameraModule/VRBaseCamera.lua",
+      "repository_path": "scripts/PlayerScripts/StarterPlayerScripts/PlayerModule.module/CameraModule/VRBaseCamera.lua",
+      "git_blob_sha1": "7618ad57fe9c61d3faba70ebaaa4f1d3b7ea2365",
+      "bytes": 11744,
+      "sha256": "fdc20d9e2444b0d7eecc5bdab57f4bdc0870d9ec4921d3f00f4ee34f47055079"
+    },
+    {
+      "path": "StarterPlayerScripts/PlayerModule.module/CameraModule/VRCamera.lua",
+      "repository_path": "scripts/PlayerScripts/StarterPlayerScripts/PlayerModule.module/CameraModule/VRCamera.lua",
+      "git_blob_sha1": "d7200b98a75c9461523d5bc189dd341e1d0c1cc0",
+      "bytes": 18875,
+      "sha256": "cf8fd045609f1c12a2e18e8e521e8af5d210bc40623789e693d8e681f1c332ac"
+    },
+    {
+      "path": "StarterPlayerScripts/PlayerModule.module/CameraModule/VRCameraTeleportDetector.lua",
+      "repository_path": "scripts/PlayerScripts/StarterPlayerScripts/PlayerModule.module/CameraModule/VRCameraTeleportDetector.lua",
+      "git_blob_sha1": "6bebfd01042c95cb9229f24be363bbf666301f34",
+      "bytes": 2031,
+      "sha256": "4ef245eeaf61396d333617cf06d6146f4b9da2dd29227e4d4256a32f6c23cb4c"
+    },
+    {
+      "path": "StarterPlayerScripts/PlayerModule.module/CameraModule/VRVehicleCamera.lua",
+      "repository_path": "scripts/PlayerScripts/StarterPlayerScripts/PlayerModule.module/CameraModule/VRVehicleCamera.lua",
+      "git_blob_sha1": "4a2426081d15f759aac858b151864b51bd329dce",
+      "bytes": 11145,
+      "sha256": "c4b9bab2ef8dd0ec16b24bf3cb29015c4a423d70845f15c8da348bc026864690"
+    },
+    {
+      "path": "StarterPlayerScripts/PlayerModule.module/CameraModule/VehicleCamera.lua",
+      "repository_path": "scripts/PlayerScripts/StarterPlayerScripts/PlayerModule.module/CameraModule/VehicleCamera.lua",
+      "git_blob_sha1": "9c718a2785cc4cb7e04e7a69f50caee3b561defa",
+      "bytes": 7001,
+      "sha256": "4876bbb259d2b9857808f9e995c4925d879246962f3ef0dbc50655be078df2cd"
+    },
+    {
+      "path": "StarterPlayerScripts/PlayerModule.module/CameraModule/VehicleCamera/VehicleCameraConfig.lua",
+      "repository_path": "scripts/PlayerScripts/StarterPlayerScripts/PlayerModule.module/CameraModule/VehicleCamera/VehicleCameraConfig.lua",
+      "git_blob_sha1": "ab7fde796329bb6b7a7fe824629ba5a03c9d0b35",
+      "bytes": 1860,
+      "sha256": "26710edb25934e40368703e728ce60206945a6836a3d2c7a5f243e21b139adc4"
+    },
+    {
+      "path": "StarterPlayerScripts/PlayerModule.module/CameraModule/VehicleCamera/VehicleCameraCore.lua",
+      "repository_path": "scripts/PlayerScripts/StarterPlayerScripts/PlayerModule.module/CameraModule/VehicleCamera/VehicleCameraCore.lua",
+      "git_blob_sha1": "a7dfc9d9087c323d535bcfb16ea1082fba23f03b",
+      "bytes": 4678,
+      "sha256": "cf98ab29e62da463420d7cc67da5f9694cd5e59be884c7bb01680c68a7e292f1"
+    },
+    {
+      "path": "StarterPlayerScripts/PlayerModule.module/CameraModule/ZoomController.lua",
+      "repository_path": "scripts/PlayerScripts/StarterPlayerScripts/PlayerModule.module/CameraModule/ZoomController.lua",
+      "git_blob_sha1": "1a2fa296feae4acdd2d77ff73c47728ec3f026b8",
+      "bytes": 3598,
+      "sha256": "07b53a8fd0784966d0cc317c02bb28cdd7fc717d6e209bb5df6e9313776dd392"
+    },
+    {
+      "path": "StarterPlayerScripts/PlayerModule.module/CameraModule/ZoomController/Popper.lua",
+      "repository_path": "scripts/PlayerScripts/StarterPlayerScripts/PlayerModule.module/CameraModule/ZoomController/Popper.lua",
+      "git_blob_sha1": "048d25f32a6629c47c1f7172dd25343421116612",
+      "bytes": 13497,
+      "sha256": "eddf4de66006c0876f06de4ede9a605d934a51b320eef86aa6840e391b4c5750"
+    },
+    {
+      "path": "StarterPlayerScripts/PlayerModule.module/CommonUtils/CameraWrapper.lua",
+      "repository_path": "scripts/PlayerScripts/StarterPlayerScripts/PlayerModule.module/CommonUtils/CameraWrapper.lua",
+      "git_blob_sha1": "c6f7f1e1e4d508a1bebe999c504ee4e07da363ba",
+      "bytes": 2917,
+      "sha256": "d993a671c2bdc74fac47bb6611d7d6a413641daa14ccf24d11847c4c54e08580"
+    },
+    {
+      "path": "StarterPlayerScripts/PlayerModule.module/CommonUtils/CharacterUtil.lua",
+      "repository_path": "scripts/PlayerScripts/StarterPlayerScripts/PlayerModule.module/CommonUtils/CharacterUtil.lua",
+      "git_blob_sha1": "d74294629fad9c842e946599224361bfc48f3c24",
+      "bytes": 5367,
+      "sha256": "756b3929ce50589f24f46b28341324983956646476e0463e69c984d81f9ab787"
+    },
+    {
+      "path": "StarterPlayerScripts/PlayerModule.module/CommonUtils/ConnectionUtil.lua",
+      "repository_path": "scripts/PlayerScripts/StarterPlayerScripts/PlayerModule.module/CommonUtils/ConnectionUtil.lua",
+      "git_blob_sha1": "8dbfc27f532e5e7d4ea2df0934ac87db1d008bb2",
+      "bytes": 1804,
+      "sha256": "0d3fb518e0ba5a43e5bdd8debd2942dea6ddd44aa5f30492e2f232099c9b0d3e"
+    },
+    {
+      "path": "StarterPlayerScripts/PlayerModule.module/CommonUtils/FlagUtil.lua",
+      "repository_path": "scripts/PlayerScripts/StarterPlayerScripts/PlayerModule.module/CommonUtils/FlagUtil.lua",
+      "git_blob_sha1": "473b993bd6058d406e79b485fafd239dc74de935",
+      "bytes": 545,
+      "sha256": "92ba4f1d338c82aae9da0b61ab3a634d7026a6cab567715da63147b27b03e12e"
+    },
+    {
+      "path": "StarterPlayerScripts/PlayerModule.module/ControlModule.lua",
+      "repository_path": "scripts/PlayerScripts/StarterPlayerScripts/PlayerModule.module/ControlModule.lua",
+      "git_blob_sha1": "86cd0c0f0d1ea1b5136144205785eb22444adb32",
+      "bytes": 24195,
+      "sha256": "8144eaa4cd1cd7999d7ff90b563e2ea7d97e93b515ad208daea95dad6d539324"
+    },
+    {
+      "path": "StarterPlayerScripts/PlayerModule.module/ControlModule/AvatarAbilitiesInterface.lua",
+      "repository_path": "scripts/PlayerScripts/StarterPlayerScripts/PlayerModule.module/ControlModule/AvatarAbilitiesInterface.lua",
+      "git_blob_sha1": "26014821250607afef332c6b045e58330750c091",
+      "bytes": 2154,
+      "sha256": "7e189d04683b8b07606f601afc18f814cc0f0536afda25dbbd6a04b02b535dc0"
+    },
+    {
+      "path": "StarterPlayerScripts/PlayerModule.module/ControlModule/BaseCharacterController.lua",
+      "repository_path": "scripts/PlayerScripts/StarterPlayerScripts/PlayerModule.module/ControlModule/BaseCharacterController.lua",
+      "git_blob_sha1": "01e4b15ea6e65b855c48fc3c92ac3c9befdfc4d0",
+      "bytes": 2040,
+      "sha256": "654bb2b85f8e5bfc4634e36b5d8ff0ef96952d69c9f3055c870695a4cb47c606"
+    },
+    {
+      "path": "StarterPlayerScripts/PlayerModule.module/ControlModule/ClickToMoveController.lua",
+      "repository_path": "scripts/PlayerScripts/StarterPlayerScripts/PlayerModule.module/ControlModule/ClickToMoveController.lua",
+      "git_blob_sha1": "55d1482063f0caa617f3f27c0ffbe950f7aed0a8",
+      "bytes": 38016,
+      "sha256": "1ce9fcaf53173a75ceb239737e08cdcdac6cb8736b876759aaaa749b78ce7434"
+    },
+    {
+      "path": "StarterPlayerScripts/PlayerModule.module/ControlModule/ClickToMoveDisplay.lua",
+      "repository_path": "scripts/PlayerScripts/StarterPlayerScripts/PlayerModule.module/ControlModule/ClickToMoveDisplay.lua",
+      "git_blob_sha1": "f960b2f305abd480a8e4295f9693936f69257653",
+      "bytes": 17784,
+      "sha256": "a07c2f8b68d210047628d72284ea41800e989c62c3cd0aed84e109b0da8816c9"
+    },
+    {
+      "path": "StarterPlayerScripts/PlayerModule.module/ControlModule/DynamicThumbstick.lua",
+      "repository_path": "scripts/PlayerScripts/StarterPlayerScripts/PlayerModule.module/ControlModule/DynamicThumbstick.lua",
+      "git_blob_sha1": "ef2fab9c6287aaff1758dab96c9db3e67cefe429",
+      "bytes": 22216,
+      "sha256": "f7474142263ee3d91ed53a1acaec99ebe884f58d4309fc9f1a569a0b333484fb"
+    },
+    {
+      "path": "StarterPlayerScripts/PlayerModule.module/ControlModule/Gamepad.lua",
+      "repository_path": "scripts/PlayerScripts/StarterPlayerScripts/PlayerModule.module/ControlModule/Gamepad.lua",
+      "git_blob_sha1": "6b379bb07e040c3233173026e9e3e3a3fdd9f505",
+      "bytes": 8635,
+      "sha256": "0dee35daf27affb46a4698f5fe426cec6e0e64090c49d095d76cc7151657f34d"
+    },
+    {
+      "path": "StarterPlayerScripts/PlayerModule.module/ControlModule/Keyboard.lua",
+      "repository_path": "scripts/PlayerScripts/StarterPlayerScripts/PlayerModule.module/ControlModule/Keyboard.lua",
+      "git_blob_sha1": "2c65d4e16c6fced5b0e74225085764731e47cd54",
+      "bytes": 5858,
+      "sha256": "3c85c462f8c03bf90e91c92e682283152e24b57686319e3158c3aadb13575b6b"
+    },
+    {
+      "path": "StarterPlayerScripts/PlayerModule.module/ControlModule/PathDisplay.lua",
+      "repository_path": "scripts/PlayerScripts/StarterPlayerScripts/PlayerModule.module/ControlModule/PathDisplay.lua",
+      "git_blob_sha1": "a614ceb074846c0a1915b74178d60ac291d74813",
+      "bytes": 4010,
+      "sha256": "a88072ed4536fd774e46535ce3e3d29f18815c5ecbd228e8f2c1376e550ca86e"
+    },
+    {
+      "path": "StarterPlayerScripts/PlayerModule.module/ControlModule/TouchJump.lua",
+      "repository_path": "scripts/PlayerScripts/StarterPlayerScripts/PlayerModule.module/ControlModule/TouchJump.lua",
+      "git_blob_sha1": "a5a5c2220030b032a0ea31e13956f2aae97776fd",
+      "bytes": 9237,
+      "sha256": "82d2df20ed1bb3d542697aa42d6c678e9403d5a438c0bf5e1f6bfaabaae932ca"
+    },
+    {
+      "path": "StarterPlayerScripts/PlayerModule.module/ControlModule/TouchThumbstick.lua",
+      "repository_path": "scripts/PlayerScripts/StarterPlayerScripts/PlayerModule.module/ControlModule/TouchThumbstick.lua",
+      "git_blob_sha1": "bafdaa0b8814146cf612203c765711f8c0f14e85",
+      "bytes": 8962,
+      "sha256": "9689e7187a7c769404eb729182c5db1e8bb9239ef50d3e1971bbdfb1c95877a4"
+    },
+    {
+      "path": "StarterPlayerScripts/PlayerModule.module/ControlModule/VRNavigation.lua",
+      "repository_path": "scripts/PlayerScripts/StarterPlayerScripts/PlayerModule.module/ControlModule/VRNavigation.lua",
+      "git_blob_sha1": "5a55a835da6b97c314a93422e2d80c762be00462",
+      "bytes": 14122,
+      "sha256": "5baefc826079477cd97dc3c237b4e1c646fc1453aa8cfe3156acb127a06d0a26"
+    },
+    {
+      "path": "StarterPlayerScripts/PlayerModule.module/ControlModule/VehicleController.lua",
+      "repository_path": "scripts/PlayerScripts/StarterPlayerScripts/PlayerModule.module/ControlModule/VehicleController.lua",
+      "git_blob_sha1": "798fdf32b6bf539c93a022b5cfa6e0cf06047984",
+      "bytes": 6320,
+      "sha256": "93358c26896338c0f82a28e1049c10ab8fb02bc9cd3bc56626fb3f99019c1b5d"
+    },
+    {
+      "path": "StarterPlayerScripts/PlayerScriptsLoader.lua",
+      "repository_path": "scripts/PlayerScripts/StarterPlayerScripts/PlayerScriptsLoader.lua",
+      "git_blob_sha1": "b6776f2a55b1ccf6b29ec64eb4465ae9782b33c3",
+      "bytes": 193,
+      "sha256": "74e366eca58f34c81a40564c46b55ab692c35f7a884f532720119b705606edc0"
+    },
+    {
+      "path": "StarterPlayerScriptsCommon/RbxCharacterSounds.lua",
+      "repository_path": "scripts/PlayerScripts/StarterPlayerScriptsCommon/RbxCharacterSounds.lua",
+      "git_blob_sha1": "4d18a70c0847e2c6ea8ba619efd8d0c4146fb84e",
+      "bytes": 13029,
+      "sha256": "d78bf08c5edf3f3ca63e55ae6dde69c33491a715c8bef14fb472135db7213887"
+    },
+    {
+      "path": "StarterPlayerScriptsCommon/RbxCharacterSounds/AtomicBinding.lua",
+      "repository_path": "scripts/PlayerScripts/StarterPlayerScriptsCommon/RbxCharacterSounds/AtomicBinding.lua",
+      "git_blob_sha1": "1da0411a736469c5b99186a5d50d662cdb99d99b",
+      "bytes": 7469,
+      "sha256": "c604d4b42778ce7fe58812e2880596102c00474cadbaa35264f65d5c897588e8"
+    },
+    {
+      "path": "PlayerScripts.rbxp",
+      "repository_path": "scripts/PlayerScripts/PlayerScripts.rbxp",
+      "sha256": "e8a314588210557b0af2eca37de8a9cf5cdcc360bc454dac0e2b71e091d54d12",
+      "bytes": 31069
+    },
+    {
+      "path": "PlayerScriptsCommon.rbxp",
+      "repository_path": "scripts/PlayerScripts/PlayerScriptsCommon.rbxp",
+      "sha256": "0a1573606d084ee6b7a79cbf9cb48d39e5b6a1321e2b8e6cf7dcf1d2e28a56d6",
+      "bytes": 587
+    },
+    {
+      "path": "PlayerScriptsLoader.rbxp",
+      "repository_path": "scripts/PlayerScripts/PlayerScriptsLoader.rbxp",
+      "sha256": "ddfa76dddc1c514d1808a808d4157aec1e32fb047aaddba2be573a9a8ea6e38a",
+      "bytes": 412
+    }
+  ],
+  "api_metadata": {
+    "path": "API-Dump.json",
+    "repository_path": "API-Dump.json",
+    "commit": "de521910e9616a0a3add5fad22bef66a9e406e41",
+    "sha256": "0962f777e3085487e368ed019c35bdb07cd02f6659aa7212dc2ad6e24bb41efe",
+    "git_blob_sha1": "f8770f7d3bcf3ae2d1afc65c1ffc52498f772de7",
+    "bytes": 7669358,
+    "purpose": "Enum identities and property descriptors; this dump does not supply constructor values."
+  }
+}

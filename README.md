@@ -1,6 +1,6 @@
 # Rove
 
-A work-in-progress Roblox runtime with a terminal and an optional browser workspace for Luau scripts and a game preview.
+a Roblox runtime i'm working on. run Luau in the terminal or use the browser UI for scripts + a game preview.
 
 ## Start here
 
@@ -18,7 +18,7 @@ Setup creates an empty, private `secrets/roblox-cookie.txt`. Add your account se
 
 Windows and Linux start in the terminal. macOS opens the browser UI. Use `rove.py terminal` for terminal mode on any system; `:quit` leaves the game. Setup is only needed the first time or after updating the source.
 
-**Windows uses a native source build.** Build and offline-test results are available in [GitHub Actions](https://github.com/alexkkork/roblox-client/actions/workflows/portability.yml). Rendering, physics, and game scripts are incomplete, and some games or sessions may fail.
+**Windows uses a native source build.** Build and offline-test results are available in [GitHub Actions](https://github.com/alexkkork/roblox-client/actions/workflows/portability.yml). more Luau functions, GUI layouts and fonts are in. still fixing physics and game scripts, so expect some bugs.
 
 ## Find your way
 

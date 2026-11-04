@@ -1,10 +1,12 @@
 """InvokeServer VM/transport integration using actual compiled Luau coroutines."""
 import collections
 import copy
+import os
 import struct
 import types
 import time
 import unittest
+from unittest import mock
 
 from game_wire import encode_unsigned
 from login_packets import encode_signed
@@ -206,6 +208,49 @@ return true
         self.assertFalse(any(r['job_id']==job['job_id'] for r in result['completed_jobs']))
         good=dict(node=self.node,request_id=request,ok=True,values=[3])
         self.assertEqual(self.complete(host,job,[good])['values'],[3])
+
+    def test_reply_resumes_spawned_caller_before_busy_background_batch(self):
+        with mock.patch.dict(os.environ, {'RCR_LUAU_LARGE_TEST': '1'}):
+            host = self.host()
+        job = self.execute(host, '''task.spawn(function()
+local value=workspace.Remote:InvokeServer("report")
+assert(value=="actual response")
+print("report continuation completed")
+end)''')
+        request = job['remote_server_calls'][0]
+        self.execute(host, '''for i=1,128 do
+task.defer(function()while true do end end)
+end''')
+        response = host.call({'op': 'remote_server_results', 'timeout_ms': 20,
+            'responses': [dict(node=self.node, request_id=request['request_id'],
+                               ok=True, values=['actual response'])]})
+        self.assertTrue(response['ok'], response)
+        self.assertIn('report continuation completed', response['output'])
+        self.assertGreater(response['pending_tasks'], 100)
+        self.assertFalse(response['active_remote_server_requests'])
+
+    def test_response_batch_preserves_fifo_and_gives_ordinary_tasks_turns(self):
+        with mock.patch.dict(os.environ, {'RCR_LUAU_LARGE_TEST': '1'}):
+            host = self.host()
+        job = self.execute(host, '''for i=1,3 do task.spawn(function()
+workspace.Remote:InvokeServer(i)
+print("reply-"..i)
+end) end''')
+        self.assertEqual(len(job['remote_server_calls']), 3)
+        self.execute(host, '''for i=1,8 do task.defer(function()
+while true do print("ordinary turn");task.wait() end
+end) end''')
+        time.sleep(.005)
+        response = host.call({'op': 'remote_server_results', 'timeout_ms': 100,
+            'responses': [dict(node=self.node, request_id=r['request_id'],
+                               ok=True, values=[])
+                          for r in job['remote_server_calls']]})
+        self.assertTrue(response['ok'], response)
+        lines = response['output'].splitlines()
+        positions = [lines.index('reply-'+str(i)) for i in range(1, 4)]
+        self.assertEqual(positions, sorted(positions))
+        for first, second in zip(positions, positions[1:]):
+            self.assertIn('ordinary turn', lines[first+1:second])
 
 
 if __name__=='__main__':unittest.main()

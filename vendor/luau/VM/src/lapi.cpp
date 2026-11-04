@@ -2128,6 +2128,7 @@ void lua_clonefunction(lua_State* L, int idx)
     api_check(L, isLfunction(p));
     Closure* cl = clvalue(p);
     Closure* newcl = luaF_newLclosure(L, cl->nupvalues, L->gt, cl->l.p);
+    newcl->inactive = cl->inactive;
     for (int i = 0; i < cl->nupvalues; ++i)
         setobj2n(L, &newcl->l.uprefs[i], &cl->l.uprefs[i]);
     setclvalue(L, L->top, newcl);

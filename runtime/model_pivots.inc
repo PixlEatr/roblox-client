@@ -152,11 +152,22 @@ int object_pivot_to(lua_State* L) {
         return 0;
     }catch(const std::exception& e){luaL_error(L,"PivotTo: %s",e.what());return 0;}
 }
+int model_get_primary_frame(lua_State* L);
+int model_move_legacy(lua_State* L);
+int model_get_scale(lua_State* L);
+int model_scale_to(lua_State* L);
 bool model_pivot_index(lua_State* L,World& w,Node& n,const std::string& key) {
     if(!pivot_object(w,n))return false;
     if(key=="GetPivot"){lua_pushcfunction(L,object_get_pivot,"GetPivot");return true;}
     if(key=="PivotTo"){lua_pushcfunction(L,object_pivot_to,"PivotTo");return true;}
     if(pivot_model(w,n)) {
+        if(key=="GetScale"){lua_pushcfunction(L,model_get_scale,"GetScale");return true;}
+        if(key=="ScaleTo"){lua_pushcfunction(L,model_scale_to,"ScaleTo");return true;}
+        if(key=="Scale")throw std::runtime_error("Scale is not scriptable; use GetScale and ScaleTo");
+        if(key=="GetPrimaryPartCFrame"){lua_pushcfunction(L,model_get_primary_frame,"GetPrimaryPartCFrame");return true;}
+        if(key=="TranslateBy"||key=="SetPrimaryPartCFrame") {
+            lua_pushboolean(L,key=="SetPrimaryPartCFrame");lua_pushcclosure(L,model_move_legacy,key.c_str(),1);return true;
+        }
         if(key=="WorldPivot"){auto cf=model_world_pivot(w,n);push_frame_value(L,cf.p,cf.r);return true;}
         if(key=="GetBoundingBox"||key=="GetExtentsSize") {
             lua_pushboolean(L,key=="GetExtentsSize");lua_pushcclosure(L,model_get_bounds,key.c_str(),1);return true;

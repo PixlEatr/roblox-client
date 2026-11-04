@@ -31,7 +31,7 @@ local payload=string.char(0,255).."hello"
 fs.makefolder("aliases/nested")
 filesystem.writefile("aliases/nested/data.bin",payload)
 fs.appendfile("aliases/nested/data.bin",string.char(1,0))
-assert(filesystem.readfile("aliases\\nested/./data.bin")==payload..string.char(1,0))
+assert(filesystem.readfile("aliases\\\\nested/./data.bin")==payload..string.char(1,0))
 assert(fs.isfile("aliases/nested/data.bin") and fs.isfolder("aliases/nested"))
 assert(not fs.isfile("aliases/nested") and not fs.isfolder("aliases/nested/data.bin"))
 assert(#fs.listfiles("aliases")==1 and fs.listfiles("aliases")[1]=="aliases/nested")
@@ -40,6 +40,7 @@ for _,path in {"../escape","aliases/../../escape","/absolute","C:\\escape"} do
     assert(not pcall(fs.writefile,path,"no"))
 end
 local before=filesystem.readfile("aliases/nested/data.bin")
+setworkspacequota(128*1024,1024*1024)
 assert(not pcall(fs.writefile,"aliases/nested/data.bin",string.rep("x",128*1024+1)))
 assert(filesystem.readfile("aliases/nested/data.bin")==before)
 fs.delfile("aliases/nested/data.bin")

@@ -92,6 +92,125 @@ return before==nil,stats.ClassName,stats.Parent==game,
         self.assertTrue(result['ok'], result)
         self.assertEqual(result['values'], [True, 'Stats', True, True, True, False])
 
+    def test_encoding_service_base64_uses_buffers(self):
+        result = self.execute('''
+assert(game:FindService("EncodingService")==nil)
+local encoding=game:GetService("EncodingService")
+assert(encoding==game:FindService("EncodingService") and encoding.Parent==game)
+assert(encoding.ClassName=="EncodingService")
+local binary=string.char(0,255,254).."hello"
+local input=buffer.fromstring(binary)
+local encoded=encoding:Base64Encode(input)
+assert(buffer.tostring(encoded)=="AP/+aGVsbG8=" and buffer.tostring(input)==binary)
+assert(buffer.tostring(encoding:Base64Decode(encoded))==binary)
+assert(buffer.len(encoding:Base64Decode(encoding:Base64Encode(buffer.create(0))))==0)
+assert(not pcall(encoding.Base64Encode,encoding,binary))
+assert(not pcall(encoding.Base64Encode,workspace,input))
+assert(not pcall(encoding.Base64Decode,encoding,buffer.fromstring("a?!=")))
+return true
+''')
+        self.assertTrue(result['ok'], result)
+        self.assertEqual(result['values'], [True])
+
+    def test_encoding_service_hashes_match_binary_vectors(self):
+        result = self.execute('''
+local encoding=game:GetService("EncodingService")
+local cases={
+    {Enum.HashAlgorithm.Blake2b,32,
+        "0e5751c026e543b2e8ab2eb06099daa1d1e5df47778f7787faab45cdf12fe3a8",
+        "37ab512cd01adbac3140abde00cbd8f77d5bcfb02f295ca884042cd0d81c0e2f"},
+    {Enum.HashAlgorithm.Blake3,32,
+        "af1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262",
+        "0bc94efd42851bf801345789bf903713ec9c890b8a809d1f5a04024a0a680f4a"},
+    {Enum.HashAlgorithm.Md5,16,
+        "d41d8cd98f00b204e9800998ecf8427e",
+        "136654676b4aed7ed5dffff8ad58ef36"},
+    {Enum.HashAlgorithm.Sha1,20,
+        "da39a3ee5e6b4b0d3255bfef95601890afd80709",
+        "c51b034207816f9c4ba679d1602f3e838dedb377"},
+    {Enum.HashAlgorithm.Sha256,32,
+        "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "a8b2beedb2cb53792d92eb492452bf399e8ba7fa5659c1c916b0ec7410e06cc5"},
+}
+local bytes={}
+for i=0,255 do bytes[i+1]=string.char(i) end
+local payload=string.rep(table.concat(bytes),9)
+local function hex(value)
+    return (value:gsub(".",function(c) return string.format("%02x",string.byte(c)) end))
+end
+for index,case in cases do
+    local algorithm,length,empty,binary=unpack(case)
+    assert(algorithm.Value==index-1 and algorithm.EnumType==Enum.HashAlgorithm)
+    for _,vector in {{"",empty},{payload,binary}} do
+        local input,expected=unpack(vector)
+        local inputBuffer=buffer.fromstring(input)
+        local digest=encoding:ComputeBufferHash(inputBuffer,algorithm)
+        local digestString=encoding:ComputeStringHash(input,algorithm)
+        assert(typeof(digest)=="buffer" and buffer.len(digest)==length)
+        assert(type(digestString)=="string" and #digestString==length)
+        assert(hex(digestString)==expected and buffer.tostring(digest)==digestString)
+        buffer.writeu8(digest,0,(buffer.readu8(digest,0)+1)%256)
+        assert(buffer.tostring(inputBuffer)==input)
+        assert(buffer.tostring(encoding:ComputeBufferHash(inputBuffer,algorithm))==digestString)
+    end
+end
+local sha256=Enum.HashAlgorithm.Sha256
+local input=buffer.fromstring("test")
+assert(not pcall(encoding.ComputeBufferHash,encoding,"test",sha256))
+assert(not pcall(encoding.ComputeStringHash,encoding,input,sha256))
+assert(not pcall(encoding.ComputeStringHash,encoding,123,sha256))
+assert(not pcall(encoding.ComputeStringHash,encoding,"test",Enum.CompressionAlgorithm.Zstd))
+assert(not pcall(encoding.ComputeBufferHash,encoding,input,"Sha256"))
+assert(not pcall(encoding.ComputeBufferHash,workspace,input,sha256))
+return true
+''')
+        self.assertTrue(result['ok'], result)
+        self.assertEqual(result['values'], [True])
+
+    def test_encoding_service_zstd_interoperates_and_checks_frame_sizes(self):
+        import base64
+        import zstandard
+        data = b'Luau\x00fixture\xff' * 64
+        fixture = base64.b64encode(zstandard.ZstdCompressor().compress(data)).decode()
+        unknown = base64.b64encode(
+            zstandard.ZstdCompressor(write_content_size=False).compress(data)).decode()
+        oversized = base64.b64encode(
+            zstandard.ZstdCompressor().compress(b'x' * (32 * 1024 * 1024 + 1))).decode()
+        result = self.execute(f'''
+local fixture=buffer.fromstring(base64.decode("{fixture}"))
+local unknown=buffer.fromstring(base64.decode("{unknown}"))
+local oversized=buffer.fromstring(base64.decode("{oversized}"))
+''' + '''
+local encoding=game:GetService("EncodingService")
+local zstd=Enum.CompressionAlgorithm.Zstd
+assert(zstd.Name=="Zstd" and zstd.Value==0)
+local source=string.rep("Luau"..string.char(0).."fixture"..string.char(255),64)
+assert(encoding:GetDecompressedBufferSize(fixture,zstd)==#source)
+assert(buffer.tostring(encoding:DecompressBuffer(fixture,zstd))==source)
+local raw=buffer.fromstring(source)
+for _,level in {-7,1,22} do
+    local compressed=encoding:CompressBuffer(raw,zstd,level)
+    assert(zstddecompress(buffer.tostring(compressed))==source)
+end
+local empty=encoding:CompressBuffer(buffer.create(0),zstd)
+assert(encoding:GetDecompressedBufferSize(empty,zstd)==0)
+assert(buffer.len(encoding:DecompressBuffer(empty,zstd))==0)
+local invalid=buffer.fromstring("bad frame")
+local truncated=buffer.fromstring(buffer.tostring(fixture):sub(1,-2))
+for _,data in {invalid,unknown,oversized} do
+    assert(encoding:GetDecompressedBufferSize(data,zstd)==nil)
+    assert(not pcall(encoding.DecompressBuffer,encoding,data,zstd))
+end
+assert(not pcall(encoding.DecompressBuffer,encoding,truncated,zstd))
+assert(not pcall(encoding.CompressBuffer,encoding,raw,Enum.Axis.X))
+for _,level in {-8,1.5,23,math.huge} do
+    assert(not pcall(encoding.CompressBuffer,encoding,raw,zstd,level))
+end
+return true
+''')
+        self.assertTrue(result['ok'], result)
+        self.assertEqual(result['values'], [True])
+
     def test_players_queries_return_replicated_service_members_and_identity(self):
         result = self.execute('''
 local players = game:GetService("Players")

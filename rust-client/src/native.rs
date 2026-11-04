@@ -16,7 +16,7 @@ unsafe extern "C" {
         memory_mb: i32,
         output: *mut *mut c_char,
         output_len: *mut usize,
-        codec: unsafe extern "C" fn(u32, *const u8, usize, *mut *mut u8, *mut usize) -> i32,
+        codec: unsafe extern "C" fn(u32, *const u8, usize, *mut *mut u8, *mut usize, i32) -> i32,
         release: unsafe extern "C" fn(*mut u8, usize),
     ) -> i32;
     fn local_luau_free(output: *mut c_char);
@@ -26,7 +26,7 @@ unsafe extern "C" {
         length: usize,
         output: *mut *mut c_char,
         output_len: *mut usize,
-        codec: unsafe extern "C" fn(u32, *const u8, usize, *mut *mut u8, *mut usize) -> i32,
+        codec: unsafe extern "C" fn(u32, *const u8, usize, *mut *mut u8, *mut usize, i32) -> i32,
         release: unsafe extern "C" fn(*mut u8, usize),
     ) -> i32;
     fn local_luau_session_close(handle: *mut c_void);

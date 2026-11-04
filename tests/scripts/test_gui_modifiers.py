@@ -152,7 +152,7 @@ return f.Scale.Scale,client.propertyOrigin(f.Scale,"Scale"),f.SizeConstraint==En
     def test_content_layout_blocks_children_but_not_its_container_box(self):
         self.assertEqual(self.execute('''
 local f=screen.Frame
-Instance.new("UIListLayout",f)
+Instance.new("UITableLayout",f)
 local ok,err=pcall(function()return f.Child.AbsoluteSize end)
 return f.AbsoluteSize.X,f.AbsoluteSize.Y,ok,string.find(err,"content layout",1,true)~=nil
 '''), [500, 360, False, True])

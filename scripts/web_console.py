@@ -3,6 +3,7 @@
 import hmac
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
+import math
 from pathlib import Path
 import secrets
 import socket
@@ -39,6 +40,11 @@ class WebConsole:
         self.frame_cache = None
         self.frame_time = 0
         self.frame_identity=None
+        self.frame_pending=None
+        self.frame_error=None
+        self.frame_retry=0
+        self.render_closed=False
+        self.frame_serial=0
         self.image_cache={}
         from render_assets import RenderAssets
         self.render_assets = RenderAssets()
@@ -51,24 +57,62 @@ class WebConsole:
         self.thread = None
 
     def render_frame(self):
-        # Browser and desktop share one bounded sample, never parallel VM reads.
         with self.render_lock:
             now=time.monotonic()
             identity=self.runtime_identity()
             if identity!=self.frame_identity:
                 self.frame_cache=None
                 self.frame_identity=identity
+                self.frame_error=None
+                self.frame_retry=0
                 self.render_assets.observe({})
+            if self.render_closed or identity is None:
+                return {'ok':False,'error':'The client is disconnected.'}
             if self.frame_cache is not None and now-self.frame_time<.1:
                 return self.frame_cache
-            result=send_request(self.socket_path, {'op':'render'})
-            if result.get('ok'):
-                self.frame_cache=result
-                self.frame_time=now
-                self.render_assets.observe(result.get('frame', {}))
-            else:
-                self.frame_cache=None
+            if self.frame_pending is None and now>=self.frame_retry:
+                token=object()
+                self.frame_pending=token
+                threading.Thread(target=self._read_frame,args=(identity,token),daemon=True).start()
+            result={'ok':True,'pending':True}
+            if self.frame_cache is not None:
+                result.update(frame=self.frame_cache['frame'],sample=self.frame_serial,
+                              age_ms=round((now-self.frame_time)*1000))
+            if self.frame_error:
+                result['message']=self.frame_error
             return result
+
+    def _read_frame(self,identity,token):
+        try:
+            result=send_request(self.socket_path,{'op':'render'},timeout=30)
+            if not isinstance(result,dict):
+                raise ValueError('The runtime returned an invalid game frame.')
+            if not result.get('ok') or not isinstance(result.get('frame'),dict):
+                raise ValueError(result.get('error') or 'The runtime did not return a game frame.')
+            error=None
+        except TimeoutError:
+            result=None;error='The client is busy. Waiting for the next game frame…'
+        except (OSError,ValueError,RuntimeError) as failure:
+            result=None;error=str(failure) or 'The game frame is temporarily unavailable.'
+        with self.render_lock:
+            if self.frame_pending is not token:return
+            self.frame_pending=None
+            if self.render_closed or self.frame_identity!=identity or self.runtime_identity()!=identity:return
+            self.frame_error=error
+            if result is not None:
+                self.frame_serial+=1
+                self.frame_cache={**result,'sample':self.frame_serial,'age_ms':0}
+                self.frame_time=time.monotonic()
+                self.frame_retry=0
+                self.render_assets.observe(result['frame'])
+            else:
+                self.frame_retry=time.monotonic()+1
+
+    def stop_rendering(self):
+        with self.render_lock:
+            self.render_closed=True
+            self.frame_pending=None
+            self.frame_cache=None
 
     def start(self, *, open_browser=True):
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
@@ -79,6 +123,7 @@ class WebConsole:
 
     def close(self):
         if not self.owns_server:return
+        self.stop_rendering()
         if self.thread is not None:
             self.server.shutdown()
             self.thread.join(timeout=2)
@@ -89,6 +134,8 @@ class WebConsole:
         try:
             from local_transport import probe
             probe(self.socket_path)
+            return True
+        except (TimeoutError,BlockingIOError):
             return True
         except (OSError, ValueError):
             return False
@@ -121,8 +168,10 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header('Referrer-Policy', 'no-referrer')
         self.send_header('Cross-Origin-Resource-Policy', 'same-origin')
         self.send_header('Content-Security-Policy', "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' https://*.rbxcdn.com; connect-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'")
-        self.end_headers()
-        self.wfile.write(body)
+        try:
+            self.end_headers()
+            self.wfile.write(body)
+        except (BrokenPipeError,ConnectionResetError):pass
 
     def valid_host(self):
         return self.headers.get('Host') in (f'127.0.0.1:{self.console.port}', f'localhost:{self.console.port}')
@@ -194,8 +243,10 @@ class Handler(BaseHTTPRequestHandler):
         try:
             request = json.loads(self.rfile.read(length))
             if self.path == '/api/render-asset':
-                if not isinstance(request,dict) or set(request) != {'kind','reference'}:
+                if not isinstance(request,dict) or set(request) != ({'kind','reference','weight','style'} if request.get('kind')=='font' else {'kind','reference'}):
                     raise ValueError('Invalid visual asset request')
+                if request['kind']=='font':
+                    return self.reply(200,self.console.render_assets.get('font',request['reference'],weight=request['weight'],style=request['style']))
                 return self.reply(200,self.console.render_assets.get(request['kind'],request['reference']))
             if self.path in ('/api/render','/api/leave','/api/gui','/api/move'):
                 if not isinstance(request,dict):
@@ -204,13 +255,45 @@ class Handler(BaseHTTPRequestHandler):
                     raise ValueError('Unexpected session request fields')
                 if self.path=='/api/gui':
                     kind=request.get('kind')
-                    if (set(request)!=({'id','kind','text'} if kind=='text' else {'id','kind'})
-                            or kind not in ('click','text') or not isinstance(request.get('id'),str)
-                            or len(request['id'])>128 or (kind=='text' and
+                    fields=({'id','kind','text'} if kind=='text' else
+                            {'id','kind','token'} if kind=='image_loaded' else
+                            {'id','kind','revision','text'} if kind=='text_edit' else
+                            {'id','kind','revision'} if kind=='text_select' else
+                            {'id','kind','revision','submitted'} if kind=='text_blur' else
+                            {'id','kind','delta','position','steps'} if kind=='wheel' else
+                            {'id','kind','delta'} if kind=='scroll' else {'id','kind'})
+                    selection=kind=='text_select' or (kind=='text_edit' and 'editorRevision' in request)
+                    if selection:
+                        fields|={'editorRevision','cursor','anchor'}
+                    if (set(request)!=fields
+                            or kind not in ('click','image_loaded','text','text_focus','text_edit','text_select','text_blur','pointer_down','pointer_up','scroll','wheel') or not isinstance(request.get('id'),str)
+                            or len(request['id'])>128 or (kind in ('text','text_edit') and
                             (not isinstance(request.get('text'),str) or len(request['text'].encode())>4096))):
                         raise ValueError('Invalid GUI action')
+                    if kind=='image_loaded':
+                        token=request['token']
+                        if not isinstance(token,str) or len(token)!=32 or any(c not in '0123456789abcdef' for c in token):
+                            raise ValueError('Invalid image load receipt')
+                    if kind in ('text_edit','text_select','text_blur') and (type(request['revision']) is not int
+                            or not 0<=request['revision']<=2**53-1
+                            or (kind=='text_blur' and type(request['submitted']) is not bool)):
+                        raise ValueError('Invalid TextBox interaction')
+                    if selection and (type(request['editorRevision']) is not int or not 0<=request['editorRevision']<=2**53-1
+                            or type(request['cursor']) is not int or not 1<=request['cursor']<=4097
+                            or type(request['anchor']) is not int or not -1<=request['anchor']<=4097 or request['anchor']==0):
+                        raise ValueError('Invalid TextBox selection')
+                    if kind in ('scroll','wheel'):
+                        delta=request.get('delta')
+                        if (not isinstance(delta,list) or len(delta)!=2 or
+                                any(type(v) not in (int,float) or not math.isfinite(v) or abs(v)>4096 for v in delta)):
+                            raise ValueError('Invalid GUI scroll delta')
+                    if kind=='wheel':
+                        position=request.get('position');steps=request.get('steps')
+                        if (not isinstance(position,list) or len(position)!=2 or
+                                any(type(v) not in (int,float) or not math.isfinite(v) or abs(v)>32768 for v in position) or
+                                type(steps) is not int or not -128<=steps<=128):
+                            raise ValueError('Invalid GUI wheel input')
                 if self.path=='/api/move':
-                    import math
                     vector=request.get('direction')
                     if (set(request)!={'client','sequence','direction'} or not isinstance(vector,list) or len(vector)!=3
                             or any(type(v) not in (int,float) or not math.isfinite(v) or abs(v)>1 for v in vector)

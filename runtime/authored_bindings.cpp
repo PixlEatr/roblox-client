@@ -12,18 +12,29 @@
 #include "closure_bindings.hpp"
 #include <lualib.h>
 #include <cmath>
+#include <cstring>
+#include <cstdint>
+#include <iterator>
+#include <new>
 #include <stdexcept>
 #include <string>
 #include <initializer_list>
 #include <utility>
 #include "integer_vectors.inc"
 #include "ray_bindings.inc"
+#include "direction_sets.inc"
+#include "font_values.inc"
+#include "path_waypoint.inc"
 
 namespace {
 using Json=nlohmann::json;
 char constructors_key;
 struct Type {const char* meta;const char* tag;const char* library;};
 const Type types[]={
+    {"LocalLuau.PathWaypoint","$path_waypoint","PathWaypoint"},
+    {"LocalLuau.Font","$font","Font"},
+    {"LocalLuau.Axes","$axes","Axes"},
+    {"LocalLuau.Faces","$faces","Faces"},
     {"LocalLuau.Vector2int16","$vector2int16","Vector2int16"},
     {"LocalLuau.Vector3int16","$vector3int16","Vector3int16"},
     {"LocalLuau.Region3int16","$region3int16","Region3int16"},
@@ -67,7 +78,11 @@ void component(lua_State* L,const Json& value) {
 }
 }
 void install_authored_bindings(lua_State* L) {
+    world_bindings::install_geometry_value_enums(L);
     integer_values::install(L);
+    direction_sets::install(L);
+    font_values::install(L);
+    path_waypoints::install(L);
     install_color3_bindings(L);install_vector2_bindings(L);install_udim_bindings(L);
     install_range_bindings(L);install_brickcolor_bindings(L);install_datetime_bindings(L);
     install_sequence_bindings(L);install_closure_bindings(L);install_ray_bindings(L);
@@ -77,11 +92,22 @@ void install_authored_bindings(lua_State* L) {
     lua_pushlightuserdata(L,&constructors_key);lua_pushvalue(L,-2);lua_rawset(L,LUA_REGISTRYINDEX);lua_pop(L,1);
 }
 bool is_authored_value(lua_State* L,int index){return world_bindings::is_tween_info(L,index)||spatial_values::is_spatial_value(L,index)||is_physical_properties(L,index)||identify(L,index)!=nullptr;}
+bool read_authored_ray(lua_State* L,int index,std::array<double,3>& origin,
+                       std::array<double,3>& direction) {
+    const auto* type=identify(L,index);
+    if(!type||std::strcmp(type->tag,"$ray")!=0)return false;
+    const auto* ray=checked_ray(L,index);
+    for(int i=0;i<3;++i){origin[i]=ray->origin[i];direction[i]=ray->direction[i];}
+    return true;
+}
 bool capture_authored_value(lua_State* L,int index,Json& value) {
     if(world_bindings::capture_tween_info(L,index,value)||spatial_values::capture_spatial_value(L,index,value)||capture_physical_properties(L,index,value))return true;
     index=lua_absindex(L,index);const auto* type=identify(L,index);if(!type)return false;
     const std::string tag=type->tag;Json data=Json::array();
-    if(tag=="$ray") {
+    if(tag=="$path_waypoint"){value=path_waypoints::encode(*path_waypoints::read(L,index));return true;}
+    if(tag=="$font"){value=font_values::encode(*font_values::read(L,index));return true;}
+    else if(tag=="$axes"||tag=="$faces")data=direction_sets::read(L,index)->mask;
+    else if(tag=="$ray") {
         const auto* ray=checked_ray(L,index);
         for(const float* vector:{ray->origin,ray->direction}) {
             Json components=Json::array();for(int i=0;i<3;++i)components.push_back(number(vector[i]));
@@ -113,6 +139,13 @@ bool push_authored_value(lua_State* L,const Json& value) {
     const Type* type=nullptr;for(const auto& candidate:types)if(value.contains(candidate.tag)){type=&candidate;break;}
     if(!type)return false;
     const auto& data=value.at(type->tag);const std::string tag=type->tag;
+    if(tag=="$path_waypoint"){path_waypoints::decode(L,data);return true;}
+    if(tag=="$font"){font_values::push(L,font_values::decode(data));return true;}
+    if(tag=="$axes"||tag=="$faces") {
+        const int maximum=tag=="$axes"?7:63;
+        if(!data.is_number_integer()||data<0||data>maximum)throw std::runtime_error("invalid direction-set mask");
+        direction_sets::push(L,data.get<unsigned>(),tag=="$axes");return true;
+    }
     if(tag=="$color3"&&data.is_array()&&data.size()==3){push_color3(L,data[0].get<double>(),data[1].get<double>(),data[2].get<double>());return true;}
     constructor(L,*type);int count=0;
     if(tag=="$ray") {
@@ -142,4 +175,20 @@ bool push_authored_value(lua_State* L,const Json& value) {
     // Constructors are cached native closures, not user-overridable globals.
     if(lua_pcall(L,count,1,0)!=LUA_OK){lua_pop(L,1);throw std::runtime_error("unsupported or invalid datatype value");}
     return true;
+}
+
+nlohmann::json authored_font_from_enum(int value) {
+    if(value<0||value>=int(std::size(font_values::legacy)))throw std::runtime_error("Font enum has no constructible family");
+    const auto& font=font_values::legacy[value];
+    return font_values::encode({font_values::family_name(font.family),font.weight,font.style});
+}
+int authored_font_to_enum(const nlohmann::json& value) {
+    if(!value.is_object()||value.size()!=1||!value.contains("$font"))throw std::runtime_error("Font value required");
+    const auto font=font_values::decode(value["$font"]);
+    // Prefer current Arimo aliases to the removed Arial enum names.
+    for(int i=int(std::size(font_values::legacy))-1;i>=0;--i) {
+        const auto& entry=font_values::legacy[i];
+        if(font.family==font_values::family_name(entry.family)&&font.weight==entry.weight&&font.style==entry.style)return i;
+    }
+    return 100;
 }

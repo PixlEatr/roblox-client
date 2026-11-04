@@ -4,6 +4,7 @@ FileMesh layout references: MaximumADHD's FileMesh specification and
 https://github.com/PrintedScript/RBXMesh/blob/main/RBXMesh.py.
 This renderer consumes rigid visual geometry, not skinning or FACS animation.
 """
+import os
 import base64
 import gzip
 import io
@@ -17,11 +18,13 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
 from mesh_asset_decoder import MAX_INPUT, MeshAssetError, _VECTOR, decode_filemesh, fetch_mesh_asset
+from render_fonts import RenderFonts
 
 
 def asset_reference(value):
     if not isinstance(value, str) or len(value) > 512:
         raise ValueError('Invalid visual asset reference')
+    value=value.strip()
     if re.fullmatch(r'rbxasset://(?:textures|avatar)/[A-Za-z0-9_./-]+\.(?:png|jpg|jpeg|mesh)', value) and '..' not in value:
         return value
     match = re.fullmatch(r'rbxassetid://([0-9]{1,20})', value, re.I)
@@ -37,7 +40,7 @@ def asset_reference(value):
 
 def fetch_visual_asset(reference, *, max_bytes=MAX_INPUT):
     if reference.startswith('rbxasset://'):
-        root = Path('/Applications/Roblox.app/Contents/Resources/content').resolve()
+        root = Path(os.environ.get('ROBLOX_CONTENT_DIR', '/Applications/Roblox.app/Contents/Resources/content')).expanduser().resolve()
         target = (root / reference.removeprefix('rbxasset://')).resolve()
         if not target.is_relative_to(root) or not target.is_file() or not 0 < target.stat().st_size <= max_bytes:
             raise ValueError('Installed Roblox visual asset is unavailable')
@@ -128,8 +131,10 @@ class RenderAssets:
         self.allowed = set()
         self.lock = threading.Lock()
         self.workers = threading.BoundedSemaphore(4)
+        self.fonts=RenderFonts(lambda reference,**kwargs:self.fetcher(reference,**kwargs))
 
     def observe(self, frame):
+        self.fonts.observe(frame)
         allowed = set()
         def add(kind, ref):
             try:
@@ -139,6 +144,8 @@ class RenderAssets:
         for part in frame.get('parts', [])[:1800]:
             mesh = part.get('mesh') or {}
             add('mesh', mesh.get('id')); add('texture', mesh.get('texture'))
+            for field in ('colorMap','normalMap','roughnessMap','metalnessMap'):
+                add('texture',(part.get('appearance') or {}).get(field))
             for decal in part.get('decals', [])[:12]:
                 add('texture', decal.get('texture'))
             for ref in (part.get('clothing') or {}).values():
@@ -146,7 +153,9 @@ class RenderAssets:
         with self.lock:
             self.allowed = allowed
 
-    def get(self, kind, reference):
+    def get(self, kind, reference, *, weight=None, style=None):
+        if kind=='font':return self.fonts.get(reference,weight,style)
+        if weight is not None or style is not None:raise ValueError('Unexpected visual asset font options')
         if kind not in ('mesh', 'texture'):
             raise ValueError('Invalid visual asset kind')
         key = (kind, asset_reference(reference))

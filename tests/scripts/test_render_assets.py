@@ -74,7 +74,15 @@ class RenderAssetTests(unittest.TestCase):
         for value in ('file:///etc/passwd','https://evil.test/asset?id=7','http://127.0.0.1/asset?id=7','rbxasset://avatar/../secrets/cookie.png','rbxasset://avatar/file.lua',None):
             with self.assertRaises(ValueError):asset_reference(value)
         self.assertEqual(asset_reference('http://www.roblox.com/asset/?id=007'),'rbxassetid://7')
+        self.assertEqual(asset_reference(' http://www.roblox.com/asset/?id=007   '),'rbxassetid://7')
         self.assertEqual(asset_reference('rbxasset://textures/face.png'),'rbxasset://textures/face.png')
+
+    def test_surface_maps_are_scoped_without_allowing_unobserved_assets(self):
+        store=RenderAssets(Mock())
+        store.observe({'parts':[{'appearance':{field:f'rbxassetid://{i}' for i,field in enumerate(
+            ('colorMap','normalMap','roughnessMap','metalnessMap'),10)}}]})
+        for i in range(10,14):self.assertIn(('texture',f'rbxassetid://{i}'),store.allowed)
+        with self.assertRaises(ValueError):store.get('texture','rbxassetid://99')
 
 
 class RenderProjectionTests(unittest.TestCase):
@@ -90,7 +98,8 @@ class RenderProjectionTests(unittest.TestCase):
             node('mesh','SpecialMesh','handle',{'MeshId':'rbxassetid://101','TextureId':'rbxassetid://102','MeshType':5,'Scale':{'$vector3':[2,3,4]},'Offset':{'$vector3':[0,.5,0]}}),
             node('decal','Decal','torso',{'Texture':'rbxasset://textures/face.png','Face':5}),
             node('meshpart','MeshPart','1:6',dict(base,MeshContent='rbxassetid://103',TextureContent='rbxassetid://104')),
-            node('lighting','Lighting',None,{'ClockTime':17,'Brightness':3,'GlobalShadows':True,'FogEnd':500})]
+            node('surface','SurfaceAppearance','meshpart',{'ColorMap':'rbxassetid://105','NormalMap':'rbxassetid://106','RoughnessMap':'rbxassetid://107','MetalnessMap':'rbxassetid://108','Color':{'$color3':[.5,.7,1]},'AlphaMode':1}),
+            node('lighting','Lighting',None,{'ClockTime':17,'Brightness':3,'GlobalShadows':True,'FogEnd':500,'EnvironmentDiffuseScale':.4,'EnvironmentSpecularScale':.8})]
         snapshot['services']['Lighting']='lighting'
         host=PersistentLuauHost(snapshot);self.addCleanup(host.close)
         frame=host.call({'op':'render'})['frame'];parts={p['id']:p for p in frame['parts']}
@@ -102,8 +111,11 @@ class RenderProjectionTests(unittest.TestCase):
         self.assertTrue(parts['handle']['own']);self.assertEqual(parts['handle']['mesh']['scale']['$vector3'],[2,3,4])
         self.assertEqual(parts['meshpart']['mesh']['id'],'rbxassetid://103')
         self.assertEqual(parts['meshpart']['mesh']['texture'],'rbxassetid://104')
+        self.assertEqual(parts['meshpart']['appearance'],{'colorMap':'rbxassetid://105','normalMap':'rbxassetid://106','roughnessMap':'rbxassetid://107','metalnessMap':'rbxassetid://108','color':{'$color3':[.5,.7,1]},'alphaMode':1})
         self.assertEqual(parts['torso']['decals'][0]['texture'],'rbxasset://textures/face.png')
         self.assertEqual(frame['lighting']['ClockTime'],17)
+        self.assertEqual(frame['lighting']['EnvironmentDiffuseScale'],.4)
+        self.assertEqual(frame['lighting']['EnvironmentSpecularScale'],.8)
         self.assertEqual(host.call({'op':'render'})['frame'],frame)
         self.assertNotIn('script_sources',frame)
 

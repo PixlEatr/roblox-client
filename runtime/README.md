@@ -11,6 +11,8 @@ Preflight checks the dependencies offline. `rove.py setup` builds both the C++ a
 
 `runtime/build/luau-host` handles individual jobs. `rust-client/target/release/headless-luau` keeps the world and scripts running. edits are local unless a supported replication path sends them.
 
+new bits include more engine bindings, GUI layouts, fonts and input handling. still a work in progress.
+
 extra tools:
 
 - `python3.12 scripts/build_desktop.py` builds `~/Applications/Rove.app` on Apple Silicon. keep the repo where it is after building.

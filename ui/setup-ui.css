@@ -1,0 +1,12 @@
+#setup-dialog{width:min(540px,calc(100vw - 32px));max-height:calc(100dvh - 40px);box-sizing:border-box;overflow:auto;padding:34px;border:1px solid #444954;border-radius:22px;background:#22252b;color:#f4f5f7;box-shadow:0 24px 90px #0008}
+#setup-dialog::backdrop{background:#0e1019bb;backdrop-filter:blur(7px)}
+.setup-open{background:#343943;border:1px solid #525967;border-radius:8px;padding:8px 12px;color:#fff;font:inherit;font-size:13px}
+.setup-brand{display:flex;align-items:center;gap:10px;font-weight:800;font-size:27px;margin-bottom:22px;color:#b5d5ff}.setup-brand span{font-size:12px;letter-spacing:3px;color:#c7cbd4}
+#setup-title{font-size:27px;line-height:1.2;margin:0 22px 10px 0}.setup-intro{color:#b8c0ce;line-height:1.5;margin:0 0 22px}
+.setup-section{border-top:1px solid #424752;padding:20px 0}.setup-section h3{font-size:16px;margin:0 0 14px}.setup-section-title{display:flex;justify-content:space-between;align-items:baseline}.setup-section-title>span{font-size:12px;color:#aeb8c8}
+#setup-checks{list-style:none;margin:0;padding:0;display:grid;grid-template-columns:1fr 1fr;gap:10px;font-size:12px;color:#d0d5df}#setup-checks li{display:flex;gap:8px;align-items:center}.setup-ok{color:#83d7ae}.setup-required{color:#ffcc83}
+#setup-build{margin-top:15px;padding:14px;background:#353129;border-radius:10px;font-size:13px}#setup-build p{margin:0 0 8px}#setup-build strong{display:block;margin-bottom:9px;overflow-wrap:anywhere}
+.setup-small{color:#b3bdcc;font-size:12px;line-height:1.6;margin:10px 0 14px}#setup-account-status{font-size:13px;color:#c7ceda;margin:0 0 14px;line-height:1.5}
+#setup-account-form label{display:block;font-size:12px;font-weight:600;margin-bottom:8px}#setup-session{box-sizing:border-box;width:100%;min-height:45px;border:1px solid #626c7d;border-radius:9px;background:#191c22;color:#fff;padding:11px;font:inherit;font-size:13px}#setup-session:focus-visible{outline:2px solid #a0c8ff;outline-offset:3px}
+#setup-connect{min-height:42px;width:100%}.setup-footer{display:flex;gap:12px;justify-content:space-between;padding-top:8px}.setup-footer button{min-height:43px}#setup-status:empty{display:none}#setup-status{font-size:13px;line-height:1.5;color:#9edbb9;margin:0 0 16px}.setup-error{color:#ffbcad!important}#setup-dialog [hidden]{display:none!important}#setup-dialog button:disabled{opacity:.45;cursor:not-allowed}
+@media(max-width:520px){#setup-dialog{padding:25px}#setup-checks{grid-template-columns:1fr}.setup-footer{flex-wrap:wrap}.setup-footer button{flex:1}}

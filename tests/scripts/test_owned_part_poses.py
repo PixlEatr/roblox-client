@@ -125,6 +125,56 @@ class OwnedPartPoseTests(unittest.TestCase):
         self.assertEqual(list(q.pending),[key])
         self.assertEqual(q.report()['rejected']['ownership_not_current_at_write'],100)
 
+    def test_cached_topology_keeps_new_rigid_edges_and_character_changes(self):
+        world,key=fixture();q=OwnedPartPoses()
+        q.observe(world,[mutation(key)],world.revision)
+        self.assertEqual(q.prepare(world)[1],[key])
+        world.schema['classes'].append({'name':'WeldConstraint','properties':[]})
+        joint=(1,51)
+        world.instances[joint]={'class':len(world.schema['classes'])-1,
+                                'properties':{'Part0':key,'Part1':(1,4)}}
+        world.touch(joint,created=True)
+        self.assertEqual(q.prepare(world),([],[]))
+        del world.instances[joint];world.touch(joint,deleted=True)
+        q.observe(world,[mutation(key)],world.revision)
+        self.assertEqual(q.prepare(world)[1],[key])
+        world.instances[(1,2)]['properties']['Character']=key
+        world.touch((1,2),['Character'])
+        self.assertEqual(q.prepare(world),([],[]))
+        self.assertEqual(q.report()['rejected']['character_pose_excluded'],1)
+
+    def test_topology_cache_reuses_pose_traffic_but_refreshes_after_journal_gap(self):
+        import collections
+        world,key=fixture();q=OwnedPartPoses()
+        q.observe(world,[mutation(key)],world.revision)
+        self.assertEqual(q.prepare(world)[1],[key])
+        connected=q._topology_connected
+        world.touch(key,['Color'])
+        self.assertEqual(q.prepare(world)[1],[key])
+        self.assertIs(q._topology_connected,connected)
+        world.actions=collections.deque(world.actions,maxlen=1)
+        world.schema['classes'].append({'name':'WeldConstraint','properties':[]})
+        joint=(1,51)
+        world.instances[joint]={'class':len(world.schema['classes'])-1,
+                                'properties':{'Part0':key,'Part1':(1,4)}}
+        world.touch(joint,created=True)
+        world.touch(key,['Color'])
+        self.assertEqual(q.prepare(world),([],[]))
+        self.assertIsNot(q._topology_connected,connected)
+
+    def test_cached_topology_rechecks_existing_joint_endpoints(self):
+        world,key=fixture();q=OwnedPartPoses()
+        world.schema['classes'].append({'name':'WeldConstraint','properties':[]})
+        joint=(1,51)
+        world.instances[joint]={'class':len(world.schema['classes'])-1,
+                                'properties':{'Part0':(1,100),'Part1':(1,4)}}
+        world.touch(joint,created=True)
+        q.observe(world,[mutation(key)],world.revision)
+        self.assertEqual(q.prepare(world)[1],[key])
+        world.instances[joint]['properties']['Part0']=key
+        world.touch(joint,['Part0'])
+        self.assertEqual(q.prepare(world),([],[]))
+
     def test_single_packet_sequence_contains_character_and_authored_part(self):
         world,key=fixture();q=OwnedPartPoses();q.observe(world,[mutation(key)],world.revision)
         driver=LiveCharacterPhysics(experimental_enabled=True,prediction=PredictionStub())

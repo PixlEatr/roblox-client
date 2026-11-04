@@ -37,9 +37,12 @@ struct Node {
     bool collection_tags_known = false;
     bool destroyed = false;
     bool server_owned = true;
+    bool constructor_defaults_known = false;
     Json revisions = Json::object();
     Json script_code;
     std::string script_origin;
+    std::string image_load_token;
+    bool image_loaded=false;
 };
 
 struct Signal {
@@ -57,6 +60,7 @@ struct Connection {
     bool auto_disconnected=false;
     bool manually_disconnected=false;
     std::string owner;
+    int identity=8;
 };
 struct PendingEvent {
     Connection* connection=nullptr;
@@ -81,15 +85,24 @@ struct ChatWaiter {
     std::chrono::steady_clock::time_point deadline;
     bool universe=false;
 };
-struct BindableCallback {int reference=LUA_NOREF;std::string owner;};
+struct TextServiceWaiter {
+    lua_State* thread=nullptr;
+    int reference=LUA_NOREF;
+    uint64_t request=0;
+    std::string key,kind;
+    std::chrono::steady_clock::time_point deadline;
+};
+struct BindableCallback {int reference=LUA_NOREF;std::string owner;int identity=8;};
 struct BindableInvocation {
     lua_State* caller=nullptr;
     lua_State* callee=nullptr;
     int caller_ref=LUA_NOREF,arguments_ref=LUA_NOREF,callback_ref=LUA_NOREF,count=0;
     std::string node,owner;
+    int identity=8;
     bool cancelled=false;
 };
 struct RemoteClientInvocation {
+    int identity=8;
     std::string node,owner,error;
     int32_t request=0;
     Json arguments=Json::array();
@@ -105,6 +118,11 @@ struct RemoteServerWaiter {
 };
 
 struct World {
+    std::vector<TextServiceWaiter> text_service_waiters;
+    Json text_service_requests=Json::array();
+    uint64_t next_text_service_request=1;
+    std::unordered_map<std::string,Json> text_service_cache;
+    size_t text_service_cache_bytes=0;
     // Optional local diagnostics, bounded independently of script activity.
     // Values are never retained and observations do not imply a current wait.
     bool trace_attribute_reads = false;
@@ -128,9 +146,15 @@ struct World {
     ContextActionState context_actions;
     Json display = {{"size",{0,0}},{"device_insets",{0,0,0,0}},{"core_insets",{0,0,0,0}}};
     std::unordered_map<std::string,Json> display_watches;
+    std::unordered_set<std::string> active_scroll_layouts;
+    // Stable list-layout tie breaking tracks insertion into a parent, not
+    // global creation order or unordered-map iteration order.
+    uint64_t next_gui_parent_order=1;
+    std::unordered_map<std::string,uint64_t> gui_parent_order;
     Json viewport = Json::object();
     std::unordered_map<std::string, Json> camera_viewports;
     std::unordered_map<std::string, Json> pivot_caches;
+    std::unordered_map<std::string, Json> model_scale_caches;
     std::unordered_map<std::string, Json> attachment_watches;
     std::unordered_map<std::string, Json> joint_active_watches;
     std::unordered_map<std::string, Json> assembly_root_watches;
@@ -181,6 +205,14 @@ struct World {
     SourceScheduler* scheduler=nullptr;
     std::unordered_map<std::string,std::unique_ptr<Signal>> signals;
     std::vector<std::unique_ptr<Connection>> connections;
+    std::string gui_pointer_target;
+    std::string gui_pointer_input;
+    std::string focused_textbox;
+    std::string overlay_root;
+    uint64_t text_focus_revision=0;
+    uint64_t text_editor_revision=0;
+    int text_cursor=-1;
+    int text_selection=-1;
     std::unordered_map<Signal*,std::vector<SignalWaiter>> waiters;
     std::deque<PendingEvent> events;
     bool event_overflow=false;
@@ -189,6 +221,8 @@ struct World {
     bool player_membership_events_observed=false;
     std::vector<int> event_argument_refs;
     Json class_events = Json::object();
+    Json class_event_signatures = Json::object();
+    Json class_property_types = Json::object();
     std::unordered_set<std::string> locally_destroyed;
     size_t server_actions = 0;
     size_t server_events = 0;
@@ -213,6 +247,9 @@ struct World {
     std::vector<RemoteServerWaiter> remote_server_waiters;
     Json remote_server_calls=Json::array();
     size_t remote_server_call_bytes=0;
+    // Opt-in local-only caller trace for InvokeServer. Never part of wire calls.
+    bool trace_remote_calls=false;
+    Json remote_call_diagnostics=Json::array();
 };
 
 // Parses a bounded version-1 server snapshot. Missing properties stay unknown.
@@ -223,6 +260,10 @@ int push_translation_cframe(lua_State* state, double x, double y, double z);
 bool is_tween_info(lua_State* state, int index);
 bool capture_tween_info(lua_State* state, int index, Json& value);
 bool push_tween_info_json(lua_State* state, const Json& value);
+bool capture_geometry_enum_item(lua_State* state, int index, Json& value);
+bool push_geometry_enum_item(lua_State* state, const char* type, int value);
+bool read_geometry_enum_item(lua_State* state, int index, const char* type, int& value);
+void install_geometry_value_enums(lua_State* state);
 
 // Installs a local read/write simulation over the snapshot in a fresh Luau VM.
 // Mutations are retained in World::mutations and are never sent to a server.
@@ -238,9 +279,12 @@ void update_snapshot(lua_State* from,World& world,const std::string& text);
 // Apply a validated local engine pose to the local Character overlay only.
 // This never changes received node properties, replication sequence, or mutations.
 Json apply_engine_poses(World& world,const Json& poses);
+Json apply_engine_owned_parts(World& world,const Json& updates);
 void complete_chat(lua_State* from,World& world,const Json& responses);
+void complete_text_service(lua_State* from,World& world,const Json& responses);
 void complete_remote_server(lua_State* from,World& world,const Json& responses);
 void push_instance(lua_State* L,World& world,const std::string& id);
+std::string instance_display_name(World& world,const std::string& id);
 Json script_nodes(World& world);
 // Read-only bounded projection for local browser/native display surfaces.
 Json render_snapshot(World& world);

@@ -128,16 +128,15 @@ s.Parent=nil;return s.AbsoluteSize.X,s.AbsoluteSize.Y
         self.assertTrue(result['ok'])
         self.assertEqual(self.execute(host, 'return game:GetService("Players").LocalPlayer.Gui.Screen.AbsoluteSize.X'), [980])
 
-    def test_unsupported_layout_dependencies_fail_explicitly(self):
+    def test_automatic_layout_accepts_scale_content_with_known_visibility(self):
         s = layout_snapshot()
         s['nodes'][-2]['properties']['AutomaticSize'] = 1
-        # Reach the unsupported scale-content path with known visibility.
-        # Automatic layout now requires this evidence before sizing children.
+        # The authored size remains the minimum when scaled children fit.
         s['nodes'][-1]['properties']['Visible'] = True
         self.assertEqual(self.execute(self.host(s), '''
-local ok,err=pcall(function()return game:GetService("Players").LocalPlayer.Gui.Screen.Frame.AbsoluteSize end)
-return ok,string.find(err,"automatic GUI sizing",1,true)~=nil
-'''), [False, True])
+local f=game:GetService("Players").LocalPlayer.Gui.Screen.Frame
+return f.AbsoluteSize.X,f.AbsoluteSize.Y,f.Child.AbsoluteSize.X,f.Child.AbsoluteSize.Y
+'''), [500,360,250,180])
 
     def test_automatic_layout_requires_child_visibility_evidence(self):
         s = layout_snapshot()

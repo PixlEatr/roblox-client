@@ -221,17 +221,17 @@ def send_source(path, source, timeout_ms=1000):
     return send_request(path,{'source':source,'timeout_ms':timeout_ms})
 
 
-def send_request(path, request):
+def send_request(path, request, *, timeout=None):
     from local_transport import connect
     # Resolve and authenticate the endpoint before serializing the request.
-    conn, token = connect(path, timeout=60)
+    conn, token = connect(path, timeout=60 if timeout is None else timeout)
     with conn:
         if token is not None: request = {**request, '_console_token': token}
         frame = json.dumps(request, ensure_ascii=True).encode() + b'\n'
         if len(frame) > MAX_FRAME: raise ValueError('Source request exceeds size limit')
         try: conn.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 1024 * 1024)
         except OSError: pass
-        conn.settimeout(60 if len(frame) > 1024 * 1024 else 8)
+        conn.settimeout(timeout if timeout is not None else (60 if len(frame) > 1024 * 1024 else 8))
         conn.sendall(frame)
         data = bytearray()
         while b'\n' not in data:

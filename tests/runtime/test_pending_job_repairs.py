@@ -148,6 +148,100 @@ for _,name in {"Trail","ParticleEmitter"} do
 end
 ''',snapshot)
 
+    def test_received_collision_group_alias_preserves_value_and_tracks_changes(self):
+        snapshot=copy.deepcopy(transforms.SNAPSHOT)
+        root=next(n for n in snapshot['nodes'] if n['id']=='scope:root-1')
+        root['properties']['CollisionGroupReplicate']='\x01received-initial'
+        host=self.host(snapshot)
+        first=host.call({'op':'execute','timeout_ms':100,'source': '''
+getgenv().groupPart=game:GetService("Players").LocalPlayer.Character.HumanoidRootPart
+assert(groupPart.CollisionGroup=="received-initial")
+assert(client.propertyOrigin(groupPart,"CollisionGroup")=="derived_received")
+groupPart.CollisionGroup="local-only"
+assert(client.propertyOrigin(groupPart,"CollisionGroup")=="local")
+getgenv().groupChanges=0
+groupPart:GetPropertyChangedSignal("CollisionGroup"):Connect(function()groupChanges+=1 end)
+return true
+'''})
+        self.assertTrue(first['ok'],first)
+        for i,group in enumerate(('\x02received-next',{'$bytes_hex':'ff'+b'received-next'.hex()}),1):
+            sequence=int(snapshot.get('sequence',0))+i
+            updated=host.call({'op':'update','timeout_ms':100,'delta':{
+                'version':1,'delta':True,'sequence':sequence,'actions':[{
+                    'sequence':sequence,'kind':'set','id':root['id'],
+                    'fields':{'CollisionGroupReplicate':group}}]}})
+            self.assertTrue(updated['ok'],updated)
+        result=host.call({'op':'execute','timeout_ms':100,'source': '''
+assert(groupPart.CollisionGroup=="received-next")
+assert(groupPart.CollisionGroupReplicate==string.char(255).."received-next")
+assert(groupChanges==1)
+assert(client.propertyOrigin(groupPart,"CollisionGroup")=="derived_received")
+return true
+'''})
+        self.assertTrue(result['ok'],result)
+
+    def test_collision_group_alias_does_not_invent_missing_or_override_canonical_value(self):
+        snapshot=copy.deepcopy(transforms.SNAPSHOT)
+        self.run_script('''
+local p=game:GetService("Players").LocalPlayer.Character.HumanoidRootPart
+assert(not pcall(function()return p.CollisionGroup end))
+''',snapshot)
+
+        root=next(n for n in snapshot['nodes'] if n['id']=='scope:root-1')
+        root['properties'].update(CollisionGroup='canonical',CollisionGroupReplicate='wire')
+        self.run_script('''
+local p=game:GetService("Players").LocalPlayer.Character.HumanoidRootPart
+assert(p.CollisionGroup=="canonical")
+''',snapshot)
+
+    def test_received_binary_collision_group_prefix_is_removed_without_losing_name_bytes(self):
+        snapshot=copy.deepcopy(transforms.SNAPSHOT)
+        root=next(n for n in snapshot['nodes'] if n['id']=='scope:root-1')
+        # This is the exact wire value in the saved received HumanoidRootPart
+        # snapshot. 0xff is the binary ID prefix, not part of the public name.
+        root['properties']['CollisionGroupReplicate']={'$bytes_hex':'ff506c6179657273'}
+        self.run_script('''
+local p=game:GetService("Players").LocalPlayer.Character.HumanoidRootPart
+assert(p.CollisionGroup=="Players")
+assert(client.propertyOrigin(p,"CollisionGroup")=="derived_received")
+''',snapshot)
+        root['properties']['CollisionGroupReplicate']={'$bytes_hex':'ff41fe42'}
+        self.run_script('''
+local p=game:GetService("Players").LocalPlayer.Character.HumanoidRootPart
+assert(p.CollisionGroup=="A"..string.char(254).."B")
+''',snapshot)
+
+    def test_malformed_collision_group_delta_is_rejected_before_alias_mutation(self):
+        snapshot=copy.deepcopy(transforms.SNAPSHOT)
+        root=next(n for n in snapshot['nodes'] if n['id']=='scope:root-1')
+        root['properties']['CollisionGroupReplicate']='\x01received-initial'
+        host=self.host(snapshot)
+        sequence=int(snapshot.get('sequence',0))+1
+        result=host.call({'op':'update','timeout_ms':100,'delta':{
+            'version':1,'delta':True,'sequence':sequence,'actions':[{
+                'sequence':sequence,'kind':'set','id':root['id'],
+                'fields':{'CollisionGroupReplicate':42}}]}})
+        self.assertFalse(result['ok'],result)
+        self.assertIn('CollisionGroupReplicate must be a string or tagged byte-string',result.get('error',''))
+        check=host.call({'op':'execute','timeout_ms':100,'source': '''
+local p=game:GetService("Players").LocalPlayer.Character.HumanoidRootPart
+assert(p.CollisionGroup=="received-initial")
+return true
+'''})
+        self.assertTrue(check['ok'],check)
+
+    def test_received_id_only_collision_group_decodes_native_default_omission(self):
+        for wire in ('\x00',{'$bytes_hex':'ff'}):
+            with self.subTest(wire=wire):
+                snapshot=copy.deepcopy(transforms.SNAPSHOT)
+                root=next(n for n in snapshot['nodes'] if n['id']=='scope:root-1')
+                root['properties']['CollisionGroupReplicate']=wire
+                self.run_script('''
+local p=game:GetService("Players").LocalPlayer.Character.HumanoidRootPart
+assert(p.CollisionGroup=="Default")
+assert(client.propertyOrigin(p,"CollisionGroup")=="derived_received")
+''',snapshot)
+
     def test_non_yielding_job_reports_measured_resume_progress(self):
         with mock.patch.dict(os.environ,{'RCR_LUAU_LARGE_TEST':'1'}):
             host=self.host(copy.deepcopy(transforms.SNAPSHOT))

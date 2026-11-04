@@ -9,8 +9,8 @@ assert(math.abs(red.r - 196 / 255) < 1e-9)
 assert(BrickColor.new(red.Color) == red)
 assert(BrickColor.new("Bright blue").Number == 23)
 
-assert(not pcall(function() return BrickColor.new(999) end))
-assert(not pcall(function() return BrickColor.new("not in local palette") end))
-assert(not pcall(function() return BrickColor.palette(1) end))
-assert(not pcall(function() return BrickColor.random() end))
+assert(BrickColor.new(999) == BrickColor.Gray())
+assert(BrickColor.new("not in local palette") == BrickColor.Gray())
+assert(BrickColor.palette(1).Number == 301)
+assert(typeof(BrickColor.random()) == "BrickColor")
 return white.Name, red.Number, red.Name

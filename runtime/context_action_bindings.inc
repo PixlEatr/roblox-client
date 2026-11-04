@@ -96,7 +96,7 @@ int context_dispatch_bridge(lua_State* L) {
                     lua_pushlstring(child,binding->name.data(),binding->name.size());
                     push_json(child,w,input_enum_json("UserInputState",input_state));
                     if(object)push_node(child,w,object);else lua_pushnil(child);return 3;
-                },binding->owner);return 1;
+                },binding->owner,binding->identity);return 1;
             }
             context_pop(w);context_collect(L,w);
         }
@@ -138,7 +138,7 @@ void context_cancel(lua_State* L,World& w,const std::shared_ptr<ContextActionBin
         w.scheduler->callback_now(L,binding->callback,[&](lua_State* child){
             lua_pushlstring(child,binding->name.data(),binding->name.size());
             push_json(child,w,input_enum_json("UserInputState",3));push_node(child,w,input);return 3;
-        },binding->owner);
+        },binding->owner,binding->identity);
         lua_pop(L,1);return;
     }
     ContextInput event;event.state=3;event.force=true;event.targets.push_back(binding);context_queue(w,std::move(event));
@@ -223,7 +223,7 @@ int context_action_method(lua_State* L) {
         if(!std::isfinite(priority)||priority<double(INT32_MIN)||priority>double(INT32_MAX))throw std::runtime_error("context action priority must fit signed 32-bit integer");
         if(lua_gettop(L)-first+1>64)throw std::runtime_error("context action accepts at most 64 input types");
         if(!previous&&state.bindings.size()>=kContextActionLimit)throw std::runtime_error("context action binding limit exceeded");
-        auto binding=std::make_shared<ContextActionBinding>();binding->name=name;binding->owner=w.scheduler->owner(L);binding->priority=static_cast<int>(priority);binding->touch_button=touch;binding->sequence=state.next_sequence;
+        auto binding=std::make_shared<ContextActionBinding>();binding->name=name;binding->owner=w.scheduler->owner(L);binding->identity=SourceScheduler::identity(L);binding->priority=static_cast<int>(priority);binding->touch_button=touch;binding->sequence=state.next_sequence;
         for(int i=first;i<=lua_gettop(L);++i) {
             ContextHotkey input;
             if(lua_type(L,i)==LUA_TSTRING){size_t n;const char* value=lua_tolstring(L,i,&n);if(n>256)throw std::runtime_error("context action hotkey string exceeds 256 bytes");input.kind="string";input.text.assign(value,n);}

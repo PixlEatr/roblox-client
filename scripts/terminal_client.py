@@ -99,14 +99,15 @@ def prepare_target(target):
     return selected['place_id']
 
 
-def session_command(place_id, duration, *, physics=True, walk_for_minute=False):
+def session_command(place_id, duration, *, physics=True, walk_for_minute=False, log_level='verbose'):
+    if log_level not in ('verbose','normal','off'): raise ValueError('Invalid log level')
     if walk_for_minute and not physics:
         raise ValueError('The one-minute walk requires physics')
     command = [sys.executable, '-u', str(ROOT / 'scripts/game_session.py'),
                '--refresh', '--protocol-sync', '--luau-range', '--ticket',
                '--time-sync', '--bytecode-auth', '--require-spawn',
                '--duration', str(duration), '--progress', '--script-console',
-               '--persistent-scripts', '--chat-console']
+               '--persistent-scripts', '--chat-console','--log-level',log_level]
     if physics:
         command.append('--physics')
     if walk_for_minute:
@@ -337,7 +338,11 @@ def console(process, timeout_ms, duration=0):
             except ValueError:
                 log(line, 'session')
                 continue
-            if isinstance(event, dict) and 'milestone' in event:
+            if isinstance(event, dict) and 'diagnostic_log' in event:
+                log('Session log: '+event['diagnostic_log'], 'log')
+            elif isinstance(event, dict) and 'disconnect_category' in event:
+                log(f"Session ended at {event.get('elapsed_seconds')}s: {event['disconnect_category']}", 'connection')
+            elif isinstance(event, dict) and 'milestone' in event:
                 ready = ready or event['milestone'] in ('own_player_in_players', 'character_spawned')
                 log(f"{event.get('seconds', 0):.3f}s  {event['milestone'].replace('_', ' ')}", 'join')
             else:
@@ -410,7 +415,7 @@ def console(process, timeout_ms, duration=0):
                     helper=subprocess.run([sys.executable,str(ROOT/'scripts/desktop_backend.py')],
                         cwd=ROOT,capture_output=True,text=True,timeout=15)
                     if helper.returncode==0 and helper.stdout.startswith('http://127.0.0.1:'):
-                        process.rove_view_url=helper.stdout.strip()+'#/workspace'
+                        process.rove_view_url=helper.stdout.strip()+'workspace'
                         webbrowser.open(process.rove_view_url)
                         log(process.rove_view_url,'view')
                     else:log('Could not open Rove. Start rove.py to attach.','error')
@@ -480,6 +485,8 @@ def parse_args(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--place', help='Place ID or private-server link; otherwise prompt')
     parser.add_argument('--duration', type=int, default=0, help='Session seconds; 0 means no time limit (default)')
+    parser.add_argument('--log-level',choices=('verbose','normal','off'),default='verbose',
+                        help='Session timeline in outputs/logs (default: verbose)')
     parser.add_argument('--timeout-ms', type=int, default=1000, help='Per-script CPU budget (1..2000)')
     parser.add_argument('--no-web', action='store_true', help='Keep only the terminal console; do not open Rove')
     parser.add_argument('--no-physics', action='store_true', help='Disable continuous own-character gravity physics')
@@ -502,7 +509,8 @@ def main():
     log(f'Target verified: place {place_id}. Requesting a fresh join.', 'join')
     process = subprocess.Popen(session_command(place_id, args.duration,
                                                physics=not args.no_physics,
-                                               walk_for_minute=args.walk_for_minute), cwd=ROOT,
+                                               walk_for_minute=args.walk_for_minute,
+                                               log_level=args.log_level), cwd=ROOT,
                                stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                                stderr=subprocess.STDOUT, text=True, bufsize=1,
                                **group_options())
@@ -513,7 +521,7 @@ def main():
                     cwd=ROOT,capture_output=True,text=True,timeout=15)
                 if helper.returncode==0 and helper.stdout.startswith('http://127.0.0.1:'):
                     import webbrowser
-                    process.rove_view_url=helper.stdout.strip()+'#/workspace'
+                    process.rove_view_url=helper.stdout.strip()+'workspace'
                     webbrowser.open(process.rove_view_url)
                     log('Rove: '+process.rove_view_url, 'web')
                 else:log('Open Rove to use the workspace. The terminal is still available.', 'web')

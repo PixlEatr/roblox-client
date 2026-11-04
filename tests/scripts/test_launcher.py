@@ -3,6 +3,7 @@ import contextlib
 import http.client
 import json
 from pathlib import Path
+import re
 import tempfile
 import threading
 import time
@@ -50,6 +51,49 @@ class LauncherTests(unittest.TestCase):
         self.assertIn(self.app.key.encode(),body)
         self.assertNotIn(b'ROBLOSECURITY',body)
         self.assertNotIn(b'roblox-cookie',body)
+
+    def test_workspace_url_and_session_links_use_the_same_interface(self):
+        _,home=self.request('/')
+        for path in ('/workspace','/workspace/','/workspace?renderer=software'):
+            status,page=self.request(path)
+            self.assertEqual(status,200)
+            self.assertEqual(page,home)
+        with patch.object(self.app.surface,'connected',return_value=True):
+            status,body=self.request('/api/sessions')
+        session=json.loads(body)['sessions'][0]
+        self.assertEqual(status,200)
+        self.assertEqual(session['url'],self.app.url+'workspace')
+        self.assertEqual(session['editorUrl'],session['url'])
+
+    def test_every_page_script_loads_and_stale_backend_is_rejected(self):
+        from desktop_backend import ready
+        _,page=self.request('/workspace')
+        scripts=re.findall(rb'<script\b[^>]*\bsrc="([^"]+)"',page)
+        self.assertTrue(scripts)
+        for script in scripts:
+            path=script.decode()
+            self.assertEqual(self.request(path)[0],200,path)
+            status,body=self.request(path,method='HEAD')
+            self.assertEqual(status,200,path);self.assertEqual(body,b'')
+        with patch('launcher_setup.readiness',return_value={'launcherVersion':2}),patch.object(self.app.surface,'connected',return_value=False):
+            self.assertEqual(ready(self.app.port),self.app.url)
+            with tempfile.TemporaryDirectory() as folder:
+                assets=Path(folder)
+                (assets/'index.html').write_bytes(page.replace(b'/workspace.js',b'/missing-module.js'))
+                with patch.object(launcher,'ASSETS',assets):
+                    self.assertIsNone(ready(self.app.port))
+
+    def test_new_ui_module_is_served_without_restarting_or_exposing_other_files(self):
+        with tempfile.TemporaryDirectory() as folder:
+            assets=Path(folder)
+            with patch.object(launcher,'ASSETS',assets):
+                (assets/'new-module.js').write_text('window.NewModule={};')
+                (assets/'private.txt').write_text('private fixture')
+                (assets/'linked.js').symlink_to(assets/'private.txt')
+                self.assertEqual(self.request('/new-module.js'),(200,b'window.NewModule={};'))
+                self.assertEqual(self.request('/linked.js')[0],404)
+                self.assertNotEqual(self.request('/private.txt')[0],200)
+                self.assertNotEqual(self.request('/../private.txt')[0],200)
 
     def test_private_data_and_actions_require_local_credentials(self):
         self.assertEqual(self.request('/api/account',headers={'X-Rove-Key':'wrong'})[0],403)

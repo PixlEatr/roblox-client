@@ -1,16 +1,20 @@
 import * as T from 'three';
 
 export class WorldAssets {
-    constructor(load,onChange=()=>{}){this.load=load;this.onChange=onChange;this.entries=new Map();this.queue=[];this.active=0;this.disposed=false;this.bytes=0;}
-    get(kind,reference){
+    constructor(load,onChange=()=>{},{anisotropy=1}={}){this.load=load;this.onChange=onChange;this.entries=new Map();this.queue=[];this.active=0;this.disposed=false;this.bytes=0;this.anisotropy=Math.max(1,Math.min(8,anisotropy));}
+    get(kind,reference,linear=false){
         if(typeof reference!=='string'||!reference||!this.load)return null;
-        const key=kind+':'+reference,entry=this.entries.get(key);
-        if(entry)return entry.value;
+        reference=reference.trim();
+        const key=kind+':'+reference+(linear?':linear':''),entry=this.entries.get(key);
+        if(entry){
+            if(entry.status==='failed'&&entry.retryAt&&Date.now()>=entry.retryAt){entry.status='pending';this.queue.push({key,kind,reference,linear,attempt:entry.attempt+1});this.pump();}
+            return entry.value;
+        }
         if(this.entries.size>=256)return null;
-        this.entries.set(key,{value:null,status:'pending'});this.queue.push({key,kind,reference});this.pump();return null;
+        this.entries.set(key,{value:null,status:'pending'});this.queue.push({key,kind,reference,linear,attempt:1});this.pump();return null;
     }
     pump(){while(!this.disposed&&this.active<3&&this.queue.length){const task=this.queue.shift();this.active++;void this.resolve(task).finally(()=>{this.active--;this.pump();});}}
-    async resolve({key,kind,reference}){
+    async resolve({key,kind,reference,linear,attempt}){
         try{
             const response=await this.load(kind,reference);if(this.disposed)return;
             let value,size=0;
@@ -29,12 +33,15 @@ export class WorldAssets {
                 const ratio=Math.min(1,2048/bitmap.width,2048/bitmap.height),canvas=document.createElement('canvas');canvas.width=Math.max(1,Math.round(bitmap.width*ratio));canvas.height=Math.max(1,Math.round(bitmap.height*ratio));
                 const context=canvas.getContext('2d');context.drawImage(bitmap,0,0,canvas.width,canvas.height);bitmap.close();
                 const pixels=context.getImageData(0,0,canvas.width,canvas.height);
-                value=new T.DataTexture(pixels.data,canvas.width,canvas.height);value.colorSpace=T.SRGBColorSpace;value.flipY=true;
+                value=new T.DataTexture(pixels.data,canvas.width,canvas.height);value.colorSpace=linear?T.NoColorSpace:T.SRGBColorSpace;value.flipY=true;value.anisotropy=this.anisotropy;
                 value.magFilter=T.LinearFilter;value.minFilter=T.LinearMipmapLinearFilter;value.generateMipmaps=true;value.needsUpdate=true;size=pixels.data.byteLength;
             }
             if(this.disposed||this.bytes+size>64*1024*1024){value.dispose();throw Error('Visual asset memory budget reached');}
             this.bytes+=size;this.entries.set(key,{status:'ready',value});this.onChange();
-        }catch(error){if(!this.disposed){this.entries.set(key,{status:'failed',value:null,error:error.message});this.onChange();}}
+        }catch(error){if(!this.disposed){
+            const retry=attempt<3&&/busy|timeout|timed.?out|temporar|http[_ ]?(?:429|5\d\d)|fetch_failed/i.test(error.message);
+            this.entries.set(key,{status:'failed',value:null,error:error.message,attempt,retryAt:retry?Date.now()+attempt*2000:0});this.onChange();
+        }}
     }
     get stats(){let pending=0,failed=0,ready=0;for(const entry of this.entries.values()){pending+=entry.status==='pending';failed+=entry.status==='failed';ready+=entry.status==='ready';}return {pending,failed,ready};}
     dispose(){this.disposed=true;this.queue=[];for(const entry of this.entries.values())entry.value?.dispose();this.entries.clear();}

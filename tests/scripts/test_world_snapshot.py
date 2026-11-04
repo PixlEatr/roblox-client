@@ -38,6 +38,43 @@ def fixture():
 
 
 class WorldSnapshotTests(unittest.TestCase):
+    def test_private_collision_group_exports_name_and_revision_without_mutation(self):
+        w,key=fixture()
+        w.instances[key]['properties']['CollisionGroupReplicate']=b'\x01Ghost'
+        w.touch(key,['CollisionGroupReplicate'])
+        before=copy.deepcopy(w.instances)
+        node=self.node(make_world_snapshot(w,123),key)
+        self.assertEqual(node['properties']['CollisionGroup'],'Ghost')
+        self.assertEqual(node['origins']['CollisionGroup'],'derived_received')
+        self.assertEqual(node['property_revisions']['CollisionGroup'],w.revision)
+        self.assertEqual(w.instances,before)
+        w.instances[key]['properties']['CollisionGroupReplicate']=b'\x01\xff'
+        node=self.node(make_world_snapshot(w,123),key)
+        self.assertNotIn('CollisionGroup',node['properties'])
+        self.assertEqual(node['properties']['CollisionGroupReplicate'],{'$bytes_hex':'01ff'})
+
+    def test_collision_group_binary_survives_snapshot_and_delta(self):
+        # Masks commonly contain non-UTF-8 bytes. Neither export path may
+        # decode them lossily or silently invent a Default-only matrix.
+        w, _ = fixture()
+        key = (1, 6)
+        initial = bytes.fromhex('01010004ffffffff0744656661756c74')
+        w.instances[key]['properties']['CollisionGroupData'] = initial
+        before = copy.deepcopy(w.instances)
+        node = self.node(make_world_snapshot(w, 123), key)
+        self.assertEqual(node['properties']['CollisionGroupData'], {'$bytes_hex':initial.hex()})
+        self.assertEqual(node['origins']['CollisionGroupData'], 'received')
+        self.assertEqual(w.instances, before)
+        cursor = w.revision
+        # A zero mask is valid UTF-8 binary data and uses the string export.
+        updated = bytes.fromhex('01010004000000000744656661756c74')
+        w.instances[key]['properties']['CollisionGroupData'] = updated
+        w.touch(key, ['CollisionGroupData'])
+        delta = make_world_delta(w, cursor)
+        field = delta['actions'][0]['fields']['CollisionGroupData']
+        self.assertEqual(field.encode('utf-8'), updated)
+        self.assertEqual(w.instances[key]['properties']['CollisionGroupData'], updated)
+
     def test_exported_pose_is_detached_from_the_received_vector(self):
         w, key = fixture()
         node = self.node(make_world_snapshot(w, 123), key)
@@ -90,6 +127,24 @@ class WorldSnapshotTests(unittest.TestCase):
             w, key = fixture()
             w.creation[key][field] = False
             self.assertNotIn('Anchored', self.node(make_world_snapshot(w, 123), key)['properties'])
+
+    def test_fresh_single_list_creation_preserves_constructor_provenance(self):
+        w, _ = fixture()
+        key, parent = (1, 80), (1, 6)
+        guid = lambda value: encode_unsigned(value[0]) + struct.pack('<I', value[1])
+        packet = guid(key) + struct.pack('<H', 3) + b'\xff' + guid(parent)
+        w.new_instance(Reader(packet), lists=1, inline_shared=False)
+        before = copy.deepcopy(w.instances)
+        node = self.node(make_world_snapshot(w, 123), key)
+        self.assertTrue(node['constructor_defaults_known'])
+        self.assertFalse(w.creation[key]['ordinary'])
+        self.assertEqual(w.instances, before)
+        self.assertNotIn('Massless', node['properties'])
+        for field in ('fresh', 'complete'):
+            saved = w.creation[key][field]
+            w.creation[key][field] = False
+            self.assertFalse(self.node(make_world_snapshot(w, 123), key)['constructor_defaults_known'])
+            w.creation[key][field] = saved
 
     def test_local_player_services_and_forward_references_are_preserved(self):
         w, key = fixture()

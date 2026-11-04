@@ -50,8 +50,10 @@ export function materialTexture(name) {
     texture.magFilter=T.LinearFilter;texture.minFilter=T.LinearMipmapLinearFilter;texture.generateMipmaps=true;texture.needsUpdate=true;
     return texture;
 }
-export function makeMaterial(part,map=null,procedural=null) {
+export function makeMaterial(part,map=null,procedural=null,maps={}) {
     const name=materialName(part.material),opacity=partOpacity(part),metal=/Metal|DiamondPlate|Foil/.test(name);
+    const appearance=part.appearance,overlay=enumValue(appearance?.alphaMode)!==1;
+    map=maps.color||map;
     const material=new T.MeshStandardMaterial({color:0xffffff,roughness:metal?.28:name==='Glass'||name==='Ice'?.09:name==='SmoothPlastic'?.32:.82,
         metalness:metal?.75:clamp(finite(part.reflectance),0,1)*.7,transparent:opacity<.999,opacity,depthWrite:opacity>=.999,
         map:map||procedural,alphaTest:map?.02:0,side:map?T.DoubleSide:T.FrontSide});
@@ -73,6 +75,28 @@ export function makeMaterial(part,map=null,procedural=null) {
                 diffuseColor*=texture2D(map,ruv/roveTileSize);`);
         };
         material.customProgramCacheKey=()=> 'rove-surface-v1';
+    }
+    if(appearance){
+        material.normalMap=maps.normal||null;material.roughnessMap=maps.roughness||null;material.metalnessMap=maps.metalness||null;
+        material.roughness=maps.roughness?1:.5;material.metalness=maps.metalness?1:0;
+        if(maps.color){
+            const tint=new T.Color().setRGB(...vector(appearance.color?.$color3??appearance.color,[1,1,1]),T.SRGBColorSpace);
+            material.userData.surfaceAppearance={tint,overlay};
+            material.transparent=opacity<.999||!overlay;material.depthWrite=opacity>=.999&&overlay;material.alphaTest=overlay?0:.02;
+            material.onBeforeCompile=shader=>{
+                shader.uniforms.roveSurfaceTint={value:tint};
+                shader.fragmentShader=shader.fragmentShader.replace('#include <common>','#include <common>\nuniform vec3 roveSurfaceTint;');
+                shader.fragmentShader=shader.fragmentShader.replace('#include <map_fragment>',`vec4 surfaceTexel=texture2D(map,vMapUv);
+                    vec3 baseColor=diffuseColor.rgb;
+                    #if defined(USE_COLOR) || defined(USE_COLOR_ALPHA)
+                        baseColor*=vColor.rgb;
+                    #endif
+                    diffuseColor.rgb=${overlay?'mix(baseColor,surfaceTexel.rgb*roveSurfaceTint,surfaceTexel.a)':'surfaceTexel.rgb*roveSurfaceTint'};
+                    ${overlay?'':'diffuseColor.a*=surfaceTexel.a;'}`);
+                shader.fragmentShader=shader.fragmentShader.replace('#include <color_fragment>','');
+            };
+            material.customProgramCacheKey=()=>`rove-appearance-${overlay?'overlay':'transparency'}-v1`;
+        }
     }
     return material;
 }

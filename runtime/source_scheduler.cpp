@@ -1,5 +1,6 @@
 #include "source_scheduler.hpp"
 #include "local_test_limits.hpp"
+#include "closure_bindings.hpp"
 #include <algorithm>
 #include <lualib.h>
 #include <cmath>
@@ -18,7 +19,7 @@ void SourceScheduler::thread_lifecycle(lua_State* parent,lua_State* thread) {
         return;
     }
     auto* context=static_cast<ThreadOwner*>(lua_getthreaddata(parent));
-    if(context)lua_setthreaddata(thread,new ThreadOwner{context->scheduler,context->owner});
+    if(context){auto* child=new ThreadOwner{context->scheduler,context->owner};child->identity=context->identity;lua_setthreaddata(thread,child);}
 }
 void SourceScheduler::coroutine_interrupt(lua_State* parent,lua_Debug* debug) {
     auto* context=static_cast<ThreadOwner*>(lua_getthreaddata(parent));
@@ -52,9 +53,41 @@ void SourceScheduler::set_owner(Task& task,const std::string& owner_name) {
     auto* context=static_cast<ThreadOwner*>(lua_getthreaddata(task.thread));
     if(!context) {
         context=new ThreadOwner{this,owner_name};
+        if(owner_name.compare(0,7,"script:")==0)context->identity=2;
         lua_setthreaddata(task.thread,context);
-    } else context->owner=owner_name;
+    } else {
+        if(context->owner!=owner_name&&owner_name.compare(0,7,"script:")==0)context->identity=2;
+        context->owner=owner_name;
+    }
     task.owner=owner_name;
+}
+int SourceScheduler::identity(lua_State* thread) {
+    auto* context=static_cast<ThreadOwner*>(lua_getthreaddata(thread));return context?context->identity:8;
+}
+bool SourceScheduler::has_capability(lua_State* thread,const std::string& capability) {
+    const int id=identity(thread);
+    if(capability=="None")return true;
+    if(capability=="Plugin")return id==1||id==3||id==4||id==5||id==6||id==7||id==8;
+    if(capability=="LocalUser")return id==1||id==3||id==4||id==6||id==7||id==8;
+    if(capability=="RobloxScript")return id==3||id==6||id==7||id==8;
+    if(capability=="WritePlayer"||capability=="RobloxEngine"||capability=="NotAccessible")return id==7||id==8;
+    return false;
+}
+void SourceScheduler::set_identity(lua_State* thread,int value) {
+    auto* context=static_cast<ThreadOwner*>(lua_getthreaddata(thread));
+    if(!context)throw std::runtime_error("thread security context unavailable");
+    context->identity=value;
+}
+int SourceScheduler::identity_api(lua_State* L) {
+    if(lua_toboolean(L,lua_upvalueindex(1))) {
+        // Identity is the VM's native integer field. Preserve Luau's numeric
+        // conversion even for nonstandard IDs; unknown IDs grant no engine
+        // capabilities and do not change the thread's source provenance.
+        int value=luaL_checkinteger(L,1);
+        try{set_identity(L,value);}catch(const std::exception& e){return luaL_error(L,"%s",e.what()),0;}
+        return 0;
+    }
+    lua_pushinteger(L,identity(L));return 1;
 }
 
 SourceScheduler::Task& SourceScheduler::track(lua_State* thread) {
@@ -75,28 +108,49 @@ const char* SourceScheduler::task_state(lua_State* thread) const {
     return "unknown";
 }
 SourceScheduler::Progress SourceScheduler::task_progress(lua_State* thread) const {
-    auto found=tasks_.find(thread);return found==tasks_.end()?Progress{}:found->second.progress;
+    auto found=tasks_.find(thread);
+    if(found==tasks_.end())return {};
+    auto progress=found->second.progress;
+    progress.response_priority_active=found->second.response_ready;
+    return progress;
 }
 void SourceScheduler::resume(Task& task,lua_State* from) {
     if(task.state!=Ready)return;
-    if(task.guard&&!task.guard()){task.state=Done;return;}
+    if(task.guard&&!task.guard()){task.state=Done;task.response_ready=false;task.response_priority_cpu=Clock::duration{};return;}
     task.state=Running;
     const auto began=Clock::now();
     int status=resume_interrupted(task.thread,from,task.arguments);task.arguments=0;
     const auto elapsed=Clock::now()-began;
     task.uninterrupted_cpu+=elapsed;
+    if(task.response_ready)task.response_priority_cpu+=elapsed;
     ++task.progress.resumes;
     task.progress.execution_ms+=std::chrono::duration<double,std::milli>(elapsed).count();
     if(status==LUA_YIELD)++task.progress.yields;
     if(status==LUA_BREAK)++task.progress.interruptions;
-    if(status==LUA_YIELD) {task.uninterrupted_cpu=Clock::duration{};if(task.state==Running)task.state=Waiting;return;}
+    if(status==LUA_YIELD) {
+        task.uninterrupted_cpu=Clock::duration{};
+        // A real Luau yield ends the response continuation. If it becomes
+        // runnable again later, it joins the normal fair scheduling lanes.
+        task.response_ready=false;
+        task.response_priority_cpu=Clock::duration{};
+        if(task.state==Running)task.state=Waiting;
+        return;
+    }
     // A persistent worker's short network tick is a scheduling slice, not a
     // lifetime limit for a callback. Rotate interrupted work through the ready
     // queue so another task can run, retaining the cumulative non-yielding cap.
     if(status==LUA_BREAK&&persistent_&&(!task.root||large_local_test())&&
        task.uninterrupted_cpu<std::chrono::milliseconds(local_test_time_limit())) {
+        // Bound the response boost separately from the larger task lifetime
+        // cap, so a CPU-heavy continuation cannot stay in the priority lane.
+        if(task.response_ready&&task.response_priority_cpu>=std::chrono::milliseconds(32)) {
+            task.response_ready=false;
+            task.response_priority_cpu=Clock::duration{};
+        }
         task.state=Ready;enqueue(task);return;
     }
+    task.response_ready=false;
+    task.response_priority_cpu=Clock::duration{};
     task.state=Done;
     task.result=status;
     if(task.root)root_status_=status;
@@ -134,6 +188,18 @@ void SourceScheduler::install(lua_State* L) {
         lua_pushcclosure(L,legacy_schedule_api,name,2);lua_setglobal(L,name);
     }
     lua_getglobal(L,"pcall");lua_setglobal(L,"ypcall");
+    for(const auto& alias:{std::pair{"Wait","wait"},std::pair{"Spawn","spawn"},std::pair{"Delay","delay"},std::pair{"ElapsedTime","elapsedTime"}}) {
+        lua_getglobal(L,alias.second);lua_setglobal(L,alias.first);
+    }
+    for(int setter=0;setter<2;++setter) {
+        lua_pushboolean(L,setter);lua_pushcclosure(L,identity_api,setter?"setthreadidentity":"getthreadidentity",1);
+        mark_executor_closure(L,-1);
+        for(const char* name:setter?std::initializer_list<const char*>{"setthreadidentity","setidentity","setthreadcontext"}
+                                  :std::initializer_list<const char*>{"getthreadidentity","getidentity","getthreadcontext"}) {
+            lua_pushvalue(L,-1);lua_setglobal(L,name);
+        }
+        lua_pop(L,1);
+    }
 }
 int SourceScheduler::elapsed_time_api(lua_State* L){lua_pushnumber(L,engine_elapsed());return 1;}
 int SourceScheduler::time_api(lua_State* L) {
@@ -203,8 +269,11 @@ int SourceScheduler::task_api_inner(lua_State* L) {
            (found!=self.tasks_.end()&&found->second.state==Running)) {
             luaL_error(L,"cannot cancel a running thread");return 0;
         }
-        if(found!=self.tasks_.end()&&found->second.state!=Done&&found->second.state!=Cancelled)
+        if(found!=self.tasks_.end()&&found->second.state!=Done&&found->second.state!=Cancelled) {
             found->second.state=Cancelled;
+            found->second.response_ready=false;
+            found->second.response_priority_cpu=Clock::duration{};
+        }
         lua_resetthread(target);return 0;
     }
     int function_index=operation==2?2:1;
@@ -234,35 +303,41 @@ int SourceScheduler::task_api_inner(lua_State* L) {
     }
     return 1; // The new/existing thread was retained on this caller's stack.
 }
-lua_State* SourceScheduler::callback_now(lua_State* from,int reference,const std::function<int(lua_State*)>& arguments,const std::string& owner_name) {
+lua_State* SourceScheduler::callback_now(lua_State* from,int reference,const std::function<int(lua_State*)>& arguments,const std::string& owner_name,int callback_identity) {
     lua_State* child=lua_newthread(from);auto& task=track(child);
     lua_getref(child,reference);task.arguments=arguments(child);
-    set_owner(task,owner_name);task.state=Ready;resume(task,from);return child;
+    set_owner(task,owner_name);if(callback_identity>=0)set_identity(child,callback_identity);
+    task.state=Ready;resume(task,from);return child;
 }
-lua_State* SourceScheduler::callback(lua_State* from,int reference,const std::function<int(lua_State*)>& arguments,std::function<bool()> guard,const std::string& owner_name) {
+lua_State* SourceScheduler::callback(lua_State* from,int reference,const std::function<int(lua_State*)>& arguments,std::function<bool()> guard,const std::string& owner_name,int callback_identity) {
     lua_State* child=lua_newthread(from);auto& task=track(child);lua_pop(from,1);
     lua_getref(child,reference);task.arguments=arguments(child);task.state=Ready;task.guard=std::move(guard);set_owner(task,owner_name);
+    if(callback_identity>=0)set_identity(child,callback_identity);
     enqueue(task);return child;
 }
 void SourceScheduler::wait_signal(lua_State* thread) {
     auto& task=track(thread);task.state=Waiting;task.elapsed=false;
 }
-lua_State* SourceScheduler::invoke_callback(lua_State* from,int reference,const std::function<int(lua_State*)>& arguments,const std::string& owner_name) {
+lua_State* SourceScheduler::invoke_callback(lua_State* from,int reference,const std::function<int(lua_State*)>& arguments,const std::string& owner_name,int callback_identity) {
     lua_State* child=lua_newthread(from);auto& task=track(child);lua_pop(from,1);
     try {
         lua_getref(child,reference);task.arguments=arguments(child);
-        set_owner(task,owner_name);task.retained=true;task.report_errors=false;task.state=Ready;
+        set_owner(task,owner_name);if(callback_identity>=0)set_identity(child,callback_identity);
+        task.retained=true;task.report_errors=false;task.state=Ready;
         enqueue(task);return child;
-    }catch(...) {task.state=Cancelled;task.retained=false;collect_finished();throw;}
+    }catch(...) {task.state=Cancelled;task.response_ready=false;task.retained=false;collect_finished();throw;}
 }
 void SourceScheduler::release_invocation(lua_State* thread) {
     auto it=tasks_.find(thread);if(it==tasks_.end())return;
     it->second.retained=false;it->second.report_errors=true;collect_finished();
 }
-void SourceScheduler::wake_signal(lua_State* thread,const std::function<int(lua_State*)>& arguments) {
+void SourceScheduler::wake_signal(lua_State* thread,const std::function<int(lua_State*)>& arguments,bool response_ready) {
     auto found=tasks_.find(thread);
     if(found==tasks_.end()||found->second.state!=Waiting)return;
-    auto& task=found->second;task.arguments=arguments(thread);task.state=Ready;enqueue(task);
+    auto& task=found->second;task.arguments=arguments(thread);task.state=Ready;
+    task.response_ready=response_ready;
+    task.response_priority_cpu=Clock::duration{};
+    enqueue(task);
 }
 void SourceScheduler::start(lua_State* root,int arguments) {
     auto& task=track(root);task.root=true;task.arguments=arguments;task.state=Ready;resume(task,main_);
@@ -280,7 +355,7 @@ lua_State* SourceScheduler::spawn_owned(lua_State* from,int index,const std::str
 }
 void SourceScheduler::cancel_owner(const std::string& owner_name) {
     for(auto& [thread,task]:tasks_)if(task.owner==owner_name&&task.state!=Running) {
-        task.state=Cancelled;lua_resetthread(thread);
+        task.state=Cancelled;task.response_ready=false;task.response_priority_cpu=Clock::duration{};lua_resetthread(thread);
     }
 }
 int SourceScheduler::completion(lua_State* root) const {
@@ -321,17 +396,29 @@ void SourceScheduler::collect_finished() {
 void SourceScheduler::enqueue(Task& task) {++task.queued;ready_.push_back(&task);}
 SourceScheduler::Task* SourceScheduler::dequeue() {
     auto selected=ready_.begin();
-    if(persistent_&&large_local_test()) {
+    auto response=std::find_if(ready_.begin(),ready_.end(),[](const Task* task){
+        return task->state==Ready&&task->response_ready;
+    });
+    auto ordinary=std::find_if(ready_.begin(),ready_.end(),[](const Task* task){
+        return task->state!=Ready||!task->response_ready;
+    });
+    // A delivered RPC continuation keeps priority across CPU slices, but only
+    // for a bounded CPU budget. Alternate ordinary turns while it is elevated.
+    const bool use_response=response!=ready_.end()&&(prefer_response_||ordinary==ready_.end());
+    if(use_response)selected=response;
+    else if(ordinary!=ready_.end())selected=ordinary;
+    if(!use_response&&persistent_&&large_local_test()) {
         // Reserve alternating turns for interactive authored work in the
         // dedicated test profile. A full callback batch must not dilute an
         // authored job to one quantum per 128 callbacks. Each lane retains
         // FIFO order and unused turns are available to the other lane.
         auto preferred=std::find_if(ready_.begin(),ready_.end(),[&](const Task* task) {
-            return task->state==Ready&&(task->root||task->retained)==prefer_authored_;
+            return task->state==Ready&&!task->response_ready&&(task->root||task->retained)==prefer_authored_;
         });
         if(preferred!=ready_.end())selected=preferred;
     }
     auto* task=*selected;ready_.erase(selected);--task->queued;
+    prefer_response_=!use_response;
     prefer_authored_=!(task->root||task->retained);
     return task;
 }
@@ -351,7 +438,8 @@ size_t SourceScheduler::invocation_capacity() {
 }
 void SourceScheduler::step(Clock::time_point deadline,std::function<void()> pump,size_t max_resumes,
                            std::function<void(Clock::time_point)> set_interrupt_deadline,
-                           std::function<void()> progress_invocations) {
+                           std::function<void()> progress_invocations,
+                           std::function<bool()> should_yield) {
     if(!frame_open_)begin_frame();
     frame_open_=false;
     size_t resumed=0;
@@ -359,6 +447,7 @@ void SourceScheduler::step(Clock::time_point deadline,std::function<void()> pump
     const auto pump_after=began+(deadline-began)/2;
     bool pumped=false;
     auto pump_once=[&](){if(!pumped&&pump){pump();pumped=true;}};
+    auto output_ready=[&](){return should_yield&&should_yield();};
     auto wake_due=[&](Clock::time_point now) {
         std::vector<Task*> due;
         for(auto& [thread,task]:tasks_)if(task.state==Sleeping&&task.due<=now&&task.sleeping_frame<frame_) {
@@ -372,6 +461,10 @@ void SourceScheduler::step(Clock::time_point deadline,std::function<void()> pump
         for(auto* task:due)enqueue(*task);
     };
     while(resumed<max_resumes) {
+        // A host can hand control back as soon as this step has produced
+        // externally consumable work. The ready queue remains intact, so the
+        // ordinary scheduler resumes it on the next step.
+        if(output_ready())break;
         auto now=Clock::now();
         wake_due(now);
         // Run already-due timers and queued work before pumping the world.
@@ -380,6 +473,7 @@ void SourceScheduler::step(Clock::time_point deadline,std::function<void()> pump
         if(ready_.empty()) {
             if(now>=deadline)break;
             pump_once();
+            if(output_ready())break;
             now=Clock::now();
             wake_due(now);
         }
@@ -405,14 +499,19 @@ void SourceScheduler::step(Clock::time_point deadline,std::function<void()> pump
         }
         if(set_interrupt_deadline)set_interrupt_deadline(deadline);
         ++resumed;
+        if(output_ready())break;
         // A function return can make its waiting caller runnable immediately.
         // Settle those calls between task turns without advancing simulation,
         // render signals, or the timer frame. The same deadline and resume
         // limit still bound a chain of nested/sequential invocations.
         if(progress_invocations&&Clock::now()<deadline)progress_invocations();
+        if(output_ready())break;
         // Give a small ready batch a turn before potentially expensive world
         // work. Pump once within the first half-slice or eight resumes.
-        if(Clock::now()<deadline&&(resumed>=8||Clock::now()>=pump_after||ready_.empty()))pump_once();
+        if(Clock::now()<deadline&&(resumed>=8||Clock::now()>=pump_after||ready_.empty())) {
+            pump_once();
+            if(output_ready())break;
+        }
     }
     collect_finished();
 }
