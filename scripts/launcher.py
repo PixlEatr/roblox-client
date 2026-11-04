@@ -8,6 +8,7 @@ import json
 from pathlib import Path
 import secrets
 import subprocess
+from platform_process import group_options
 import sys
 import threading
 import time
@@ -259,7 +260,7 @@ class GameController:
                 self.state = 'joining'
                 self.process = subprocess.Popen(session_command(place, 0), cwd=ROOT,
                                                 stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-                                                stdin=subprocess.DEVNULL, text=True)
+                                                stdin=subprocess.DEVNULL, text=True, **group_options())
                 process = self.process
             history_path = ROOT/'outputs/launcher/history.json'
             history_path.parent.mkdir(parents=True, exist_ok=True)

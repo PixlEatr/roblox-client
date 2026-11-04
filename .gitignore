@@ -27,3 +27,4 @@ __pycache__/
 !/inputs/bytecode-signature-v1-public.bin
 !/inputs/bytecode-signature-v1-public.json
 /tests/fixtures/sunc/suite.luau
+/.rove-platform.json

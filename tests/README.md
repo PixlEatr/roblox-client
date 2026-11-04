@@ -1,6 +1,8 @@
 # dev checks
 
-from the repo root, after setup:
+For the focused cross-platform checks, run `python rove.py check` (`py` on Windows).
+
+For the broader development suites, from the repo root after setup:
 
 ```sh
 .venv/bin/python tests/run.py scripts
@@ -12,4 +14,6 @@ npm --prefix ui test
 
 `.venv/bin/python tests/preview.py --showcase --allow-webgl` opens an offline Rove fixture with a real Luau worker. it never joins a game. the fixture can use installed Roblox art files.
 
-the runtime suite still has the known failures listed in [validation.json](validation.json). optional decompiler/private reference checks skip when their dependencies are absent.
+Historical full-suite results and known failures are recorded in [validation.json](validation.json). The current portability workflow runs the focused suite, not a fresh full-suite audit. Optional decompiler/private reference checks skip when their dependencies are absent.
+
+On Windows, replace `.venv/bin/python` with `.venv\Scripts\python.exe`. The broad suites include optional platform-specific research tools; the portability workflow uses the focused suite.

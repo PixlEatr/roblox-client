@@ -1,4 +1,4 @@
-"""Owner-only Unix socket for sending Luau source to the running custom client."""
+"""Private local transport for sending Luau source to the running custom client."""
 import json
 import base64
 import hashlib
@@ -34,26 +34,9 @@ class ScriptConsole:
         self._export_snapshots = {}
         self.clients = {}
         self.requests = 0
-        if self.path.exists():
-            metadata = self.path.lstat()
-            if not stat.S_ISSOCK(metadata.st_mode) or metadata.st_uid != os.getuid():
-                raise ValueError('Console path is not an owned socket')
-            probe = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-            try:
-                probe.settimeout(.2)
-                probe.connect(str(self.path))
-            except ConnectionRefusedError:
-                self.path.unlink()
-            else:
-                raise ValueError('A client script console is already running')
-            finally:
-                probe.close()
-        self.server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        self.server.bind(str(self.path))
-        self.path.chmod(0o600)
+        from local_transport import listen
+        self.server, self.auth_token = listen(self.path)
         self.inode = self.path.stat().st_ino
-        self.server.listen(4)
-        self.server.setblocking(False)
 
     def _snapshot_request(self, request):
         now = time.monotonic()
@@ -142,6 +125,10 @@ class ScriptConsole:
                     request = json.loads(frame)
                     if not isinstance(request, dict):
                         raise ValueError('Invalid source request')
+                    if self.auth_token is not None:
+                        token = request.pop('_console_token', None)
+                        if not isinstance(token, str) or not secrets.compare_digest(token, self.auth_token):
+                            raise ValueError('Console authentication failed')
                     if request.get('op') in ('export_snapshot', 'export_snapshot_chunk', 'export_snapshot_release'):
                         result = self._snapshot_request(request)
                     elif request.get('op') == 'movement':
@@ -235,13 +222,16 @@ def send_source(path, source, timeout_ms=1000):
 
 
 def send_request(path, request):
-    frame = json.dumps(request, ensure_ascii=True).encode() + b'\n'
-    if len(frame) > MAX_FRAME: raise ValueError('Source request exceeds size limit')
-    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as conn:
+    from local_transport import connect
+    # Resolve and authenticate the endpoint before serializing the request.
+    conn, token = connect(path, timeout=60)
+    with conn:
+        if token is not None: request = {**request, '_console_token': token}
+        frame = json.dumps(request, ensure_ascii=True).encode() + b'\n'
+        if len(frame) > MAX_FRAME: raise ValueError('Source request exceeds size limit')
         try: conn.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 1024 * 1024)
         except OSError: pass
         conn.settimeout(60 if len(frame) > 1024 * 1024 else 8)
-        conn.connect(str(path))
         conn.sendall(frame)
         data = bytearray()
         while b'\n' not in data:

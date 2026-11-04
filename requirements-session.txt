@@ -3,3 +3,4 @@ cryptography==46.0.3
 pyOpenSSL==26.2.0
 zstandard==0.25.0
 blake3==1.0.11
+pywin32==311; sys_platform == "win32"

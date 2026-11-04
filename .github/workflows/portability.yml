@@ -1,0 +1,75 @@
+name: Terminal portability
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  offline:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    env:
+      PYTHONUTF8: '1'
+      CARGO_BUILD_JOBS: '2'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Check Windows setup and private storage before compiling
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          python -m venv .venv
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & .venv/Scripts/python.exe -m pip install -r requirements-session.txt
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $env:PYTHONPATH = "$PWD/scripts;$PWD/tests/scripts"
+          & .venv/Scripts/python.exe -m unittest -v test_platform_portability test_windows_setup test_rove_entrypoint
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Install Linux dependencies
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y cmake g++ pkg-config libssl-dev libzstd-dev
+      - name: Install macOS dependencies
+        if: runner.os == 'macOS'
+        run: brew install openssl@3 zstd
+      - name: Restore Windows dependency binaries
+        if: runner.os == 'Windows'
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ runner.temp }}/vcpkg-binaries
+          key: windows-vcpkg-${{ runner.arch }}-${{ github.run_id }}
+          restore-keys: windows-vcpkg-${{ runner.arch }}-
+      - name: Install Windows dependencies
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          VCPKG_DEFAULT_BINARY_CACHE: ${{ runner.temp }}/vcpkg-binaries
+        run: |
+          New-Item -ItemType Directory -Force "$env:VCPKG_DEFAULT_BINARY_CACHE" | Out-Null
+          & "$env:VCPKG_INSTALLATION_ROOT/vcpkg.exe" install openssl:x64-windows zstd:x64-windows
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $prefix = "$env:VCPKG_INSTALLATION_ROOT/installed/x64-windows"
+          "CMAKE_PREFIX_PATH=$prefix" >> $env:GITHUB_ENV
+          "OPENSSL_DIR=$prefix" >> $env:GITHUB_ENV
+          "$prefix/bin" >> $env:GITHUB_PATH
+      - name: Save Windows dependency binaries
+        if: runner.os == 'Windows'
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ runner.temp }}/vcpkg-binaries
+          key: windows-vcpkg-${{ runner.arch }}-${{ github.run_id }}
+      - name: Select stable Rust
+        run: rustup default stable
+      - name: Set up through the user entry point
+        run: python rove.py setup --jobs 2
+      - name: Offline terminal and runtime tests
+        run: python rove.py check
+      - name: Browser UI checks
+        if: runner.os == 'macOS'
+        run: npm --prefix ui test

@@ -22,10 +22,22 @@ struct Zstd {
     is_error: IsError,
 }
 
+#[cfg(unix)]
 unsafe extern "C" {
     fn dlopen(filename: *const c_char, flag: c_int) -> *mut c_void;
     fn dlsym(handle: *mut c_void, symbol: *const c_char) -> *mut c_void;
 }
+
+#[cfg(windows)]
+#[link(name = "kernel32")]
+unsafe extern "system" {
+    fn LoadLibraryA(filename: *const c_char) -> *mut c_void;
+    fn GetProcAddress(handle: *mut c_void, symbol: *const c_char) -> *mut c_void;
+}
+#[cfg(windows)]
+unsafe fn dlopen(filename: *const c_char, _flag: c_int) -> *mut c_void { LoadLibraryA(filename) }
+#[cfg(windows)]
+unsafe fn dlsym(handle: *mut c_void, symbol: *const c_char) -> *mut c_void { GetProcAddress(handle,symbol) }
 
 fn zstd() -> Option<&'static Zstd> {
     static ZSTD: OnceLock<Option<Zstd>> = OnceLock::new();
@@ -36,6 +48,8 @@ fn zstd() -> Option<&'static Zstd> {
             b"libzstd.dylib\0",
             b"libzstd.so.1\0",
             b"libzstd.so\0",
+            b"libzstd.dll\0",
+            b"zstd.dll\0",
         ] {
             let handle = unsafe { dlopen(library.as_ptr().cast(), 2) };
             if handle.is_null() {

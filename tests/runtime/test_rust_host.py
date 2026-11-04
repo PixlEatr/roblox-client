@@ -38,12 +38,59 @@ class RustHostTests(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertEqual(result['values'], [7, None, True, 'source ran'])
 
+    def test_offline_context_survives_windows_text_newlines(self):
+        from unittest.mock import patch
+        from local_runtime import run_source
+        context={'mode':'offline','job_id':'offline-fixture-newlines',
+                 'is_studio':False,'services':['RunService']}
+        def windows_text(path, data, encoding=None, **kwargs):
+            return path.write_bytes(data.replace('\n','\r\n').encode(encoding or 'utf-8'))
+        # Exercise Windows text translation on every platform. The context is
+        # a binary protocol file and must reach the real native parser intact.
+        with patch.object(Path, 'write_text', windows_text):
+            result=run_source('return 17, game.JobId', model_context=context)
+        self.assertTrue(result['ok'], result)
+        self.assertEqual(result['values'], [17, 'offline-fixture-newlines'])
+
+    def test_unicode_source_and_snapshot_paths_in_both_hosts(self):
+        with tempfile.TemporaryDirectory(prefix='rove-path-') as directory:
+            root=Path(directory)/'測試 folder';root.mkdir()
+            source=root/'привет.luau';world=root/'世界.json'
+            source.write_text('return "héllo 🌍", workspace.ClassName',encoding='utf-8')
+            world.write_text(json.dumps(SNAPSHOT),encoding='utf-8')
+            for host in (HOST,RUST_HOST):
+                with self.subTest(host=host.name):
+                    run=subprocess.run([str(host),'--source',str(source),'--world-snapshot',str(world)],
+                                       capture_output=True,timeout=8)
+                    self.assertEqual(run.returncode,0,run.stderr)
+                    self.assertEqual(json.loads(run.stdout)['values'],['héllo 🌍','Workspace'])
+
     def test_world_behavior_matches_existing_pinned_host(self):
         source = (ROOT / 'tests/fixtures/world_script.luau').read_text()
         code, result = self.execute(source, snapshot=SNAPSHOT)
         old_code, old_result = self.execute(source, snapshot=SNAPSHOT, host=HOST)
         self.assertEqual(code, 0)
         self.assertEqual(old_code, 0)
+        # The Rust source host additionally creates PlayerScripts and executes
+        # its bootstrap. Compare world semantics independent of local IDs and
+        # bootstrap telemetry, while still asserting clean integrity reports.
+        def normalize(report):
+            report = copy.deepcopy(report)
+            for key in ('runtime_protected_integrity', 'runtime_thread_integrity'):
+                self.assertEqual(report.pop(key)['failures'], 0)
+            for key in ('console_events', 'teleport_queue'):
+                self.assertEqual(report.pop(key, []), [])
+            report['mutations'] = [m for m in report['mutations']
+                if not (m['kind'] == 'create' and m['node']['class_name'] == 'PlayerScripts')]
+            ids = {m['node']['id']: f'created:{i}' for i,m in enumerate(report['mutations'])
+                   if m['kind'] == 'create'}
+            def visit(value):
+                if isinstance(value, str): return ids.get(value, value)
+                if isinstance(value, list): return [visit(v) for v in value]
+                if isinstance(value, dict): return {k:visit(v) for k,v in value.items()}
+                return value
+            return visit(report)
+        result, old_result = normalize(result), normalize(old_result)
         self.assertEqual(result, old_result)
 
     def test_runtime_error_preserves_completed_local_writes(self):
@@ -61,6 +108,16 @@ class RustHostTests(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertTrue(result['timed_out'])
         self.assertLess(time.monotonic() - started, 3)
+
+    def test_both_supervisors_stop_a_loop_and_run_the_next_script(self):
+        for host in (HOST,RUST_HOST):
+            with self.subTest(host=host.name):
+                _,result=self.execute('while true do end',host=host,extra=['--timeout-ms','25'])
+                self.assertFalse(result['ok'])
+                self.assertTrue(result['timed_out'])
+                code,result=self.execute('return 17',host=host)
+                self.assertEqual(code,0)
+                self.assertEqual(result['values'],[17])
 
     def test_invalid_or_oversized_input_rejected(self):
         for source, snapshot in [('x' * (128 * 1024 + 1), None), ('return true', {'version': 90})]:
@@ -105,7 +162,11 @@ return base64.encode("hello"),base64.decode(""),malformed
         self.assertEqual(result['values'], ['aGVsbG8=', '', False])
 
     def test_rust_zstd_roundtrip_aliases_and_bounds(self):
-        code, result = self.execute('''
+        import base64
+        import zstandard
+        # Independent encoder: output limit is 32 MiB; input limit is 256 KiB.
+        expanding = base64.b64encode(zstandard.ZstdCompressor().compress(b'A'*(32*1024*1024+1))).decode()
+        code, result = self.execute('local overflowFrame=base64.decode('+json.dumps(expanding)+')\n'+'''
 local binary=string.char(0,255,254).."hello"
 local compressed=zstdcompress(binary)
 assert(compressed~=binary and zstddecompress(compressed)==binary)
@@ -118,8 +179,9 @@ local malformed=pcall(zstddecompress,"not zstd")
 local truncated=pcall(zstddecompress,string.sub(compressed,1,#compressed-1))
 local oversizedInput=pcall(zstdcompress,string.rep("x",256*1024+1))
 local oversizedCompressed=pcall(zstddecompress,string.rep("x",256*1024+1))
-local expandingFrame=base64.decode("KLUv/aABAAQAVAAAEEFBAQD7/znAAgIAEEEJAABB")
-local oversizedOutput,message=pcall(zstddecompress,expandingFrame)
+local acceptedFrame=base64.decode("KLUv/aABAAQAVAAAEEFBAQD7/znAAgIAEEEJAABB")
+assert(#zstddecompress(acceptedFrame)==256*1024+1)
+local oversizedOutput,message=pcall(zstddecompress,overflowFrame)
 return #compressed>0,malformed,truncated,oversizedInput,oversizedCompressed,
     oversizedOutput,type(message)
 ''')
@@ -136,7 +198,7 @@ return crypt.hash("abc","sha256"),
     crypt.hmac("The quick brown fox jumps over the lazy dog","key","sha-256"),
     hmac(binary,longKey,"sha256"),
     crypt.hash(binary,"sha256"),
-    (pcall(crypt.hash,"abc","md5"))
+    (pcall(crypt.hash,"abc","unsupported-hash"))
 ''')
         self.assertEqual(code, 0)
         binary = b'\x00\xff\xfehello'

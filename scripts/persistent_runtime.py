@@ -6,6 +6,7 @@ import os
 import queue
 import signal
 import subprocess
+from platform_process import group_options, stop_group
 import threading
 import time
 
@@ -33,7 +34,7 @@ class PersistentLuauHost:
         self.responses = queue.Queue(maxsize=8)
         self.process = subprocess.Popen([str(RUST_HOST), 'session'], stdin=subprocess.PIPE,
                                         stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-                                        start_new_session=True)
+                                        **group_options())
         self.reader = threading.Thread(target=self._read, daemon=True)
         self.reader.start()
         try:
@@ -118,11 +119,11 @@ class PersistentLuauHost:
             if self.process.poll() is None:
                 try: self.process.wait(timeout=.5)
                 except subprocess.TimeoutExpired:
-                    try: os.killpg(self.process.pid, signal.SIGTERM)
+                    try: stop_group(self.process)
                     except ProcessLookupError: pass
                     try: self.process.wait(timeout=.5)
                     except subprocess.TimeoutExpired:
-                        try: os.killpg(self.process.pid, signal.SIGKILL)
+                        try: stop_group(self.process, force=True)
                         except ProcessLookupError: pass
                         self.process.wait(timeout=1)
             for stream in (self.process.stdin, self.process.stdout):

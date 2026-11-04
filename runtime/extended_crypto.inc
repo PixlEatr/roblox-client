@@ -1,4 +1,4 @@
-// macOS cryptographic/compression providers; no substitute digests or PRNGs.
+// Host cryptographic/compression providers; no substitute digests or PRNGs.
 std::string crypto_base64(lua_State* L,const std::string& input,bool decode) {
     auto* bindings=static_cast<const SourceBindings*>(lua_touserdata(L,lua_upvalueindex(1)));
     unsigned char* data=nullptr;size_t length=0;
@@ -8,7 +8,22 @@ std::string crypto_base64(lua_State* L,const std::string& input,bool decode) {
     std::unique_ptr<unsigned char,decltype(release)> owner(data,release);
     return std::string(reinterpret_cast<const char*>(data),length);
 }
-std::string secure_bytes(size_t size){std::string value(size,'\0');arc4random_buf(value.data(),size);return value;}
+std::string secure_bytes(size_t size){
+    std::string value(size,'\0');
+    if(!host_entropy(value.data(),size))
+        throw std::runtime_error("OS entropy unavailable");
+    return value;
+}
+void* crypto_library() {
+    static void* library=[](){
+        for(const char* name:{"/opt/homebrew/opt/openssl@3/lib/libcrypto.dylib",
+                "/usr/local/opt/openssl@3/lib/libcrypto.dylib","libcrypto.3.dylib","libcrypto.so.3",
+                "libcrypto-3-x64.dll","libcrypto-3.dll","libcrypto-3-arm64.dll"})
+            if(void* handle=dlopen(name,RTLD_LOCAL|RTLD_NOW))return handle;
+        return static_cast<void*>(nullptr);
+    }();
+    return library;
+}
 int crypt_generatebytes(lua_State* L) {
     int size=luaL_checkinteger(L,1);if(size<0||size>128*1024){luaL_error(L,"random byte count must be 0..131072");return 0;}
     try{auto result=crypto_base64(L,secure_bytes(size),false);lua_pushlstring(L,result.data(),result.size());return 1;}
@@ -40,8 +55,7 @@ struct CryptoEvpApi {
 const CryptoEvpApi& crypto_evp_api() {
     static const CryptoEvpApi api=[](){
         CryptoEvpApi result;
-        result.library=dlopen("/opt/homebrew/opt/openssl@3/lib/libcrypto.dylib",RTLD_LOCAL|RTLD_NOW);
-        if(!result.library)result.library=dlopen("/usr/local/opt/openssl@3/lib/libcrypto.dylib",RTLD_LOCAL|RTLD_NOW);
+        result.library=crypto_library();
         if(!result.library)return result;
         result.new_context=reinterpret_cast<CryptoEvpApi::NewContext>(dlsym(result.library,"EVP_CIPHER_CTX_new"));
         result.free_context=reinterpret_cast<CryptoEvpApi::FreeContext>(dlsym(result.library,"EVP_CIPHER_CTX_free"));
@@ -143,8 +157,7 @@ int crypt_hash(lua_State* L) {
         const std::array<const char*,8> allowed={"sha1","sha384","sha512","md5","sha256","sha3-224","sha3-256","sha3-512"};
         bool known=false;for(auto name:allowed)if(algorithm==name)known=true;
         if(!known)throw std::runtime_error("unsupported hash algorithm");
-        // Homebrew provides OpenSSL 3 on the supported macOS development host.
-        static void* library=[](){void* p=dlopen("/opt/homebrew/opt/openssl@3/lib/libcrypto.dylib",RTLD_LOCAL|RTLD_NOW);if(!p)p=dlopen("/usr/local/opt/openssl@3/lib/libcrypto.dylib",RTLD_LOCAL|RTLD_NOW);return p;}();
+        void* library=crypto_library();
         if(!library)throw std::runtime_error("OpenSSL 3 is required for extended hash algorithms");
         using Digest=int(*)(void*,const char*,const char*,const void*,size_t,unsigned char*,size_t*);
         auto digest=reinterpret_cast<Digest>(dlsym(library,"EVP_Q_digest"));
@@ -156,6 +169,7 @@ int crypt_hash(lua_State* L) {
         lua_pushlstring(L,result.data(),result.size());return 1;
     }catch(const std::exception& e){luaL_error(L,"crypt.hash: %s",e.what());return 0;}
 }
+#ifdef __APPLE__
 using CompressionFunction=size_t(*)(uint8_t*,size_t,const uint8_t*,size_t,void*,compression_algorithm);
 CompressionFunction compression_function(const char* name) {
     static void* library=dlopen("/usr/lib/libcompression.dylib",RTLD_LOCAL|RTLD_NOW);
@@ -163,11 +177,16 @@ CompressionFunction compression_function(const char* name) {
     auto f=reinterpret_cast<CompressionFunction>(dlsym(library,name));
     if(!f)throw std::runtime_error("macOS compression function unavailable");return f;
 }
+#endif
 int lz4_compress(lua_State* L) {
     try {
         auto input=crypt_string(L,1);if(input.empty()){lua_pushliteral(L,"");return 1;}
         std::string output(input.size()+input.size()/255+32,'\0');
+#ifdef __APPLE__
         auto count=compression_function("compression_encode_buffer")(reinterpret_cast<uint8_t*>(output.data()),output.size(),reinterpret_cast<const uint8_t*>(input.data()),input.size(),nullptr,COMPRESSION_LZ4_RAW);
+#else
+        auto count=LZ4_compress_default(input.data(),output.data(),static_cast<int>(input.size()),static_cast<int>(output.size()));
+#endif
         if(!count){
             // Apple's encoder declines some short/incompressible inputs. A
             // literal-only block is a valid interoperable raw LZ4 encoding.
@@ -184,7 +203,11 @@ int lz4_decompress(lua_State* L) {
         auto input=crypt_string(L,1);if(input.empty()&&size==0){lua_pushliteral(L,"");return 1;}
         // One extra byte detects declared sizes smaller than actual output.
         std::string output(size+1,'\0');
+#ifdef __APPLE__
         auto count=compression_function("compression_decode_buffer")(reinterpret_cast<uint8_t*>(output.data()),output.size(),reinterpret_cast<const uint8_t*>(input.data()),input.size(),nullptr,COMPRESSION_LZ4_RAW);
+#else
+        auto count=LZ4_decompress_safe(input.data(),output.data(),static_cast<int>(input.size()),static_cast<int>(output.size()));
+#endif
         if(!count||count!=size)throw std::runtime_error("malformed LZ4 data or incorrect decompressed size");
         lua_pushlstring(L,output.data(),size);return 1;
     }catch(const std::exception& e){luaL_error(L,"lz4decompress: %s",e.what());return 0;}

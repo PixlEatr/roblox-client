@@ -22,16 +22,21 @@
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
+#include <filesystem>
 #include <iostream>
 #include <limits>
 #include <sstream>
 #include <string>
+#ifdef _WIN32
+#include "platform_support.hpp"
+#else
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <unistd.h>
 #include <fcntl.h>
 #include <signal.h>
 #include <poll.h>
+#endif
 #include <vector>
 #include <set>
 
@@ -541,7 +546,7 @@ bool parse_num(const char* s, double& value) {
 
 bool parse_context_file(const std::string& path, LocalEngineContext& context, std::string& error) {
     if (path.empty()) return true;
-    std::ifstream f(path, std::ios::binary | std::ios::ate);
+    std::ifstream f(std::filesystem::u8path(path), std::ios::binary | std::ios::ate);
     if (!f) { error = "cannot read local context file"; return false; }
     auto size = f.tellg();
     if (size < 0 || size > 4096) { error = "context file exceeds 4 KiB"; return false; }
@@ -637,6 +642,7 @@ bool validate_bytecode_header(const std::string& bytes, std::string& error) {
     return true;
 }
 
+#ifndef _WIN32
 void write_all(int fd, const char* data, size_t size) {
     while (size) {
         ssize_t n = ::write(fd, data, size);
@@ -646,6 +652,8 @@ void write_all(int fd, const char* data, size_t size) {
     }
 }
 
+#endif
+
 int main_cli(int argc, char** argv) {
     std::string source_path;
     std::string bytecode_path;
@@ -654,8 +662,10 @@ int main_cli(int argc, char** argv) {
     int timeout_ms = 250;
     int memory_mb = 512;
     bool args_started = false;
+    bool internal_worker = false;
     std::vector<double> args;
     for (int i = 1; i < argc; ++i) {
+        if (!args_started && std::strcmp(argv[i], "--internal-worker") == 0) { internal_worker=true; continue; }
         if (!args_started && std::strcmp(argv[i], "--") == 0) { args_started = true; continue; }
         if (args_started) {
             double n;
@@ -677,7 +687,7 @@ int main_cli(int argc, char** argv) {
         std::cout << error_json("world snapshots require source mode and cannot be combined with a context file"); return 2;
     }
     const std::string input_path = is_bytecode ? bytecode_path : source_path;
-    std::ifstream f(input_path, std::ios::binary | std::ios::ate);
+    std::ifstream f(std::filesystem::u8path(input_path), std::ios::binary | std::ios::ate);
     if (!f) { std::cout << error_json("cannot read input file"); return 2; }
     auto source_size = f.tellg();
     if (source_size < 0 || static_cast<uint64_t>(source_size) > kMaxSource) {
@@ -701,13 +711,80 @@ int main_cli(int argc, char** argv) {
     }
     std::string world_snapshot_text;
     if (!world_snapshot_path.empty()) {
-        std::ifstream snapshot(world_snapshot_path,std::ios::binary|std::ios::ate);
+        std::ifstream snapshot(std::filesystem::u8path(world_snapshot_path),std::ios::binary|std::ios::ate);
         if(!snapshot){std::cout<<error_json("cannot read world snapshot");return 2;}
         auto n=snapshot.tellg();if(n<0||static_cast<uint64_t>(n)>kMaxWorldSnapshot){std::cout<<error_json("world snapshot exceeds 8 MiB");return 2;}
         world_snapshot_text.resize(static_cast<size_t>(n));snapshot.seekg(0);
         if(!world_snapshot_text.empty()&&!snapshot.read(world_snapshot_text.data(),static_cast<std::streamsize>(world_snapshot_text.size()))){std::cout<<error_json("cannot read world snapshot");return 2;}
     }
 
+#ifdef _WIN32
+    if(internal_worker) {
+        try { std::cout << run_vm(source,args,is_bytecode,timeout_ms,memory_mb,
+            context_path.empty()?nullptr:&engine_context,world_snapshot_path.empty()?nullptr:&world_snapshot_text); }
+        catch(...) { std::cout << error_json("VM worker failed"); }
+        return 0;
+    }
+    // Re-execute the same CLI in a child; the parent drains stdout while
+    // enforcing a wall deadline, just as the POSIX fork supervisor does.
+    wchar_t executable[32768];
+    DWORD path_size=GetModuleFileNameW(nullptr,executable,32768);
+    if(!path_size||path_size>=32768){std::cout<<error_json("cannot locate VM executable");return 2;}
+    std::wstring command=GetCommandLineW();
+    // Insert before the original arguments (which may contain the -- marker).
+    auto first=command.find(L'"',1);
+    if(command[0]==L'"')first=first==std::wstring::npos?command.size():first+1;
+    else first=command.find(L' ');
+    if(first==std::wstring::npos)first=command.size();
+    command.insert(first,L" --internal-worker");
+    // Windows does not reap a child when its parent is terminated. Own the VM
+    // in a kill-on-close job so Python timeouts also stop the actual worker.
+    HANDLE job=CreateJobObjectW(nullptr,nullptr);
+    JOBOBJECT_EXTENDED_LIMIT_INFORMATION limits{};
+    limits.BasicLimitInformation.LimitFlags=JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+    if(!job||!SetInformationJobObject(job,JobObjectExtendedLimitInformation,&limits,sizeof(limits))) {
+        if(job)CloseHandle(job);
+        std::cout<<error_json("cannot create VM process job");return 2;
+    }
+    SECURITY_ATTRIBUTES security{sizeof(SECURITY_ATTRIBUTES),nullptr,TRUE};
+    HANDLE reader=nullptr,writer=nullptr;
+    if(!CreatePipe(&reader,&writer,&security,0)){CloseHandle(job);std::cout<<error_json("cannot create result pipe");return 2;}
+    SetHandleInformation(reader,HANDLE_FLAG_INHERIT,0);
+    STARTUPINFOW startup{};startup.cb=sizeof(startup);startup.dwFlags=STARTF_USESTDHANDLES;
+    startup.hStdInput=GetStdHandle(STD_INPUT_HANDLE);startup.hStdOutput=writer;startup.hStdError=GetStdHandle(STD_ERROR_HANDLE);
+    PROCESS_INFORMATION process{};
+    BOOL created=CreateProcessW(executable,command.data(),nullptr,nullptr,TRUE,CREATE_NO_WINDOW|CREATE_SUSPENDED,nullptr,nullptr,&startup,&process);
+    CloseHandle(writer);
+    if(!created){CloseHandle(reader);CloseHandle(job);std::cout<<error_json("cannot start VM worker");return 2;}
+    if(!AssignProcessToJobObject(job,process.hProcess)||ResumeThread(process.hThread)==DWORD(-1)) {
+        TerminateProcess(process.hProcess,2);WaitForSingleObject(process.hProcess,1000);
+        CloseHandle(process.hThread);CloseHandle(process.hProcess);CloseHandle(reader);CloseHandle(job);
+        std::cout<<error_json("cannot supervise VM worker");return 2;
+    }
+    CloseHandle(process.hThread);
+    std::string result;bool overflow=false,timed_out=false;
+    const auto deadline=Clock::now()+std::chrono::milliseconds(timeout_ms+2000);
+    for(;;) {
+        DWORD available=0;
+        while(PeekNamedPipe(reader,nullptr,0,nullptr,&available,nullptr)&&available) {
+            char buffer[8192];DWORD count=0;
+            if(!ReadFile(reader,buffer,std::min<DWORD>(available,sizeof(buffer)),&count,nullptr)||!count)break;
+            if(result.size()+count>kMaxOutput)overflow=true;else result.append(buffer,count);
+        }
+        if(WaitForSingleObject(process.hProcess,0)==WAIT_OBJECT_0) {
+            // One last drain after the writer has closed.
+            if(!PeekNamedPipe(reader,nullptr,0,nullptr,&available,nullptr)||!available)break;
+        }
+        if(Clock::now()>=deadline){TerminateProcess(process.hProcess,124);WaitForSingleObject(process.hProcess,1000);timed_out=true;break;}
+        Sleep(2);
+    }
+    CloseHandle(reader);CloseHandle(process.hProcess);CloseHandle(job);
+    if(timed_out){std::cout<<error_json("worker wall time limit exceeded",true);return 124;}
+    if(overflow)std::cout<<error_json("result size limit exceeded");
+    else if(result.empty())std::cout<<error_json("VM worker returned no result");
+    else std::cout<<result;
+    return 0;
+#else
     int pipefd[2];
     if (pipe(pipefd) != 0) { std::cout << error_json("cannot create result pipe"); return 2; }
     pid_t pid = fork();
@@ -760,6 +837,7 @@ int main_cli(int argc, char** argv) {
     else if (result.empty()) std::cout << error_json("VM worker returned no result");
     else std::cout << result;
     return 0;
+#endif
 }
 } // namespace
 
@@ -840,5 +918,9 @@ extern "C" int local_luau_session_request(void** handle,const unsigned char* inp
 }
 extern "C" void local_luau_session_close(void* handle) noexcept {delete static_cast<PersistentSourceSession*>(handle);}
 #else
+#ifdef _WIN32
+int wmain(int argc,wchar_t** argv) { return host_wide_main(argc,argv,main_cli); }
+#else
 int main(int argc, char** argv) { return main_cli(argc, argv); }
+#endif
 #endif

@@ -1,3 +1,4 @@
+#include "platform_support.hpp"
 #include "world_bindings.hpp"
 #include <Luau/Compiler.h>
 #include "sha256.hpp"
@@ -722,8 +723,7 @@ int local_json(lua_State* L) {
 bool read_guid_entropy(std::array<unsigned char,16>& bytes) {
     // Match Random's host-entropy policy: never substitute a clock or PRNG seed.
     // The stream must be destroyed before raising any Luau error.
-    std::ifstream entropy("/dev/urandom",std::ios::in|std::ios::binary);
-    return bool(entropy.read(reinterpret_cast<char*>(bytes.data()),bytes.size()));
+    return host_entropy(bytes.data(),bytes.size());
 }
 int generate_guid(lua_State* L) {
     auto* h=checked_handle(L,1);

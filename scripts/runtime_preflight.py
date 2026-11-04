@@ -9,6 +9,7 @@ import json
 from pathlib import Path
 import subprocess
 import sys
+from local_runtime import HOST, RUST_HOST
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -23,8 +24,8 @@ def _probe():
         'opcode_lengths': ROOT / 'vendor/luau/Common/include/Luau/BytecodeUtils.h',
         'signature_table': ROOT / 'inputs/bytecode-signature-v1-public.bin',
         'signature_provenance': ROOT / 'inputs/bytecode-signature-v1-public.json',
-        'persistent_runtime': ROOT / 'rust-client/target/release/headless-luau',
-        'bytecode_runtime': ROOT / 'runtime/build/luau-host',
+        'persistent_runtime': RUST_HOST,
+        'bytecode_runtime': HOST,
     }
     for label, path in required.items():
         try:
@@ -46,7 +47,9 @@ def _probe():
     for context in contexts:
         result = run_source('return 17', timeout_ms=1000, model_context=context)
         if result.get('ok') is not True or result.get('values') != [17]:
-            return {'ok': False, 'reason': 'runtime_probe_failed'}
+            return {'ok': False, 'reason': 'runtime_probe_failed',
+                    'probe': 'source' if context is None else 'offline_context',
+                    'error': str(result.get('error') or 'Unexpected probe result')[:300]}
     return {'ok': True, 'network_used': False, 'runtime_probes': 2}
 
 

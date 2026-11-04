@@ -1,3 +1,4 @@
+#include "platform_support.hpp"
 // Ordinary standalone Random compatibility port.
 // Provenance: user-supplied native-overrides/src/runtime_v2.cpp lines 6371-6504
 // from the user's Env Logger 2.0 workspace. The source uses a PCG XSH-RR stream
@@ -92,9 +93,8 @@ bool readHostSeed(double& seed)
 {
     // Do not substitute wall time or a deterministic fallback if entropy fails.
     // No Luau error is raised while this C++ stream object is alive.
-    std::ifstream source("/dev/urandom", std::ios::in | std::ios::binary);
     uint64_t bits = 0;
-    if (!source.read(reinterpret_cast<char*>(&bits), sizeof(bits)))
+    if (!host_entropy(&bits, sizeof(bits)))
         return false;
     seed = static_cast<double>(bits & kMaximumExactSeed);
     return true;

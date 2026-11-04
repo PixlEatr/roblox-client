@@ -19,15 +19,11 @@ class SessionError(Exception):
 class RobloxSession:
     def __init__(self):
         path = ROOT / "secrets/roblox-cookie.txt"
-        info = path.lstat()
-        if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or stat.S_IMODE(info.st_mode) & 0o077:
-            raise SessionError("Cookie file must be a regular owner-only file")
-        if not 0 < info.st_size <= 32768:
-            raise SessionError("Cookie file has an unexpected size")
+        from platform_files import read_private
         try:
-            cookie = path.read_text().strip()
-        except Exception:
-            raise SessionError("Cookie file could not be read") from None
+            cookie = read_private(path, 32768).decode('utf-8').strip()
+        except (OSError, ValueError):
+            raise SessionError("Cookie file must be a readable owner-only regular file") from None
         if cookie.startswith(".ROBLOSECURITY="):
             cookie = cookie[len(".ROBLOSECURITY="):].rstrip(";")
         if not cookie or any(ord(c) < 33 or ord(c) > 126 or c == ";" for c in cookie):

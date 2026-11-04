@@ -1,13 +1,13 @@
 # runtime stuff
 
-build from the repo root with `python3.12 runtime/build.py`. it uses the bundled Luau source.
+For normal setup, use `python rove.py setup` from the repo root; see [the setup guide](../docs/setup.md). The commands below are optional developer tools. The standalone C++ build is `python runtime/build.py` and uses bundled Luau source.
 
 ```sh
 runtime/build/luau-host --source runtime/smoke.luau -- 2 5
 .venv/bin/python scripts/runtime_preflight.py
 ```
 
-preflight checks the dependencies offline. build the Rust worker too, as shown in the main readme.
+Preflight checks the dependencies offline. `rove.py setup` builds both the C++ and Rust workers automatically.
 
 `runtime/build/luau-host` handles individual jobs. `rust-client/target/release/headless-luau` keeps the world and scripts running. edits are local unless a supported replication path sends them.
 

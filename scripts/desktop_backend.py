@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 import re
 import subprocess
+from platform_process import group_options
 import sys
 import time
 import urllib.request
@@ -46,7 +47,7 @@ def main():
     except (OSError,ValueError):pass
     log=ROOT/'outputs/desktop/backend.log';log.parent.mkdir(parents=True,exist_ok=True)
     with log.open('ab') as output:
-        child=subprocess.Popen(command,cwd=ROOT,stdin=subprocess.DEVNULL,stdout=output,stderr=output,start_new_session=True)
+        child=subprocess.Popen(command,cwd=ROOT,stdin=subprocess.DEVNULL,stdout=output,stderr=output,**group_options())
     for _ in range(80):
         url=ready(port)
         if url:print(url,flush=True);return

@@ -10,10 +10,14 @@
 #include <string>
 #include <vector>
 #include <array>
-#include <dlfcn.h>
+#include "platform_support.hpp"
 #include <cstdlib>
-#include <CommonCrypto/CommonCryptor.h>
+#ifdef __APPLE__
 #include <compression.h>
+#else
+#include <lz4.h>
+#endif
+#include <fstream>
 #include "lapi.h"
 #include "lstate.h"
 #include "lgc.h"

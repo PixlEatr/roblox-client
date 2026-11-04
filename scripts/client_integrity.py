@@ -59,8 +59,9 @@ class ClientIntegrityMonitor:
             return 'size_limit', 0
         # Reject a symlink substituted between lstat and open. A nonblocking
         # open also prevents a swapped FIFO/device from hanging the monitor.
-        flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK
-        fd = os.open(path, flags)
+        flags = os.O_RDONLY | getattr(os, "O_NONBLOCK", 0)
+        from platform_files import open_nofollow
+        fd = open_nofollow(path, flags)
         used = 0
         try:
             opened = os.fstat(fd)

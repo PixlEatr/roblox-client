@@ -157,8 +157,13 @@ int from_universal_time(lua_State* L) {
 int64_t current_local_offset() {
     const std::time_t now=std::time(nullptr);
     std::tm local{};
+#ifdef _WIN32
+    if(localtime_s(&local,&now)!=0)return 0;
+    return static_cast<int64_t>(_mkgmtime(&local)-now)*1000;
+#else
     if(!localtime_r(&now,&local))return 0;
     return static_cast<int64_t>(local.tm_gmtoff)*1000;
+#endif
 }
 int from_local_time(lua_State* L) {
     const int64_t wall=make_millis(L,1);

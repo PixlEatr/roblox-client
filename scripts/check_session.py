@@ -15,11 +15,8 @@ def main():
               "method": "GET", "authenticated": False, "cookie_logged": False}
     connection = None
     try:
-        if path.is_symlink() or stat.S_IMODE(path.stat().st_mode) & 0o077:
-            raise ValueError("Cookie file must be private and must not be a symlink")
-        if path.stat().st_size > 32768:
-            raise ValueError("Unexpected cookie file size")
-        cookie = path.read_text().strip()
+        from platform_files import read_private
+        cookie = read_private(path, 32768).decode('utf-8').strip()
         if cookie.startswith(".ROBLOSECURITY="):
             cookie = cookie[len(".ROBLOSECURITY="):].rstrip(";")
         if not cookie or any(ord(c) < 33 or ord(c) > 126 or c == ";" for c in cookie):
