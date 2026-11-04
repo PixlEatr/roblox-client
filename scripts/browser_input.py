@@ -7,7 +7,7 @@ import re
 import secrets
 import time
 
-KEY_CODES=json.loads((Path(__file__).resolve().parents[1]/'runtime/web/keyboard-codes.json').read_text())
+KEY_CODES=json.loads((Path(__file__).resolve().parents[1]/'ui/keyboard-codes.json').read_text())
 KEY_NAMES=frozenset(KEY_CODES.values())
 MOUSE_BUTTONS=frozenset(('MouseButton1','MouseButton2','MouseButton3'))
 MOUSE_TYPES=MOUSE_BUTTONS|{'MouseMovement','MouseWheel'}

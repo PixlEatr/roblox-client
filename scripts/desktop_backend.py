@@ -17,7 +17,7 @@ def ready(port):
         with urllib.request.urlopen(url+'/',timeout=.5) as reply:
             html=reply.read(2*1024*1024).decode()
         match=re.search(r'name="rove-key" content="([A-Za-z0-9_-]+)"',html)
-        if not match:return None
+        if not match or 'name="rove-ui-version" content="2"' not in html:return None
         request=urllib.request.Request(url+'/api/sessions',headers={'X-Rove-Key':match[1]})
         with urllib.request.urlopen(request,timeout=.5) as reply:
             data=json.load(reply)

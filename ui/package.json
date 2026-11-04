@@ -1,0 +1,17 @@
+{
+  "name": "rove-ui",
+  "private": true,
+  "version": "1.0.0",
+  "scripts": {
+    "test": "node --test ../tests/ui/*.cjs",
+    "build": "npm run build:avatar && npm run build:world",
+    "build:avatar": "esbuild avatar-viewer-source.js --bundle --format=iife --global-name=RoveAvatar --minify --outfile=avatar-viewer.js",
+    "build:world": "esbuild world-viewer-source.js --bundle --format=iife --global-name=RoveWorld --minify --outfile=world-viewer.js"
+  },
+  "dependencies": {
+    "three": "0.187.0"
+  },
+  "devDependencies": {
+    "esbuild": "0.28.2"
+  }
+}

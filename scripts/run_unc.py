@@ -5,7 +5,7 @@ The default offline integration world uses a synthetic hierarchy, an unchanged
 archived Roblox CoreScript module, and previously captured Animate bytecode.
 It is not a live game. HTTP/WebSocket assertions use actual external services.
 Drawing exports SVG; file APIs use a bounded per-VM memory workspace.
-Use --snapshot runtime/tests/world_snapshot.json to test the minimal world.
+Use --snapshot tests/fixtures/world_snapshot.json to test the minimal world.
 """
 import argparse
 import hashlib
@@ -22,9 +22,9 @@ def main():
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--host',type=Path,default=SUITE_HOST if SUITE_HOST.is_file() else ROOT/'rust-client/target/release/headless-luau',
                         help='Native worker; defaults to the separately validated UNC worker when present')
-    parser.add_argument('--snapshot',type=Path,default=ROOT/'runtime/tests/unc_integration_snapshot.json',
+    parser.add_argument('--snapshot',type=Path,default=ROOT/'tests/fixtures/unc_integration_snapshot.json',
                         help='World fixture; defaults to the offline integration world with real script dependencies')
-    parser.add_argument('--source',type=Path,default=ROOT/'runtime/tests/unc_environment.luau')
+    parser.add_argument('--source',type=Path,default=ROOT/'tests/fixtures/unc_environment.luau')
     parser.add_argument('--output',type=Path,default=ROOT/'outputs/runtime-analysis/unc/latest.json')
     args=parser.parse_args()
     completed=subprocess.run([str(args.host.resolve()),'--source',str(args.source.resolve()),

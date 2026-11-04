@@ -41,7 +41,7 @@ HELP = """Type Luau and press Enter to execute it. Examples:
     e.g. :saveinstance map.rbxlx Workspace/Model
   :paste                  paste multiple lines, then :end to execute
   :help                   show these commands
-  :view                   open the visible browser client for this session
+  :view                   open the Rove workspace for this session
   :quit                   leave and close this session
 print/warn, returned values and errors appear here.
 Globals and background tasks persist. Yielded results, prints and errors continue
@@ -393,7 +393,6 @@ def console(process, timeout_ms, duration=0):
             continue
         if line.strip()==':view':
             import webbrowser
-            # A second display attaches to the same socket; it never joins again.
             if getattr(process,'rove_view_url',None):
                 webbrowser.open(process.rove_view_url)
                 log(process.rove_view_url,'view')
@@ -402,10 +401,10 @@ def console(process, timeout_ms, duration=0):
                     helper=subprocess.run([sys.executable,str(ROOT/'scripts/desktop_backend.py')],
                         cwd=ROOT,capture_output=True,text=True,timeout=15)
                     if helper.returncode==0 and helper.stdout.startswith('http://127.0.0.1:'):
-                        url=helper.stdout.strip()
-                        webbrowser.open(url)
-                        log('Choose Continue session in '+url,'view')
-                    else:log('Could not open the shared launcher. Start scripts/launcher.py to attach.','error')
+                        process.rove_view_url=helper.stdout.strip()+'#/workspace'
+                        webbrowser.open(process.rove_view_url)
+                        log(process.rove_view_url,'view')
+                    else:log('Could not open Rove. Start rove.py to attach.','error')
                 except (OSError,subprocess.TimeoutExpired):
                     log('The display could not open; your terminal session is still connected.','error')
             continue
@@ -473,7 +472,7 @@ def parse_args(argv=None):
     parser.add_argument('--place', help='Place ID or private-server link; otherwise prompt')
     parser.add_argument('--duration', type=int, default=0, help='Session seconds; 0 means no time limit (default)')
     parser.add_argument('--timeout-ms', type=int, default=1000, help='Per-script CPU budget (1..2000)')
-    parser.add_argument('--no-web', action='store_true', help='Keep only the terminal console; do not open the browser editor')
+    parser.add_argument('--no-web', action='store_true', help='Keep only the terminal console; do not open Rove')
     parser.add_argument('--no-physics', action='store_true', help='Disable continuous own-character gravity physics')
     parser.add_argument('--walk-for-minute', action='store_true',
                         help='Walk a small circuit for one minute after spawning, then leave')
@@ -498,18 +497,21 @@ def main():
                                stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                                stderr=subprocess.STDOUT, text=True, bufsize=1,
                                start_new_session=True)
-    web = None
     try:
         if not args.no_web:
-            from web_console import WebConsole
-            web = WebConsole()
-            log('Browser editor: ' + web.start(), 'web')
-            process.rove_view_url=web.url+'play'
-            log('Visible client: '+process.rove_view_url+' (:view to open)','web')
+            try:
+                helper=subprocess.run([sys.executable,str(ROOT/'scripts/desktop_backend.py')],
+                    cwd=ROOT,capture_output=True,text=True,timeout=15)
+                if helper.returncode==0 and helper.stdout.startswith('http://127.0.0.1:'):
+                    import webbrowser
+                    process.rove_view_url=helper.stdout.strip()+'#/workspace'
+                    webbrowser.open(process.rove_view_url)
+                    log('Rove: '+process.rove_view_url, 'web')
+                else:log('Open Rove to use the workspace. The terminal is still available.', 'web')
+            except (OSError, subprocess.TimeoutExpired):
+                log('Rove could not open. Use :view to retry; the terminal session is available.', 'web')
         console(process, args.timeout_ms, args.duration)
     finally:
-        if web is not None:
-            web.close()
         stop(process)
         process.stdout.close()
     log('Session ended.', 'join')

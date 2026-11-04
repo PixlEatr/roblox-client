@@ -3,7 +3,7 @@
 import argparse
 from collections import deque
 import hmac
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from http.server import ThreadingHTTPServer
 import json
 from pathlib import Path
 import secrets
@@ -18,7 +18,9 @@ from roblox_session import ROOT, RobloxSession, SessionError
 from terminal_client import prepare_target, session_command, selection_command, stop
 from client_session_lease import acquire_session_lease
 
-ASSETS = ROOT/'runtime/launcher'
+from web_console import Handler as RuntimeHandler, WebConsole
+
+ASSETS = ROOT/'ui'
 
 
 def image_url(value):
@@ -30,9 +32,14 @@ def image_url(value):
 
 class AccountAPI:
     def __init__(self):
-        self.session = RobloxSession()
+        self._session = None
         self.cache = {}
         self.lock = threading.RLock()
+
+    @property
+    def session(self):
+        if self._session is None:self._session = RobloxSession()
+        return self._session
 
     def request(self, host, path, method='GET', payload=None):
         result = self.session.request(host, path, method, payload, csrf_retry=method in ('POST','DELETE'))
@@ -211,13 +218,12 @@ class GameController:
         self.error = None
         self.game = None
         self.events = deque(maxlen=25)
-        self.editor = None
         self.worker_running = False
 
     def status(self):
         with self.lock:
             return {'state':self.state, 'error':self.error, 'game':self.game,
-                    'events':list(self.events), 'editorUrl':self.editor.url if self.editor else None}
+                    'events':list(self.events), 'editorUrl':'/#/workspace' if self.state=='playing' else None}
 
     def play(self, target, game=None):
         if target == 'saved-private':
@@ -274,10 +280,6 @@ class GameController:
                         self.events.append(milestone.replace('_', ' '))
                         if milestone == 'character_spawned':
                             self.state = 'playing'
-                        if milestone == 'own_player_in_players' and self.editor is None:
-                            from web_console import WebConsole
-                            self.editor = WebConsole()
-                            self.editor.start(open_browser=False)
             code = process.wait()
             with self.lock:
                 self.state = 'idle' if self.cancel or code == 0 else 'error'
@@ -290,9 +292,6 @@ class GameController:
                               else 'Could not start the game client. Check the terminal for setup issues.')
         finally:
             with self.lock:
-                if self.editor:
-                    self.editor.close()
-                    self.editor = None
                 self.process = None
                 self.worker_running = False
 
@@ -316,7 +315,7 @@ class GameController:
 
 
 class Launcher:
-    def __init__(self, port=5467, api=None, controller=None):
+    def __init__(self, port=5467, api=None, controller=None, socket_path=None):
         self.api = api if api is not None else AccountAPI()
         self.controller = controller or GameController()
         self.key = secrets.token_urlsafe(32)
@@ -325,9 +324,8 @@ class Launcher:
         self.server.app = self
         self.port = self.server.server_address[1]
         self.url = f'http://127.0.0.1:{self.port}/'
-        from web_console import WebConsole
-        self.surface=WebConsole()
-        self.surface.start(open_browser=False)
+        self.surface=WebConsole(socket_path=socket_path, server=self.server)
+        self.surface.key=self.key
 
     def close(self):
         self.surface.close()
@@ -336,7 +334,7 @@ class Launcher:
         self.server.server_close()
 
 
-class Handler(BaseHTTPRequestHandler):
+class Handler(RuntimeHandler):
     def log_message(self, *args):
         pass
 
@@ -354,7 +352,7 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header('X-Content-Type-Options', 'nosniff')
         self.send_header('Referrer-Policy', 'no-referrer')
         self.send_header('Cross-Origin-Resource-Policy', 'same-origin')
-        self.send_header('Content-Security-Policy', "default-src 'self'; img-src 'self' https://*.rbxcdn.com; script-src 'self'; style-src 'self'; font-src https://css.rbxcdn.com; connect-src 'self' https://*.rbxcdn.com; frame-ancestors 'none'; base-uri 'none'; form-action 'none'")
+        self.send_header('Content-Security-Policy', "default-src 'self'; img-src 'self' https://*.rbxcdn.com; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src https://css.rbxcdn.com; connect-src 'self' https://*.rbxcdn.com; frame-ancestors 'none'; base-uri 'none'; form-action 'none'")
         self.end_headers()
         self.wfile.write(body)
 
@@ -362,6 +360,9 @@ class Handler(BaseHTTPRequestHandler):
         return self.headers.get('Host') in (f'127.0.0.1:{self.app.port}', f'localhost:{self.app.port}')
 
     def do_GET(self):
+        if self.path.startswith('/api/runtime/'):
+            self.path='/api/'+self.path[len('/api/runtime/'):]
+            return RuntimeHandler.do_GET(self)
         if not self.valid_host():
             return self.reply(403, {'error':'Invalid local host'})
         parsed = urlsplit(self.path)
@@ -372,6 +373,10 @@ class Handler(BaseHTTPRequestHandler):
                  '/account-pages.js':('account-pages.js','text/javascript; charset=utf-8'),
                  '/sessions-ui.js':('sessions-ui.js','text/javascript; charset=utf-8'),
                  '/style.css':('style.css','text/css; charset=utf-8')}
+        for name in ('workspace.js','script-editor.js','input.js','world-viewer.js','chat.js'):
+            files['/'+name]=(name,'text/javascript; charset=utf-8')
+        files['/workspace.css']=('workspace.css','text/css; charset=utf-8')
+        files['/keyboard-codes.json']=('keyboard-codes.json','application/json')
         for asset in ('navigation.svg','common.svg','games.svg','actions.svg','wordmark.svg','chevron.svg'):
             files['/assets/'+asset] = ('assets/'+asset, 'image/svg+xml')
         if parsed.path in files:
@@ -387,7 +392,7 @@ class Handler(BaseHTTPRequestHandler):
                 connected=self.app.surface.connected()
                 status=self.app.controller.status()
                 return self.reply(200,{'sessions':[{'id':'current','connected':connected,
-                    'url':self.app.surface.url+'play?'+urlencode({'launcher':self.app.url}),'editorUrl':self.app.surface.url,
+                    'url':self.app.url+'#/workspace','editorUrl':self.app.url+'#/workspace',
                     'name':((status.get('game') or {}).get('name') if status.get('state') in ('joining','playing') else None) or 'Terminal session'}],
                     'singleAccount':True})
             if parsed.path.startswith('/api/pages/'):
@@ -436,6 +441,9 @@ class Handler(BaseHTTPRequestHandler):
             self.reply(400, {'error':'Could not load this Roblox section. Try refreshing.'})
 
     def do_POST(self):
+        if self.path.startswith('/api/runtime/'):
+            self.path='/api/'+self.path[len('/api/runtime/'):]
+            return RuntimeHandler.do_POST(self)
         if (not self.valid_host() or self.headers.get('Origin') != 'http://'+self.headers.get('Host','')
                 or not hmac.compare_digest(self.headers.get('X-Rove-Key',''), self.app.key)):
             return self.reply(403, {'error':'Invalid local request'})

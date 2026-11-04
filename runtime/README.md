@@ -14,12 +14,12 @@ preflight checks the dependencies offline. build the Rust worker too, as shown i
 extra tools:
 
 - `python3.12 scripts/build_desktop.py` builds `~/Applications/Rove.app` on Apple Silicon. keep the repo where it is after building.
-- `.venv/bin/python scripts/renderer_fixture.py --showcase --allow-webgl` opens an offline preview fixture. built-in Roblox mesh/texture files need the Roblox app installed.
+- `.venv/bin/python tests/preview.py --showcase --allow-webgl` opens an offline preview fixture. built-in Roblox mesh/texture files need the Roblox app installed.
 - `:saveinstance map.rbxlx` exports the runtime's available world to `rove exports/` using the bundled USSI script.
 - `python3.12 scripts/build_decompiler.py` downloads and builds the pinned Tovek decompiler. needs Rust nightly. decompilation is optional.
 
 `--framework-init` is an old Nothingness-specific research option. it needs a local calibration file; the normal launcher only enables it when that file exists. it isn't a general join flag.
 
-the optional external sUNC suite is not bundled. its expected source is listed in `runtime/tests/sunc/manifest.json`.
+the optional external sUNC suite is not bundled. its expected source is listed in `tests/fixtures/sunc/manifest.json`.
 
 this is a partial runtime, not an OS sandbox or a promise of Roblox compatibility.

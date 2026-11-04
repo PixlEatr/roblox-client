@@ -15,7 +15,7 @@ import subprocess
 import time
 
 ROOT=Path(__file__).resolve().parents[1]
-FIXTURES=ROOT/'runtime/tests/sunc'
+FIXTURES=ROOT/'tests/fixtures/sunc'
 
 
 def actual_place(snapshot):
@@ -30,14 +30,14 @@ def actual_place(snapshot):
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--host',type=Path,default=ROOT/'runtime/build/unc-headless-luau')
-    parser.add_argument('--snapshot',type=Path,default=ROOT/'runtime/tests/unc_integration_snapshot.json')
+    parser.add_argument('--snapshot',type=Path,default=ROOT/'tests/fixtures/unc_integration_snapshot.json')
     parser.add_argument('--output',type=Path,default=ROOT/'outputs/runtime-analysis/sunc/latest.json')
     parser.add_argument('--require-place',action='store_true',help='Require the snapshot to contain the requested real PlaceId')
     parser.add_argument('--timeout-ms',type=int,default=30000)
     args=parser.parse_args()
     if not 1<=args.timeout_ms<=30000:parser.error('timeout must be 1..30000 ms')
     manifest=json.loads((FIXTURES/'manifest.json').read_text());source=FIXTURES/'suite.luau'
-    if not source.is_file():parser.error('Add the optional suite.luau identified by runtime/tests/sunc/manifest.json first')
+    if not source.is_file():parser.error('Add the optional suite.luau identified by tests/fixtures/sunc/manifest.json first')
     digest=hashlib.sha256(source.read_bytes()).hexdigest()
     if digest!=manifest['sha256']:parser.error('pinned sUNC source changed; review it before updating its manifest')
     snapshot=json.loads(args.snapshot.read_text());place=actual_place(snapshot)

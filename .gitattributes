@@ -1,4 +1,4 @@
-runtime/launcher/avatar-viewer.js -whitespace linguist-generated=true
-runtime/web/world-viewer.js -whitespace linguist-generated=true
+ui/avatar-viewer.js -whitespace linguist-generated=true
+ui/world-viewer.js -whitespace linguist-generated=true
 vendor/** -whitespace linguist-vendored=true
-runtime/tests/unc_environment.luau -whitespace
+tests/fixtures/unc_environment.luau -whitespace

@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
-"""Loopback-only browser editor for the existing local Luau script socket."""
-import argparse
+"""Rove HTTP bridge for the local Luau script socket."""
 import hmac
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
@@ -20,7 +19,6 @@ from display_state import validate_display
 from browser_input import validate_keyboard_request
 
 
-ASSETS = ROOT / 'runtime/web'
 MAX_BODY = 608 * 1024 * 1024
 JUMP_SOURCE = '''local player = game:GetService("Players").LocalPlayer
 local character = player and player.Character
@@ -33,7 +31,7 @@ return true'''
 
 
 class WebConsole:
-    def __init__(self, *, socket_path=None, port=0):
+    def __init__(self, *, socket_path=None, port=0, server=None):
         self.socket_path = Path(socket_path) if socket_path is not None else ROOT / 'secrets/client-script.sock'
         self.key = secrets.token_urlsafe(32)
         self.execution_lock = threading.Lock()
@@ -44,7 +42,8 @@ class WebConsole:
         self.image_cache={}
         from render_assets import RenderAssets
         self.render_assets = RenderAssets()
-        self.server = ThreadingHTTPServer(('127.0.0.1', port), Handler)
+        self.owns_server = server is None
+        self.server = server or ThreadingHTTPServer(('127.0.0.1', port), Handler)
         self.server.daemon_threads = True
         self.server.console = self
         self.port = self.server.server_address[1]
@@ -79,6 +78,7 @@ class WebConsole:
         return self.url
 
     def close(self):
+        if not self.owns_server:return
         if self.thread is not None:
             self.server.shutdown()
             self.thread.join(timeout=2)
@@ -165,23 +165,7 @@ class Handler(BaseHTTPRequestHandler):
                 self.console.frame_cache=None
             self.reply(200, {'connected': connected,'session':self.console.runtime_identity() if connected else None})
             return
-        files = {'/': ('index.html', 'text/html; charset=utf-8'),
-                 '/play': ('play.html', 'text/html; charset=utf-8'),
-                 '/play.js': ('play.js', 'text/javascript; charset=utf-8'),
-                 '/play.css': ('play.css', 'text/css; charset=utf-8'),
-                 '/world-viewer.js': ('world-viewer.js', 'text/javascript; charset=utf-8'),
-                 '/app.js': ('app.js', 'text/javascript; charset=utf-8'),
-                 '/style.css': ('style.css', 'text/css; charset=utf-8'),
-                 '/input.js': ('input.js', 'text/javascript; charset=utf-8'),
-                 '/keyboard-codes.json': ('keyboard-codes.json', 'application/json; charset=utf-8')}
-        if path not in files:
-            self.reply(404, {'ok': False, 'error': 'Not found'})
-            return
-        name, mime = files[path]
-        body = (ASSETS / name).read_bytes()
-        if path in ('/', '/play'):
-            body = body.replace(b'__CONSOLE_KEY__', self.console.key.encode())
-        self.reply(200, body, mime)
+        self.reply(404, {'ok':False,'error':'Use the Rove launcher for the interface'})
 
     def do_POST(self):
         if not self.valid_host():
@@ -323,22 +307,8 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main():
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--port', type=int, default=0, help='Local port; 0 selects a free port')
-    parser.add_argument('--no-open', action='store_true', help='Print the URL without opening a browser')
-    args = parser.parse_args()
-    if not 0 <= args.port <= 65535:
-        parser.error('Port must be 0..65535')
-    console = WebConsole(port=args.port)
-    print('Luau console: ' + console.start(open_browser=not args.no_open), flush=True)
-    print('Keep this terminal open. Ctrl+C closes the web console.', flush=True)
-    try:
-        threading.Event().wait()
-    except KeyboardInterrupt:
-        pass
-    finally:
-        console.close()
+    from launcher import main as launch
+    launch()
 
 
-if __name__ == '__main__':
-    main()
+if __name__ == '__main__':main()
