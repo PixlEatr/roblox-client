@@ -16,7 +16,6 @@ jobs:
     env:
       PYTHONUTF8: '1'
       CARGO_BUILD_JOBS: '2'
-      VCPKG_DEFAULT_BINARY_CACHE: ${{ runner.temp }}/vcpkg-binaries
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -32,12 +31,14 @@ jobs:
         if: runner.os == 'Windows'
         uses: actions/cache/restore@v4
         with:
-          path: ${{ env.VCPKG_DEFAULT_BINARY_CACHE }}
+          path: ${{ runner.temp }}/vcpkg-binaries
           key: windows-vcpkg-${{ runner.arch }}-${{ github.run_id }}
           restore-keys: windows-vcpkg-${{ runner.arch }}-
       - name: Install Windows dependencies
         if: runner.os == 'Windows'
         shell: pwsh
+        env:
+          VCPKG_DEFAULT_BINARY_CACHE: ${{ runner.temp }}/vcpkg-binaries
         run: |
           New-Item -ItemType Directory -Force "$env:VCPKG_DEFAULT_BINARY_CACHE" | Out-Null
           & "$env:VCPKG_INSTALLATION_ROOT/vcpkg.exe" install openssl:x64-windows zstd:x64-windows
@@ -50,7 +51,7 @@ jobs:
         if: runner.os == 'Windows'
         uses: actions/cache/save@v4
         with:
-          path: ${{ env.VCPKG_DEFAULT_BINARY_CACHE }}
+          path: ${{ runner.temp }}/vcpkg-binaries
           key: windows-vcpkg-${{ runner.arch }}-${{ github.run_id }}
       - name: Select stable Rust
         run: rustup default stable
