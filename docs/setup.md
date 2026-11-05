@@ -1,18 +1,10 @@
-# Setup
+# setup
 
-Rove builds from source. Use a local folder with all files downloaded, then open a terminal in that folder. Setup never joins a game and can be run again after an interrupted build.
+[download](https://github.com/alexkkork/roblox-client/archive/refs/heads/main.zip), unzip, then open a terminal in the Rove folder. first build takes a bit. the compiler is locking in.
 
 ## Windows — native terminal
 
-Install these prerequisites:
-
-- 64-bit Python 3.12 or newer, with the Python launcher (`py`).
-- Stable Rust with the MSVC toolchain, from [rustup](https://rustup.rs/).
-- CMake on PATH and Git.
-- Visual Studio Build Tools with **Desktop development with C++**.
-- OpenSSL 3 and zstd from [vcpkg](https://github.com/microsoft/vcpkg).
-
-For a new vcpkg installation, run in PowerShell:
+install **64-bit Python 3.12+** (with `py`), [Rust](https://rustup.rs/) (MSVC), Git, CMake on PATH, and Visual Studio Build Tools with **Desktop development with C++**. then run this once in PowerShell:
 
 ```powershell
 git clone https://github.com/microsoft/vcpkg C:\vcpkg
@@ -20,79 +12,56 @@ C:\vcpkg\bootstrap-vcpkg.bat
 C:\vcpkg\vcpkg.exe install openssl:x64-windows zstd:x64-windows
 ```
 
-Then, from the Rove folder:
+back in the Rove folder:
 
 ```powershell
 py rove.py setup
 notepad secrets\roblox-cookie.txt
-py rove.py check
 py rove.py
 ```
 
-Setup locates Visual Studio and the default `C:\vcpkg` installation. For a different vcpkg location, use `py rove.py setup --native-prefix D:\vcpkg\installed\x64-windows`. It remembers that path in `.rove-platform.json`; keep the dependency folder installed. Use x64 Python, Rust, and libraries together.
-
-No WSL, Node.js, or desktop app is needed for the Windows terminal. The local script console uses authenticated loopback TCP, and private files use Windows permissions. Optional source tracing is unavailable on Windows.
-
 ## macOS
 
-Install Python 3.12+, CMake, Node.js, Xcode command-line tools, and stable Rust. With Homebrew available:
+with [Homebrew](https://brew.sh/) installed:
 
 ```sh
 xcode-select --install
 brew install python@3.12 cmake node openssl@3 zstd
 ```
 
-Install Rust from [rustup](https://rustup.rs/), then:
-
-```sh
-python3.12 rove.py setup
-# Edit secrets/roblox-cookie.txt using your text editor.
-python3.12 rove.py check
-python3.12 rove.py
-```
-
-The default is the browser UI. `python3.12 rove.py terminal` opens only the terminal. The native Mac wrapper remains an [optional developer tool](../runtime/README.md).
+install [Rust](https://rustup.rs/), then run `python3.12 rove.py setup`.
 
 ## Linux
 
-On Ubuntu 24.04:
+on Ubuntu 24.04:
 
 ```sh
 sudo apt-get update
 sudo apt-get install -y python3 python3-venv python3-dev cmake g++ pkg-config libssl-dev libzstd-dev
 ```
 
-Install stable Rust from [rustup](https://rustup.rs/), then:
+install [Rust](https://rustup.rs/), then run `python3 rove.py setup`.
 
-```sh
-python3 rove.py setup
-# Edit secrets/roblox-cookie.txt using your text editor.
-python3 rove.py check
-python3 rove.py
-```
+## join
 
-For clipboard support, install `wl-clipboard` on Wayland or `xclip` on X11. Clipboard commands need a desktop session.
+after setup, put your Roblox session cookie in `secrets/roblox-cookie.txt` and save it. keep it private; don't paste it into issues or screenshots.
 
-## Commands
+run `py rove.py` on Windows, `python3.12 rove.py` on Mac, or `python3 rove.py` on Linux. Mac opens the browser UI; Windows/Linux open the terminal. paste a place ID or invite; `:quit` leaves the terminal session.
 
-| Command | What it does |
-| --- | --- |
-| `rove.py setup` | Installs Python dependencies, builds the runtime and animation codec, and runs an offline preflight. Also builds the UI on macOS. |
-| `rove.py check` | Runs the focused offline portability/runtime tests and preflight; no account needed. |
-| `rove.py terminal` | Opens the terminal; paste a place ID or invite. `:quit` leaves. |
-| `rove.py ui` | Opens the existing browser workspace. On Windows/Linux, first install Node.js and run `rove.py setup --with-ui`. |
-| `rove.py --help` | Lists commands without loading an account or starting a session. |
+## commands
 
-Prefix these commands with `py` on Windows or `python3` on macOS/Linux. Terminal options such as `--place` and `--duration` follow `terminal`. `terminal --help` lists them.
+use the same Python command from above before each one:
 
-## Troubleshooting
+- `rove.py setup` — build/update; safe to rerun if interrupted.
+- `rove.py check` — offline checks, no account needed.
+- `rove.py terminal` — terminal only.
+- `rove.py --help` — more options.
 
-- **Python too old:** select Python 3.12+ explicitly, for example `py -3.12 rove.py setup`.
-- **Compiler missing:** on Windows, install the C++ workload, then rerun setup. Setup finds Visual Studio automatically.
-- **DLL not found:** rerun setup with the correct `--native-prefix`; the folder must contain OpenSSL 3 and zstd under `bin/`.
-- **Account file rejected:** run setup to apply private permissions, then edit `secrets/roblox-cookie.txt`. Do not put credentials in commands or issues.
-- **Browser UI missing:** install Node.js, then run `rove.py setup --with-ui`.
-- **Slow build:** try `rove.py setup --jobs 2`. All source files must be present locally, including files in cloud-backed folders.
-- **A game fails or disconnects:** a successful offline check does not establish game compatibility. The runtime remains incomplete.
+## troubleshooting
 
-Setup does not install the official Roblox app. Optional built-in artwork can use an existing content folder; the runtime does not bundle it. No account is required for builds or offline checks.
+- build failing? check Python is 3.12+ and all source files are downloaded. try `rove.py setup --jobs 2`.
+- Windows DLL error? keep everything x64. custom vcpkg folder: `py rove.py setup --native-prefix D:\vcpkg\installed\x64-windows`.
+- want the browser UI on Windows/Linux? install Node.js, run `rove.py setup --with-ui`, then `rove.py ui`.
+- Linux clipboard? install `wl-clipboard` (Wayland) or `xclip` (X11); needs a desktop session.
+- cookie permissions rejected? rerun setup, then edit the file again.
+- game disconnects? Rove is still unfinished; passing offline checks doesn't mean every game works.
