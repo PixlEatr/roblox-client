@@ -1,34 +1,3 @@
 # Rove
 
-a Roblox runtime i'm working on. run Luau in the terminal or use the browser UI for scripts + a game preview.
-
-## Start here
-
-1. [Download the source ZIP](https://github.com/alexkkork/roblox-client/archive/refs/heads/main.zip) and extract it, or clone this repository.
-2. Install the prerequisites: [Windows](docs/setup.md#windows--native-terminal), [macOS](docs/setup.md#macos), or [Linux](docs/setup.md#linux).
-3. Open a terminal in the extracted folder and use the commands below.
-
-| | Windows | macOS / Linux |
-| --- | --- | --- |
-| Set up once | `py rove.py setup` | `python3 rove.py setup` |
-| Check offline | `py rove.py check` | `python3 rove.py check` |
-| Start | `py rove.py` | `python3 rove.py` |
-
-Setup creates an empty, private `secrets/roblox-cookie.txt`. Add your account session there before joining. Keep that file local.
-
-Windows and Linux start in the terminal. macOS opens the browser UI. Use `rove.py terminal` for terminal mode on any system; `:quit` leaves the game. Setup is only needed the first time or after updating the source.
-
-**Windows uses a native source build.** Build and offline-test results are available in [GitHub Actions](https://github.com/alexkkork/roblox-client/actions/workflows/portability.yml). virtual input is in now too — keys, mouse, touch, gamepads and record/replay. still fixing physics and game scripts, so expect some bugs.
-
-## Find your way
-
-| I want to… | Open |
-| --- | --- |
-| Fix a setup problem | [Troubleshooting](docs/setup.md#troubleshooting) |
-| Find a command | [Command reference](docs/setup.md#commands) |
-| Change the code | [Project map](docs/development.md) |
-| Find physics, scripting, or session code | [Python module guide](scripts/README.md) |
-| Try virtual input | [Quick example](docs/virtual-input.md) |
-| Run tests | [Test guide](tests/README.md) |
-
-[All guides](docs/README.md) · [Third-party credits](THIRD_PARTY.md)
+rove lets you join roblox games and run luau scripts. still working on it, [setup is here](docs/setup.md) if you wanna try it.
