@@ -24,7 +24,8 @@ def main():
     env['CFRAME_PERSISTENT_HOST'] = str(RUST_HOST)
     subprocess.run([sys.executable, '-m', 'unittest', '-v',
         'test_rove_entrypoint', 'test_platform_portability', 'test_windows_setup', 'test_extended_compat', 'test_rust_host',
-        'test_platform_standing', 'test_move_to_completion'], cwd=ROOT, env=env, check=True)
+        'test_platform_standing', 'test_move_to_completion', 'test_world_action_journal'],
+        cwd=ROOT, env=env, check=True)
     subprocess.run([sys.executable, str(ROOT/'scripts/runtime_preflight.py')],
                    cwd=ROOT, env=env, check=True)
 

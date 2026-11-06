@@ -7,6 +7,7 @@ import math
 from wire_reader import Reader, WireError, decompress_stream, decompress_bytes
 from replication_ping import read_ping
 from received_attributes import attribute_update
+from world_action_journal import WorldActionJournal
 
 
 class World:
@@ -48,7 +49,7 @@ class World:
         self.changes = collections.deque(maxlen=100000)
         self.event_sequence = 0
         self.event_journal = collections.deque(maxlen=4096)
-        self.actions = collections.deque(maxlen=100000)
+        self.actions = WorldActionJournal()
         self._removal_children = None
         self._removal_instances = None
         # Published only after an entire ordinary replication packet validates.

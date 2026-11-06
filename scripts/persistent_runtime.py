@@ -196,6 +196,8 @@ class PersistentClientScriptRuntime:
         self.host = None
         self.world = None
         self.revision = 0
+        self._action_journal = None
+        self._action_reader = None
         self.executions = 0
         self.last_poll = 0.
         self.messages = collections.deque(maxlen=128)
@@ -583,7 +585,10 @@ class PersistentClientScriptRuntime:
                 raise
             self.world = world
             self._session_stats_sent = snapshot['session_stats']
-            self.revision = world.revision
+            self.revision = snapshot['sequence']
+            if hasattr(world.actions, 'retain'):
+                self._action_journal = world.actions
+                self._action_reader = self._action_journal.retain(self.revision)
             self.script_catalog = snapshot.get('script_sources', {})
             self.initial_replication_complete = snapshot.get('initial_replication_complete', False)
             self.shared_entry_count = len(getattr(world, 'shared', {}))
@@ -672,6 +677,12 @@ class PersistentClientScriptRuntime:
                 return True
         return False
 
+    def _acknowledge_world(self, revision):
+        self.revision = revision
+        if self._action_journal is not None:
+            self._action_journal.acknowledge(self._action_reader, revision)
+            self.stats['world_replay_retention'] = self._action_journal.retention_stats()
+
     def _world_update(self, world):
         delta = make_world_delta(world, self.revision, max_actions=2048, max_bytes=4*1024*1024)
         statistics = self._session_statistics()
@@ -720,7 +731,7 @@ class PersistentClientScriptRuntime:
         if not result['ok']: raise RuntimeError(result.get('error', 'Persistent world update failed'))
         if 'session_stats' in delta:
             self._session_stats_sent = delta['session_stats']
-        self.revision = delta['sequence']
+        self._acknowledge_world(delta['sequence'])
         if caught_up:
             self._catalog_catchup_needed = False
         self.script_catalog = catalog
@@ -904,7 +915,7 @@ class PersistentClientScriptRuntime:
                 self._session_stats_sent = context['session_stats']
             # Only acknowledge the captured revision. The network thread can
             # have received more actions while this immutable command ran.
-            self.revision = context['revision']
+            self._acknowledge_world(context['revision'])
             self.script_catalog = context['catalog']
             self.initial_replication_complete = context['initial_ready']
             self.shared_entry_count = context['shared_entry_count']
@@ -1095,6 +1106,9 @@ class PersistentClientScriptRuntime:
             raise
 
     def close(self):
+        if self._action_journal is not None:
+            self._action_journal.release(self._action_reader)
+            self._action_journal = self._action_reader = None
         if self._background_lane is not None:self._background_lane.close()
         self._background_context = None
         self._background_source_pending = None

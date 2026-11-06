@@ -264,13 +264,14 @@ def make_world_delta(world, since_revision, *, max_actions=None, max_bytes=None)
         raise ValueError('Delta action budget must be positive')
     if max_bytes is not None and (type(max_bytes) is not int or max_bytes < 1024):
         raise ValueError('Delta byte budget must be at least 1024')
-    if world.actions and since_revision < world.actions[0]['sequence'] - 1:
+    retained = getattr(world.actions, 'iter_since', None)
+    if retained is None and world.actions and since_revision < world.actions[0]['sequence'] - 1:
         raise ValueError('World action journal was overrun; faithful event replay is unavailable')
     actions = []
     used_bytes = 256  # Envelope and final sequence; leave room for JSON separators.
     sequence = world.revision
-    records = world.actions
-    if records and since_revision >= records[len(records) // 2]['sequence']:
+    records = retained(since_revision) if retained else world.actions
+    if retained is None and records and since_revision >= records[len(records) // 2]['sequence']:
         # A caught-up consumer needs only the recent suffix. Walk it backwards
         # to avoid scanning the retained history, then restore receipt order.
         # Keep the forward path for a backlog so bounded batches stay cheap.
