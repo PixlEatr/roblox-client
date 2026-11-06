@@ -5,11 +5,13 @@ window.addEventListener("rove:workspace", () => {
     const $=id=>document.getElementById("game-"+id),key=document.querySelector('meta[name="console-key"]').content;
     const client=Array.from(crypto.getRandomValues(new Uint8Array(16)),x=>x.toString(16).padStart(2,'0')).join('');
     let renderer,connected=false,stopped=false,moving=false,moveBusy=false,moveSequence=0,resizeBusy=false;
+    let moveQueued=false,releaseQueued=false;
     let lastSize='',lastPlayers='',lastTick=0,resizeRetry=0,lastSample=null,hasFrame=false;
     let runtimeIdentity=null;
     const held=new Set(),nodes=new Map();
     async function post(path,data,keepalive=false) {
-        const response=await fetch(path,{method:'POST',headers:{'Content-Type':'application/json','X-Console-Key':key},body:JSON.stringify(data),signal:keepalive?undefined:AbortSignal.timeout(path==='/api/runtime/render-asset'?20000:12000),keepalive});
+        const timeout=path==='/api/runtime/move'?1000:path==='/api/runtime/render-asset'?20000:12000;
+        const response=await fetch(path,{method:'POST',headers:{'Content-Type':'application/json','X-Console-Key':key},body:JSON.stringify(data),signal:AbortSignal.timeout(timeout),keepalive});
         const result=await response.json();if(!response.ok||!result.ok)throw new Error(result.error||'Session request failed');return result;
     }
     let fontGeneration=0;
@@ -28,28 +30,44 @@ window.addEventListener("rove:workspace", () => {
     const scrolling=RoveGuiScroll.create({surface:$('game-gui'),
         enabled:()=>connected&&!document.hidden&&!document.getElementById('workspace-page').hidden,
         send:action=>post('/api/runtime/gui',action),onError:error=>{$('action-state').textContent=error.message;}});
-    function resetMovement(){held.clear();if(moving)void sendMovement(true);}
+    function resetMovement(){held.clear();if(moving||moveBusy)void sendMovement(true);}
     async function sendMovement(force=false) {
-        if(moveBusy||!connected)return;
-        const active=document.activeElement===$('surface')&&document.visibilityState==='visible';
+        if(!connected||(stopped&&!force))return;
+        if(moveBusy){moveQueued=true;releaseQueued||=force;return;}
+        const active=!stopped&&document.activeElement===$('surface')&&document.visibilityState==='visible';
         const x=active?Number(held.has('KeyD'))-Number(held.has('KeyA')):0;
         const z=active?Number(held.has('KeyS'))-Number(held.has('KeyW')):0;
         if(!x&&!z&&!moving&&!force)return;
+        const identity=runtimeIdentity,direction=x||z?renderer.direction(x,z):[0,0,0];
         moveBusy=true;
-        try{await post('/api/runtime/move',{client,sequence:++moveSequence,direction:renderer.direction(x,z)},force);moving=Boolean(x||z);}
-        catch(error){moving=false;$('action-state').textContent=error.message;}
-        finally{moveBusy=false;}
+        try{
+            await post('/api/runtime/move',{client,sequence:++moveSequence,direction},force&&!x&&!z);
+            if(identity===runtimeIdentity)moving=Boolean(x||z);
+        }catch(error){
+            if(identity===runtimeIdentity){
+                // A failed response can still leave an earlier move active.
+                moving=moving||Boolean(x||z);
+                $('action-state').textContent=error.message;
+            }
+        }finally{
+            moveBusy=false;
+            if(moveQueued){
+                const release=releaseQueued;
+                moveQueued=releaseQueued=false;
+                void sendMovement(release);
+            }
+        }
     }
     document.addEventListener('keydown',event=>{
         if(!event.isTrusted||!connected||document.activeElement!==$('surface'))return;
         if(event.code==='Escape'){resetMovement();return;}
-        if(['KeyW','KeyA','KeyS','KeyD'].includes(event.code)){held.add(event.code);void sendMovement();}
+        if(['KeyW','KeyA','KeyS','KeyD'].includes(event.code)&&!held.has(event.code)&&!event.repeat){held.add(event.code);void sendMovement();}
         if(event.code==='Space'&&!event.repeat)void post('/api/runtime/jump',{action:'jump'}).catch(error=>{$('action-state').textContent=error.message;});
     });
     document.addEventListener('keyup',event=>{if(held.delete(event.code))void sendMovement();});
     $('surface').addEventListener('blur',resetMovement);window.addEventListener('blur',resetMovement);
     document.addEventListener('visibilitychange',()=>{if(document.hidden){resetMovement();scrolling.reset();}});
-    setInterval(()=>void sendMovement(),150);
+    setInterval(()=>{if(!moveBusy)void sendMovement();},200);
     function requestMessage(error) {
         return ['TimeoutError','AbortError'].includes(error?.name)?'The client is busy. Waiting for the next game frame…':error.message;
     }
@@ -458,14 +476,16 @@ window.addEventListener("rove:workspace", () => {
     async function tick() {
         if(stopped)return;
         const started=performance.now();
+        let frameInterval=100;
         try{
             if(!document.hidden&&!document.getElementById('workspace-page').hidden){
                 if(!connected||Date.now()-lastTick>1500){const response=await fetch('/api/runtime/status',{signal:AbortSignal.timeout(5000)});if(!response.ok)throw new Error('The local client is temporarily unavailable.');const state=await response.json();
-                    if(state.session!==runtimeIdentity){clearFrame();runtimeIdentity=state.session;lastSize='';resizeRetry=0;held.clear();moving=false;controls.setConnected(false);renderer.setMode($('camera').value);}
+                    if(state.session!==runtimeIdentity){clearFrame();runtimeIdentity=state.session;lastSize='';resizeRetry=0;held.clear();moving=moveQueued=releaseQueued=false;controls.setConnected(false);renderer.setMode($('camera').value);}
                     connected=state.connected===true;if(!connected)lastSize='';$('leave').disabled=!connected;controls.setConnected(connected);lastTick=Date.now();}
                 if(!connected)throw new Error('Start a game from the launcher or terminal. This window attaches without rejoining.');
                 void syncSize();
-                const result=await post('/api/runtime/render',{});if(stopped)return;
+                const result=await post('/api/runtime/render',lastSample==null?{}:{after:lastSample});if(stopped)return;
+                if(moving||moveBusy||(!hasFrame&&result.pending))frameInterval=50;
                 if(result.frame&&(result.sample==null||result.sample!==lastSample))presentFrame(result.frame,result.sample);
                 const delayed=!!result.message||(result.age_ms||0)>2000;
                 $('waiting').hidden=hasFrame;
@@ -479,7 +499,7 @@ window.addEventListener("rove:workspace", () => {
             $('waiting').hidden=connected&&hasFrame;$('waiting-text').textContent=requestMessage(error);
             if(!connected){clearFrame();$('statistics').textContent='Waiting for a connected session';}
             else if(hasFrame)$('statistics').textContent='Showing the last frame · reconnecting to the display';
-        }finally{if(!stopped)setTimeout(tick,Math.max(100,150-(performance.now()-started)));}
+        }finally{if(!stopped)setTimeout(tick,Math.max(25,frameInterval-(performance.now()-started)));}
     }
     $('camera').addEventListener('change',()=>renderer.setMode($('camera').value));
     $('players-toggle').onclick=()=>{$('players').hidden=!$('players').hidden;};

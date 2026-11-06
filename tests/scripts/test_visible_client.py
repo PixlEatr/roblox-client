@@ -317,6 +317,9 @@ class RenderReconnectTests(unittest.TestCase):
         web=WebConsole(socket_path='/tmp/unused-visible-client.sock');self.addCleanup(web.close)
         with patch.object(web,'runtime_identity',return_value='first'),patch('web_console.send_request',side_effect=[{'ok':True,'frame':{'parts':[],'gui':[]}},TimeoutError('timed out')]) as send:
             good=self.wait_frame(web)
+            unchanged=web.render_frame(after=good['sample'])
+            self.assertEqual(unchanged['sample'],good['sample'])
+            self.assertNotIn('frame',unchanged)
             web.frame_time-=1
             self.assertEqual(web.render_frame()['frame'],good['frame'])
             self.wait_idle(web)
@@ -324,6 +327,7 @@ class RenderReconnectTests(unittest.TestCase):
             self.assertEqual(failed['frame'],good['frame'])
             self.assertEqual(failed['sample'],good['sample'])
             self.assertIn('busy',failed['message'])
+            self.assertNotIn('frame',web.render_frame(after=good['sample']))
             for _ in range(5):web.render_frame()
             self.assertEqual(send.call_count,2)
 

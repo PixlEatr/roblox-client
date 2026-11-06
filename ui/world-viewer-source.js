@@ -5,6 +5,8 @@ import {WorldAssets} from './world-assets.js';
 import {clothingFaces} from './world-clothing.js';
 import {finite,clamp,vector,enumValue,materialName,partOpacity,partShape,primitiveGeometries,materialTexture,makeMaterial,decalMaterial,transformOf,PoseTrack} from './world-appearance.js';
 
+const OWN_POSE_BLEND_MS=100;
+
 export function mount(container,{forceSoftware=false,onBackendChange=()=>{},loadAsset=null}={}) {
     let renderer=createWorldRenderer({forceSoftware});
     const stage=document.createElement('div');stage.className='world-stage';stage.style.cssText='position:absolute;inset:0;z-index:0';container.prepend(stage);
@@ -62,7 +64,7 @@ export function mount(container,{forceSoftware=false,onBackendChange=()=>{},load
         for(const part of (data.parts||[]).slice(0,1800)){
             if(!vector(part.position,null)||!vector(part.size,null))continue;
             seen.add(part.id);const pose=transformOf(part);
-            if(tracks.has(part.id))tracks.get(part.id).update(pose,now);else tracks.set(part.id,new PoseTrack(pose,now));
+            if(tracks.has(part.id))tracks.get(part.id).update(pose,now,part.own?OWN_POSE_BLEND_MS:undefined);else tracks.set(part.id,new PoseTrack(pose,now));
             if(partOpacity(part)<.001)continue;
             const shape=partShape(part),file=part.mesh?.id?assets.get('mesh',part.mesh.id):null;
             const map=part.mesh?.texture?assets.get('texture',part.mesh.texture):null;
@@ -101,7 +103,7 @@ export function mount(container,{forceSoftware=false,onBackendChange=()=>{},load
             batch.entries.forEach(({part,decal},i)=>{color.copy(rgb(decal?.color||part.color,[.64,.64,.64]));if(!decal&&part.mesh?.vertexColor)color.multiply(new T.Color(...vector(part.mesh.vertexColor,[1,1,1])));batch.mesh.setColorAt(i,color);});batch.mesh.instanceColor.needsUpdate=true;
         }
         const focus=vector(data.focus,null);
-        if(focus){const pose=transformOf({position:focus,size:[1,1,1]});if(focusTrack)focusTrack.update(pose,now);else focusTrack=new PoseTrack(pose,now);}
+        if(focus){const pose=transformOf({position:focus,size:[1,1,1]});if(focusTrack)focusTrack.update(pose,now,OWN_POSE_BLEND_MS);else focusTrack=new PoseTrack(pose,now);}
         else if(!data.parts?.length){focusTrack=null;lastFocus=null;ready=false;}
         if(mode==='script'&&data.camera?.frame?.$cframe){const cf=data.camera.frame.$cframe,pose=transformOf({position:cf.position,frame:data.camera.frame});camera.position.copy(pose.position);camera.quaternion.copy(pose.rotation);camera.fov=clamp(finite(data.camera.fov,70),1,120);camera.updateProjectionMatrix();}
         updatePoses(now);

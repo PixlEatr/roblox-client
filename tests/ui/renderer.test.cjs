@@ -99,6 +99,15 @@ test('render poses interpolate translation and quaternion without modifying snap
     assert.deepEqual(a.position.$vector3,[0,0,0]);assert.deepEqual(b.position.$vector3,[10,0,0]);
     track.update(transformOf({position:[200,0,0]}),300);assert.equal(track.sample(300).position.x,200);
 });
+test('the local pose can catch up sooner after a gap between samples',()=>{
+    const start=transformOf({position:[0,0,0]}),end=transformOf({position:[10,0,0]});
+    const local=new PoseTrack(start,0),remote=new PoseTrack(start,0);
+    local.update(end,200,100);remote.update(end,200);
+    assert.equal(local.sample(250).position.x,5);
+    assert.equal(local.sample(300).position.x,10);
+    assert.ok(remote.sample(300).position.x<10);
+    assert.equal(remote.sample(380).position.x,10);
+});
 test('classic clothing maps front torso and both limbs to different template regions',()=>{
     const torso=clothingFaces({characterPart:'Torso',clothing:{shirt:'shirt',pants:'pants',graphic:'graphic'}});
     assert.equal(torso.length,13);assert.deepEqual(torso.find(d=>d.face===5&&d.texture==='shirt').crop,[231,74,128,128]);

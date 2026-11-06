@@ -127,9 +127,9 @@ export class PoseTrack {
     constructor(pose,time){this.from=pose;this.to=pose;this.time=time;this.duration=0;this.received=time;}
     sample(time){const t=clamp((time-this.time)/Math.max(1,this.duration),0,1);return {
         position:this.from.position.clone().lerp(this.to.position,t),scale:this.from.scale.clone().lerp(this.to.scale,t),rotation:this.from.rotation.clone().slerp(this.to.rotation,t)};}
-    update(pose,time){
+    update(pose,time,maxDuration=180){
         if(pose.position.equals(this.to.position)&&pose.rotation.angleTo(this.to.rotation)<1e-5&&pose.scale.equals(this.to.scale))return;
         const current=this.sample(time),teleport=current.position.distanceToSquared(pose.position)>64*64;
-        this.from=teleport?pose:current;this.to=pose;this.duration=teleport?0:clamp(time-this.received,50,180);this.time=time;this.received=time;
+        this.from=teleport?pose:current;this.to=pose;this.duration=teleport?0:clamp(time-this.received,50,maxDuration);this.time=time;this.received=time;
     }
 }

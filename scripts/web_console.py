@@ -56,7 +56,7 @@ class WebConsole:
         self.url = f'http://127.0.0.1:{self.port}/'
         self.thread = None
 
-    def render_frame(self):
+    def render_frame(self, after=None):
         with self.render_lock:
             now=time.monotonic()
             identity=self.runtime_identity()
@@ -69,6 +69,8 @@ class WebConsole:
             if self.render_closed or identity is None:
                 return {'ok':False,'error':'The client is disconnected.'}
             if self.frame_cache is not None and now-self.frame_time<.1:
+                if after==self.frame_serial:
+                    return {'ok':True,'sample':self.frame_serial,'age_ms':round((now-self.frame_time)*1000)}
                 return self.frame_cache
             if self.frame_pending is None and now>=self.frame_retry:
                 token=object()
@@ -76,8 +78,9 @@ class WebConsole:
                 threading.Thread(target=self._read_frame,args=(identity,token),daemon=True).start()
             result={'ok':True,'pending':True}
             if self.frame_cache is not None:
-                result.update(frame=self.frame_cache['frame'],sample=self.frame_serial,
-                              age_ms=round((now-self.frame_time)*1000))
+                result.update(sample=self.frame_serial,age_ms=round((now-self.frame_time)*1000))
+                if after!=self.frame_serial:
+                    result['frame']=self.frame_cache['frame']
             if self.frame_error:
                 result['message']=self.frame_error
             return result
@@ -251,8 +254,12 @@ class Handler(BaseHTTPRequestHandler):
             if self.path in ('/api/render','/api/leave','/api/gui','/api/move'):
                 if not isinstance(request,dict):
                     raise ValueError('Expected an object')
-                if self.path in ('/api/render','/api/leave') and request!={}:
+                if self.path=='/api/leave' and request:
                     raise ValueError('Unexpected session request fields')
+                if self.path=='/api/render' and request:
+                    after=request.get('after')
+                    if set(request)!={'after'} or type(after) is not int or not 1<=after<2**53:
+                        raise ValueError('Invalid render sample')
                 if self.path=='/api/gui':
                     kind=request.get('kind')
                     fields=({'id','kind','text'} if kind=='text' else
@@ -301,7 +308,7 @@ class Handler(BaseHTTPRequestHandler):
                         raise ValueError('Invalid movement direction')
                 try:
                     if self.path=='/api/render':
-                        result=self.console.render_frame()
+                        result=self.console.render_frame(after=request.get('after'))
                     elif self.path=='/api/move':
                         result=send_request(self.console.socket_path,{'op':'movement','movement':request})
                     else:
