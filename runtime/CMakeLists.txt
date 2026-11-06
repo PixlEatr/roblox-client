@@ -17,10 +17,22 @@ foreach(lib Common Ast Bytecode Compiler Config VM)
 endforeach()
 add_custom_target(luau-libraries DEPENDS Luau.Compiler Luau.VM Luau.Bytecode Luau.Config Luau.Ast Luau.Common)
 
-file(READ "${CMAKE_CURRENT_SOURCE_DIR}/class-constructors-745.json" registry)
-set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/class-constructors-745.json")
-file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/class_registry_data.hpp"
-    "static constexpr const char* kConstructorJson = R\"ROBLOX(${registry})ROBLOX\";\n")
+set(registry_path "${CMAKE_CURRENT_SOURCE_DIR}/class-constructors-745.json")
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${registry_path}")
+file(READ "${registry_path}" registry_hex HEX)
+string(LENGTH "${registry_hex}" registry_length)
+set(registry_header "static constexpr const char* kConstructorJsonChunks[] = {\n")
+# Keep each literal below MSVC's limit and preserve the JSON bytes across
+# chunk boundaries, including UTF-8 and line endings.
+set(offset 0)
+while(offset LESS registry_length)
+    string(SUBSTRING "${registry_hex}" ${offset} 4096 chunk)
+    string(REGEX REPLACE "(..)" "\\\\x\\1" chunk "${chunk}")
+    string(APPEND registry_header "    \"${chunk}\",\n")
+    math(EXPR offset "${offset} + 4096")
+endwhile()
+string(APPEND registry_header "};\n")
+file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/class_registry_data.hpp" "${registry_header}")
 
 find_package(Threads REQUIRED)
 add_library(rove_lz4 STATIC "${CMAKE_CURRENT_SOURCE_DIR}/../vendor/lz4/lz4.c")

@@ -53,7 +53,11 @@ constexpr int kMaxJsonDepth = 32;
 #include "input_capabilities.inc"
 
 const Json& constructors() {
-    static const Json classes = Json::parse(kConstructorJson).at("classes");
+    static const Json classes = [] {
+        std::string registry;
+        for(const char* chunk:kConstructorJsonChunks)registry+=chunk;
+        return Json::parse(registry).at("classes");
+    }();
     return classes;
 }
 #include "client_settings.inc"

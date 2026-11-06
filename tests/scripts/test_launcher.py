@@ -52,6 +52,15 @@ class LauncherTests(unittest.TestCase):
         self.assertNotIn(b'ROBLOSECURITY',body)
         self.assertNotIn(b'roblox-cookie',body)
 
+    def test_expired_saved_account_requests_reconnection(self):
+        api = launcher.AccountAPI()
+        api.session = Mock()
+        api.session.request.return_value = {'http_status':401, 'challenge_present':False}
+        with patch.object(self.app, 'api', api):
+            status, body = self.request('/api/account')
+        self.assertEqual(status, 401)
+        self.assertIn('expired', json.loads(body)['error'])
+
     def test_workspace_url_and_session_links_use_the_same_interface(self):
         _,home=self.request('/')
         for path in ('/workspace','/workspace/','/workspace?renderer=software'):

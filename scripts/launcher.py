@@ -36,6 +36,10 @@ def image_url(value):
     return value if url.scheme == 'https' and url.hostname and (url.hostname == 'rbxcdn.com' or url.hostname.endswith('.rbxcdn.com')) else None
 
 
+class AccountSessionExpired(SessionError):
+    pass
+
+
 class AccountAPI:
     def __init__(self):
         self._session = None
@@ -59,7 +63,7 @@ class AccountAPI:
         result = self.session.request(host, path, method, payload, csrf_retry=method in ('POST','DELETE'))
         if result['http_status'] not in (200,201,204) or result['challenge_present']:
             if result['http_status'] == 401:
-                raise SessionError('Your saved account session expired. Open Setup to reconnect your account.')
+                raise AccountSessionExpired('Your saved Roblox session expired. Connect your account again.')
             raise SessionError(f'Roblox could not load this section (HTTP {result["http_status"]}).')
         return result['data']
 
@@ -438,7 +442,10 @@ class Handler(RuntimeHandler):
                 if page=='shop':return self.reply(200,shop(self.app.api,query.get('q',[''])[0],query.get('category',['shirts'])[0],query.get('cursor',[''])[0]))
                 return self.reply(404,{'error':'Not found'})
             if parsed.path == '/api/account':
-                return self.reply(200, self.app.api.account())
+                try:
+                    return self.reply(200, self.app.api.account())
+                except AccountSessionExpired as error:
+                    return self.reply(401, {'error':str(error)})
             if parsed.path == '/api/friends':
                 return self.reply(200, self.app.api.friends())
             if parsed.path == '/api/games':

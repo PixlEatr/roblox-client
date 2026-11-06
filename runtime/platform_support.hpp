@@ -10,6 +10,10 @@
 #endif
 #include <windows.h>
 #include <bcrypt.h>
+// Legacy Windows SDK macros collide with C++ identifiers in the runtime.
+#undef near
+#undef far
+#undef small
 inline int host_wide_main(int argc,wchar_t** argv,int (*entry)(int,char**)) {
     std::vector<std::string> values;
     std::vector<char*> pointers;

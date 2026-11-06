@@ -53,9 +53,37 @@ async function lookup(value){try{const game=await api('/api/game?place='+encodeU
 function openJoin(){banner('join-error',null);$('join-target').value='';$('join-dialog').showModal();setTimeout(()=>$('join-target').focus(),40);}
 async function play(target,game){try{const result=await api('/api/play',{target,game:game||{}});$('game-dialog').close();$('join-dialog').close();renderSession(result);navigate('workspace');toast('Connecting to your experience…');}catch(error){if($('game-dialog').open)banner('modal-error',error.message);else if($('join-dialog').open)banner('join-error',error.message);else toast(error.message);}}
 function renderSession(session){state.session=session;$('session-card').dataset.state=session.state;const visible=session.state!=='idle';$('session-card').hidden=!visible;if(!visible)return;$('session-name').textContent=session.game?.name||'Your experience';const labels={preparing:'Checking access and preparing your session…',joining:'Joining the game server…',playing:'Connected · Character spawned',leaving:'Leaving your session…',error:'Could not join'};$('session-progress').textContent=session.error||session.events?.at(-1)||labels[session.state];$('leave').textContent=session.state==='error'?'Dismiss':'Leave';$('leave').disabled=session.state==='leaving';const surface=state.liveSurface||(session.state==='playing'?'/workspace':null);$('open-client').hidden=!surface;if(surface)$('open-client').href=surface;}
-async function load(){const refresh=$('refresh');refresh.disabled=true;banner('account-error',null);try{state.account=await api('/api/account');$('header-name').textContent=state.account.name;$('header-avatar').replaceWith(Object.assign(avatar(state.account,true),{id:'header-avatar'}));$('sidebar-avatar').replaceWith(Object.assign(avatar(state.account,true),{id:'sidebar-avatar'}));$('sidebar-name').textContent=state.account.name;setView(state.view);}catch(error){banner('account-error',error.message);$('header-name').textContent='Account unavailable';refresh.disabled=false;return;}await Promise.allSettled([api('/api/friends').then(data=>{state.friends=data.friends;renderFriends();if(data.warning)toast(data.warning);}).catch(error=>{const empty=element('div','empty-friends',error.message);$('friends-row').replaceChildren(empty);}),api('/api/games').then(data=>{state.games=data.games;state.favorites=data.favoriteIds;state.recent=data.recentIds;state.recommendationIds=data.recommendationIds;renderGames();if(data.warning)toast(data.warning);}).catch(error=>{banner('account-error',error.message);$('games-grid').replaceChildren();$('games-empty').hidden=false;})]);refresh.disabled=false;if(state.view==='home')route();}
+async function load({startup=false}={}){
+ const refresh=$('refresh');
+ refresh.disabled=true;
+ banner('account-error',null);
+ try{
+  try{
+   state.account=await api('/api/account');
+  }catch(error){
+   state.account=null;
+   $('header-name').textContent='Account unavailable';
+   if(error.status===401)await window.RoveSetup.open(error.message,{reconnect:true});
+   else banner('account-error',error.message);
+   return;
+  }
+  $('header-name').textContent=state.account.name;
+  $('header-avatar').replaceWith(Object.assign(avatar(state.account,true),{id:'header-avatar'}));
+  $('sidebar-avatar').replaceWith(Object.assign(avatar(state.account,true),{id:'sidebar-avatar'}));
+  $('sidebar-name').textContent=state.account.name;
+  setView(state.view);
+  if(startup)window.RoveSetup.loading('Getting your library ready','Loading your experiences and connections…');
+  await Promise.allSettled([
+   api('/api/friends').then(data=>{state.friends=data.friends;renderFriends();if(data.warning)toast(data.warning);})
+    .catch(error=>$('friends-row').replaceChildren(element('div','empty-friends',error.message))),
+   api('/api/games').then(data=>{state.games=data.games;state.favorites=data.favoriteIds;state.recent=data.recentIds;state.recommendationIds=data.recommendationIds;renderGames();if(data.warning)toast(data.warning);})
+    .catch(error=>{banner('account-error',error.message);$('games-grid').replaceChildren();$('games-empty').hidden=false;}),
+  ]);
+  if(state.view==='home')route();
+ }finally{refresh.disabled=false;}
+}
 document.querySelectorAll('[data-view]').forEach(b=>b.addEventListener('click',()=>navigate(b.dataset.view)));document.querySelectorAll('[data-filter]').forEach(b=>b.addEventListener('click',()=>{state.filter=b.dataset.filter;renderGames();}));['empty-open'].forEach(id=>$(id).addEventListener('click',openJoin));$('continue-all').addEventListener('click',()=>{setView(state.recent.length?'discover':'favorites');if(state.recent.length){state.filter='recent';renderGames();}});$('menu-toggle').addEventListener('click',()=>document.body.classList.toggle('sidebar-collapsed'));['profile-nav','sidebar-profile'].forEach(id=>$(id).addEventListener('click',()=>$('profile-button').click()));$('all-friends').addEventListener('click',()=>navigate('friends'));$('refresh').addEventListener('click',load);$('profile-button').addEventListener('click',()=>{if(state.account)navigateProfile(state.account.id);});$('close-game').addEventListener('click',()=>$('game-dialog').close());$('close-join').addEventListener('click',()=>$('join-dialog').close());document.querySelectorAll('dialog').forEach(d=>d.addEventListener('click',e=>{if(e.target===d){const r=d.getBoundingClientRect();if(e.clientX<r.left||e.clientX>r.right||e.clientY<r.top||e.clientY>r.bottom)d.close();}}));$('play-game').addEventListener('click',()=>{if(state.selected)play(String(state.selected.placeId),state.selected);});$('join-form').addEventListener('submit',e=>{e.preventDefault();const value=$('join-target').value.trim();if(/^https:\/\/www\.roblox\.com\/share(?:-links)?\?/.test(value))play(value,{name:'Private server'});else lookup(value);});$('search-form').addEventListener('submit',e=>{e.preventDefault();const value=$('search').value.trim();if(/^https:\/\/www\.roblox\.com\/share(?:-links)?\?/.test(value))play(value,{name:'Private server'});else if(/^\d+$/.test(value)||value.startsWith('https://www.roblox.com/games/'))lookup(value);else{goRoute('/#/search?q='+encodeURIComponent(value));}});$('leave').addEventListener('click',async()=>{try{renderSession(await api('/api/leave',{}));}catch(error){toast(error.message);}});
-async function poll(){try{renderSession(await api('/api/status'));}catch{}setTimeout(poll,1200);}window.addEventListener("DOMContentLoaded",async()=>{route();poll();if(await window.RoveSetup.start())load();});
+async function poll(){try{renderSession(await api('/api/status'));}catch{}setTimeout(poll,1200);}window.addEventListener("DOMContentLoaded",async()=>{route();poll();await window.RoveSetup.start();});
 
 // Local navigation mirrors Roblox's profile and connection routes.
 state.socialKind='friends';state.socialUser=null;state.people=[];state.profile=null;state.socialRequest=0;
