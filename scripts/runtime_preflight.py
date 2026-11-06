@@ -42,12 +42,13 @@ def _probe():
     if not _inspector().opcode_metadata()['opcodes'] or not _public_coefficients():
         return {'ok': False, 'reason': 'dependency_validation_failed'}
     # Authored source only: no captured program, credentials, or network access.
-    contexts = (None, {'mode': 'offline', 'job_id': 'offline-fixture-preflight',
-                       'is_studio': False, 'services': ['RunService']})
-    for context in contexts:
+    probes = (('rust_source', None),
+              ('cpp_offline_context', {'mode': 'offline', 'job_id': 'offline-fixture-preflight',
+                                       'is_studio': False, 'services': ['RunService']}))
+    for name, context in probes:
         result = run_source('return 17', timeout_ms=1000, model_context=context)
         if result.get('ok') is not True or result.get('values') != [17]:
-            return {'ok': False, 'reason': 'runtime_probe_failed'}
+            return {'ok': False, 'reason': 'runtime_probe_failed', 'probe': name}
     return {'ok': True, 'network_used': False, 'runtime_probes': 2}
 
 

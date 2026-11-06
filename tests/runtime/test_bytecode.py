@@ -68,8 +68,8 @@ class BytecodeLoaderTests(unittest.TestCase):
             path = self.compile_fixture(directory,
                 'local w=game:GetService("Workspace"); return w.Parent==game,w:IsA("Model"),game.JobId')
             context = Path(directory) / 'context.txt'
-            context.write_text('mode=offline\njob_id=offline-fixture-job\n'
-                               'is_studio=false\nservices=Workspace,RunService\n', encoding='ascii')
+            context.write_bytes(b'mode=offline\njob_id=offline-fixture-job\n'
+                                b'is_studio=false\nservices=Workspace,RunService\n')
             code, result = self.invoke(path, '--context-file', str(context))
         self.assertEqual(code, 0)
         self.assertEqual({key: result[key] for key in ('ok', 'values')},

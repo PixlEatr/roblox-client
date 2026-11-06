@@ -125,7 +125,8 @@ def _run_input(encoded, input_kind, arguments, timeout_ms, memory_mb, model_cont
                    '--memory-mb', str(memory_mb)]
         if context_text is not None:
             context = Path(directory) / 'model-context.txt'
-            context.write_text(context_text, encoding='ascii')
+            # The native parser expects LF even on Windows.
+            context.write_bytes(context_text.encode('ascii'))
             context.chmod(0o600)
             command += ['--context-file', str(context)]
         if world_data is not None:
