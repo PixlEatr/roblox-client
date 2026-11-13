@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="console-key" content="__LAUNCHER_KEY__">
+  <title>Rove · Local session</title>
+  <link rel="stylesheet" href="/style.css">
+  <link rel="stylesheet" href="/workspace.css">
+  <script defer src="/world-viewer.js"></script>
+  <script defer src="/input.js"></script>
+  <script defer src="/script-editor.js"></script>
+  <script defer src="/chat.js"></script>
+  <script defer src="/font-loader.js"></script>
+  <script defer src="/text-layout.js"></script>
+  <script defer src="/gui-clip.js"></script>
+  <script defer src="/gui-scroll.js"></script>
+  <script defer src="/gui-image.js"></script>
+  <script defer src="/workspace.js"></script>
+  <script defer src="/local-session.js"></script>
+</head>
+<body class="workspace-open">
+  <main class="content">
+    <section id="workspace-page" aria-label="Local Rove session">
+      <div class="workspace-toolbar">
+        <span id="game-session-title">Local session</span>
+        <span id="game-connection" class="status">Checking local runtime…</span>
+        <div class="toolbar">
+          <select id="game-camera" aria-label="Camera mode">
+            <option value="follow">Follow character</option>
+            <option value="free">Free camera</option>
+            <option value="script">Game camera</option>
+          </select>
+          <button id="game-scripts-toggle" aria-expanded="true">Scripts</button>
+          <button id="game-players-toggle">Players</button>
+          <button id="game-fullscreen" aria-label="Full screen">⛶</button>
+          <button id="game-leave" class="danger">Leave</button>
+        </div>
+      </div>
+      <div class="workspace-split">
+        <div class="game-surface" id="game-surface" tabindex="0" aria-label="Local session controls">
+          <div id="game-game-gui"></div>
+          <div id="game-waiting">
+            <span class="spinner"></span>
+            <h1>Waiting for the local runtime</h1>
+            <p id="game-waiting-text">This page attaches to the current Rove process. It does not join or start an online game.</p>
+          </div>
+          <aside id="game-players" hidden><h2>Players</h2><div id="game-player-list"></div></aside>
+          <section id="game-chat">
+            <form id="game-chat-form">
+              <select id="game-chat-channel" aria-label="Chat channel">
+                <option value="RBXGeneral">RBXGeneral</option>
+                <option value="RBXGlobal">RBXGlobal</option>
+              </select>
+              <input id="game-chat-text" maxlength="400" aria-label="Chat message" placeholder="Type a local chat message">
+              <button type="submit">Send</button>
+            </form>
+            <p id="game-chat-state" role="status"></p>
+          </section>
+        </div>
+        <aside class="script-workspace" id="script-workspace">
+          <div id="script-connection" class="connection"><span id="script-connection-label">Waiting for local runtime</span></div>
+          <section class="panel editor-panel" aria-label="Luau script editor">
+            <div class="toolbar"><span id="script-filename">script.luau</span><button id="script-load" class="quiet">Open file</button><input id="script-file" type="file" accept=".luau,.lua,.txt" hidden></div>
+            <div class="code"><pre id="script-gutter" aria-hidden="true">1</pre><textarea id="script-editor" aria-label="Luau script" spellcheck="false" autocapitalize="off" autocomplete="off" autocorrect="off"></textarea></div>
+            <div class="editor-footer"><span id="script-line-count">1 line</span><div class="run-actions"><kbd id="script-shortcut">⌘ Enter</kbd><button id="script-run" disabled>Run script <span aria-hidden="true">↗</span></button></div></div>
+          </section>
+          <section class="panel output-panel" aria-label="Console output">
+            <div class="toolbar"><div class="output-title">Output <span id="script-result-state"></span></div><button id="script-clear" class="quiet">Clear</button></div>
+            <div id="script-output" role="log" aria-live="polite" tabindex="0"><div id="script-empty"><span class="empty-symbol">&gt;_</span><p>Ready when you are.</p><span>Run a script to see its output here.</span></div></div>
+          </section>
+        </aside>
+      </div>
+      <div class="workspace-footer">
+        <span id="game-controls-state">Click the world to control · WASD · Space · Esc to release</span>
+        <span id="game-statistics">Waiting for local runtime</span>
+        <button id="game-details-toggle">Renderer details</button>
+      </div>
+      <aside id="game-details" hidden><strong>Local rendering</strong><p id="game-render-details">Waiting for a frame from the local runtime…</p><p id="game-action-state" role="status"></p></aside>
+      <dialog id="game-leave-dialog"><h2>Leave this local session?</h2><p>This ends the current local runtime session.</p><div><button id="game-cancel-leave">Keep session open</button><button class="danger" id="game-confirm-leave">Leave session</button></div></dialog>
+    </section>
+  </main>
+</body>
+</html>

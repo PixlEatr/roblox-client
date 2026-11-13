@@ -2,5 +2,5 @@
 
 struct lua_State;
 
-// Installs a bounded UTC DateTime subset for the owned Luau VM.
+// Installs bounded DateTime construction, conversion, and Rust-backed formatting.
 void install_datetime_bindings(lua_State* L);

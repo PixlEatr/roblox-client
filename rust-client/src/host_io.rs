@@ -8,22 +8,30 @@ use std::{
 };
 
 fn clipboard_command() -> Result<Command, String> {
-    #[cfg(target_os="macos")]
-    { let mut c=Command::new("/usr/bin/pbcopy");c.env("LC_CTYPE","en_US.UTF-8");Ok(c) }
-    #[cfg(target_os="windows")]
+    #[cfg(target_os = "macos")]
     {
-        let mut c=Command::new("powershell.exe");
+        let mut c = Command::new("/usr/bin/pbcopy");
+        c.env("LC_CTYPE", "en_US.UTF-8");
+        Ok(c)
+    }
+    #[cfg(target_os = "windows")]
+    {
+        let mut c = Command::new("powershell.exe");
         c.args(["-NoProfile","-NonInteractive","-Command",
             "[Console]::InputEncoding=[System.Text.UTF8Encoding]::new($false); Set-Clipboard -Value ([Console]::In.ReadToEnd())"]);
         Ok(c)
     }
-    #[cfg(target_os="linux")]
+    #[cfg(target_os = "linux")]
     {
         if std::env::var_os("WAYLAND_DISPLAY").is_some() {
-            let mut c=Command::new("wl-copy");c.args(["--type","text/plain;charset=utf-8"]);return Ok(c);
+            let mut c = Command::new("wl-copy");
+            c.args(["--type", "text/plain;charset=utf-8"]);
+            return Ok(c);
         }
         if std::env::var_os("DISPLAY").is_some() {
-            let mut c=Command::new("xclip");c.args(["-selection","clipboard","-in"]);return Ok(c);
+            let mut c = Command::new("xclip");
+            c.args(["-selection", "clipboard", "-in"]);
+            return Ok(c);
         }
         Err("clipboard needs a graphical session (wl-copy on Wayland or xclip on X11)".into())
     }

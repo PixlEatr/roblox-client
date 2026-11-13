@@ -1,0 +1,31 @@
+{
+  "compiler": {
+    "tag": "0.730",
+    "commit": "5bc7f4b23756f69f4669b419fa9034f117ccd6fe",
+    "repository": "https://github.com/luau-lang/luau",
+    "arguments": [
+      "--binary",
+      "-O1",
+      "-g1",
+      "--fflags=LuauBytecodeCostModel=false,LuauEmitCallFeedback=false,DebugLuauUserDefinedClasses=false"
+    ]
+  },
+  "files": [
+    {
+      "name": "calculation",
+      "source": "calculation.luau",
+      "source_sha256": "49b9e52e34e943f0461d3d2b8113623140644ff5c8fc8a9ff7c626b7cfcbc208",
+      "bytecode": "calculation.luac",
+      "bytecode_sha256": "9cdc123bd0ccf08a657f0fbcfaf412c66a12d3f41c74713013fdceeb524249bc",
+      "bytecode_size": 288
+    },
+    {
+      "name": "tiny",
+      "source": "tiny.luau",
+      "source_sha256": "923da4a2e19875b6168448a3b52cec1a199457ef14da7764513ee28e155e5a3a",
+      "bytecode": "tiny.luac",
+      "bytecode_sha256": "0fceee0a5007a2945d89b02000d0d8e2e47fd90e5561c260c4bc3b3f67a61e79",
+      "bytecode_size": 39
+    }
+  ]
+}

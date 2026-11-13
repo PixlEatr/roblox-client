@@ -27,7 +27,11 @@ bool context_matches(const ContextActionBinding& binding,int type,int key) {
 void context_collect(lua_State* L,World& w) {
     auto& retired=w.context_actions.retired;
     for(auto it=retired.begin();it!=retired.end();) {
-        if(it->use_count()==1){if((*it)->callback!=LUA_NOREF)lua_unref(L,(*it)->callback);it=retired.erase(it);}else ++it;
+        if(it->use_count()==1){
+            if((*it)->callback!=LUA_NOREF)lua_unref(L,(*it)->callback);
+            if((*it)->creator_ref!=LUA_NOREF)lua_unref(L,(*it)->creator_ref);
+            it=retired.erase(it);
+        }else ++it;
     }
 }
 void context_queue(World& w,ContextInput event) {
@@ -51,7 +55,7 @@ void context_pop(World& w) {
 Node* context_cancel_input(World& w) {
     // Native cancellation supplies a fresh neutral InputObject on each call.
     if(w.nodes.size()>=kMaxNodes)throw std::runtime_error("context action InputObject limit exceeded");
-    Node value;do{value.id="__context_cancel_"+std::to_string(w.next_local_id++);}while(w.nodes.count(value.id));
+        Node value;value.id=w.allocate_local_id();
     value.name="InputObject";value.class_name="InputObject";value.server_owned=false;
     value.properties={{"KeyCode",input_enum_json("KeyCode",0)},
         {"UserInputType",input_enum_json("UserInputType",input_enum_item("UserInputType","None"))},
@@ -96,7 +100,7 @@ int context_dispatch_bridge(lua_State* L) {
                     lua_pushlstring(child,binding->name.data(),binding->name.size());
                     push_json(child,w,input_enum_json("UserInputState",input_state));
                     if(object)push_node(child,w,object);else lua_pushnil(child);return 3;
-                },binding->owner,binding->identity);return 1;
+                },binding->owner,binding->identity,binding->creator_ref);return 1;
             }
             context_pop(w);context_collect(L,w);
         }
@@ -138,14 +142,72 @@ void context_cancel(lua_State* L,World& w,const std::shared_ptr<ContextActionBin
         w.scheduler->callback_now(L,binding->callback,[&](lua_State* child){
             lua_pushlstring(child,binding->name.data(),binding->name.size());
             push_json(child,w,input_enum_json("UserInputState",3));push_node(child,w,input);return 3;
-        },binding->owner,binding->identity);
+        },binding->owner,binding->identity,binding->creator_ref);
         lua_pop(L,1);return;
     }
     ContextInput event;event.state=3;event.force=true;event.targets.push_back(binding);context_queue(w,std::move(event));
 }
+void context_destroy_button(World& w,const std::shared_ptr<ContextActionBinding>& binding) {
+    if(binding->button_id.empty())return;
+    if(Node* button=find_node(w,binding->button_id)) {
+        button->destroyed=true;button->parent.clear();
+    }
+    binding->button_id.clear();
+}
+void context_sync_button(World& w,const std::shared_ptr<ContextActionBinding>& binding) {
+    if(!binding->touch_button||!input_capability(w,"TouchEnabled")) {
+        context_destroy_button(w,binding);return;
+    }
+    if(binding->button_id.empty()) {
+        if(w.nodes.size()>=kMaxNodes)throw std::runtime_error("context action touch-button limit exceeded");
+        Node* core=ensure_client_service(w,"CoreGui");
+        Node* screen=find_node(w,"context-action-screen");
+        if(!screen) {
+            Node container;container.id="context-action-screen";container.class_name="ScreenGui";
+            container.name="ContextActionScreen";container.parent=core->id;container.server_owned=false;
+            container.attributes.set_known(true);container.collection_tags_known=true;
+            const auto* screen_constructor=cached_constructor_class("ScreenGui");
+            if(!screen_constructor)throw std::runtime_error("ScreenGui constructor unavailable");
+            for(auto property=screen_constructor->at("properties").begin();
+                property!=screen_constructor->at("properties").end();++property) {
+                container.properties[property.key()]=property.value().at("value");
+                container.origins[property.key()]="class_default";
+            }
+            auto [it,inserted]=w.nodes.emplace(container.id,std::move(container));
+            if(!inserted)throw std::runtime_error("context action ScreenGui ID collision");
+            screen=&it->second;w.order.push_back(screen->id);
+        }
+        Node node;node.id="context-action:"+binding->name;node.class_name="TextButton";node.name=binding->name;
+        node.parent=screen->id;node.server_owned=false;node.attributes.set_known(true);node.collection_tags_known=true;
+        if(w.nodes.count(node.id)) {
+            if(!w.nodes.at(node.id).destroyed)throw std::runtime_error("context action touch-button ID collision");
+            w.nodes.erase(node.id);w.order.erase(std::remove(w.order.begin(),w.order.end(),node.id),w.order.end());
+        }
+        const auto* button_constructor=cached_constructor_class("TextButton");
+        if(!button_constructor)throw std::runtime_error("TextButton constructor unavailable");
+        for(auto property=button_constructor->at("properties").begin();
+            property!=button_constructor->at("properties").end();++property) {
+            node.properties[property.key()]=property.value().at("value");
+            node.origins[property.key()]="class_default";
+        }
+        node.properties["Name"]=binding->name;
+        node.properties["Text"]=binding->name;
+        node.properties["Size"]=Json{{"$udim2",Json::array({Json{{"$udim",{0,100}}},Json{{"$udim",{0,50}}}})}};
+        node.properties["Position"]=binding->position;
+        const std::string id=node.id;
+        auto [it,inserted]=w.nodes.emplace(id,std::move(node));
+        if(!inserted)throw std::runtime_error("context action touch-button ID collision");
+        binding->button_id=id;w.order.push_back(binding->button_id);
+    }
+    Node* button=find_node(w,binding->button_id);if(!button)return;
+    if(binding->metadata.contains("title"))button->properties["Text"]=binding->metadata.at("title");
+    if(binding->metadata.contains("image"))button->properties["Image"]=binding->metadata.at("image");
+    button->properties["Position"]=binding->position;
+}
 void context_retire(lua_State* L,World& w,const std::shared_ptr<ContextActionBinding>& binding,bool cancel) {
     if(!binding->active)return;
     auto& state=w.context_actions;
+    context_destroy_button(w,binding);
     binding->active=false;state.bindings.erase(std::remove(state.bindings.begin(),state.bindings.end(),binding),state.bindings.end());state.retired.push_back(binding);
     if(cancel)context_cancel(L,w,binding);
 }
@@ -158,7 +220,10 @@ void clear_context_owner(lua_State* L,World& w,const std::string& owner) {
     for(const auto& binding:bindings)if(binding->owner==owner)context_retire(L,w,binding,false);
     // Force cancels queued by earlier operations must not restart a stopped script.
     for(auto& event:w.context_actions.pending)for(auto& binding:event.targets)
-        if(binding->owner==owner&&binding->callback!=LUA_NOREF){lua_unref(L,binding->callback);binding->callback=LUA_NOREF;}
+        if(binding->owner==owner){
+            if(binding->callback!=LUA_NOREF){lua_unref(L,binding->callback);binding->callback=LUA_NOREF;}
+            if(binding->creator_ref!=LUA_NOREF){lua_unref(L,binding->creator_ref);binding->creator_ref=LUA_NOREF;}
+        }
     bindings.clear();context_collect(L,w);
 }
 std::vector<std::shared_ptr<ContextActionBinding>> context_displaced(World& w,const std::shared_ptr<ContextActionBinding>& incoming) {
@@ -210,14 +275,19 @@ int context_action_method(lua_State* L) {
         if(operation==3){push_json(L,w,previous?context_info(w,previous):Json::object());return 1;}
         if(operation>=6&&operation<=8) {
             size_t size=0;const char* value=luaL_checklstring(L,3,&size);if(size>4096)throw std::runtime_error("context action label exceeds 4096 bytes");
-            if(previous)previous->metadata[operation==6?"description":operation==7?"title":"image"]=std::string(value,size);return 0;
+            if(previous){previous->metadata[operation==6?"description":operation==7?"title":"image"]=std::string(value,size);context_sync_button(w,previous);}return 0;
         }
-        if(operation==9){lua_pushnil(L);return 1;} // No touch UI is created on a desktop backend.
-        if(operation==10){if(!is_authored_value(L,3)||std::string(luaL_typename(L,3))!="UDim2")throw std::runtime_error("touch button position must be UDim2");return 0;}
+        if(operation==9){
+            Node* button=previous&&!previous->button_id.empty()?find_node(w,previous->button_id):nullptr;
+            if(button&&!button->destroyed)push_node(L,w,button);else lua_pushnil(L);return 1;
+        }
+        if(operation==10){
+            if(!is_authored_value(L,3)||std::string(luaL_typename(L,3))!="UDim2")throw std::runtime_error("touch button position must be UDim2");
+            if(previous){if(!capture_authored_value(L,3,previous->position))throw std::runtime_error("invalid touch button position");context_sync_button(w,previous);}return 0;
+        }
         if(operation!=0&&operation!=1)throw std::runtime_error("unknown context action method");
         luaL_checktype(L,3,LUA_TFUNCTION);luaL_checktype(L,4,LUA_TBOOLEAN);
         const bool touch=lua_toboolean(L,4);
-        if(touch&&input_capability(w,"TouchEnabled"))throw std::runtime_error("context action touch-button UI is not implemented; bind touch input with createTouchButton=false");
         double priority=2000;int first=5;
         if(operation==1){priority=luaL_checknumber(L,5);first=6;}
         if(!std::isfinite(priority)||priority<double(INT32_MIN)||priority>double(INT32_MAX))throw std::runtime_error("context action priority must fit signed 32-bit integer");
@@ -237,11 +307,12 @@ int context_action_method(lua_State* L) {
         auto displaced=context_displaced(w,binding);context_reserve(w,displaced.size()+(previous?1:0),displaced.size()+(previous?1:0));
         ensure_context_dispatcher(L,w);
         binding->callback=lua_ref(L,3);
+        lua_pushthread(L);binding->creator_ref=lua_ref(L,-1);lua_pop(L,1);
         if(previous)context_retire(L,w,previous,true);
         for(const auto& old:displaced)if(old->active)context_cancel(L,w,old);
         if(auto reentrant=context_find(w,name))context_retire(L,w,reentrant,false);
         binding->sequence=state.next_sequence++;
-        state.bindings.push_back(std::move(binding));return 0;
+        state.bindings.push_back(std::move(binding));context_sync_button(w,state.bindings.back());return 0;
     }catch(const std::exception& error){luaL_error(L,"ContextActionService: %s",error.what());return 0;}
 }
 bool context_action_index(lua_State* L,World& w,Node& node,const std::string& key) {

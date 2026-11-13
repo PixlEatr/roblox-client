@@ -105,6 +105,7 @@ bool input_index(lua_State* L,World& w,Node& n,const std::string& key) {
         push_signal(L,signal_for(w,n,key));return true;
     }
     if(n.class_name!="UserInputService")return false;
+    if(key=="PreferredInput"){push_json(L,w,input_enum_json("PreferredInput",preferred_input(w)));return true;}
     if(input_event_name(key)){push_signal(L,signal_for(w,n,key));return true;}
     constexpr const char* methods[]={"IsKeyDown","IsMouseButtonPressed","GetKeysPressed","GetMouseButtonsPressed","GetLastInputType","GetMouseLocation","GetMouseDelta"};
     for(int i=0;i<(int)std::size(methods);++i)if(key==methods[i]) {
@@ -157,6 +158,12 @@ void publish_input_event(World& w,const std::string& id,int type,int key,int sta
     auto service=w.services.find("UserInputService");
     Node* uis=service==w.services.end()?nullptr:find_node(w,service->second);
     if(!uis||uis->destroyed)throw std::runtime_error("input service unavailable");
+    const int old_preferred=preferred_input(w);
+    const bool keyboard_mouse=((type>=0&&type<=4)||type==8)&&
+        (input_capability(w,"KeyboardEnabled")||input_capability(w,"MouseEnabled"));
+    const bool gamepad=type>=12&&type<20&&input_capability(w,"GamepadEnabled");
+    if(state<2&&(keyboard_mouse||gamepad))w.input.preferred_input_type=type;
+    if(old_preferred!=preferred_input(w))property_events(w,*uis,"PreferredInput");
     if(w.input.last_type!=type){w.input.last_type=type;emit(w,*uis,"LastInputTypeChanged",Json::array({input_enum_json("UserInputType",type_item)}));}
     const Json args=Json::array({Json{{"$ref",id}},processed});
     emit(w,*uis,state==0?"InputBegan":state==1?"InputChanged":"InputEnded",args);
@@ -219,9 +226,17 @@ void update_input_events(World& w,const Json& batch,bool synthetic=false) {
     auto service=w.services.find("UserInputService");Node* uis=service==w.services.end()?nullptr:find_node(w,service->second);
     if(!uis||uis->destroyed)throw std::runtime_error("input service unavailable");
     for(const auto& e:events) {
+        if(ClientIdleState::counts_as_activity(e.type,e.state,synthetic)&&w.client_idle_control_enabled) {
+            const auto now=std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now().time_since_epoch()).count();
+            if(w.client_idle.activity(now)) {
+                w.client_idle_event_due=false;
+                w.client_idle_event_observed=false;
+            }
+        }
         std::string id=e.continuous?w.input.continuous[e.type]:e.state==0?"":w.input.contacts.at(e.identity).node;
         if(id.empty()) {
-            Node node;do{node.id="__local_input_"+std::to_string(w.next_local_id++);}while(w.nodes.count(node.id));
+            Node node;node.id=w.allocate_local_id();
             node.name="InputObject";node.class_name="InputObject";node.server_owned=false;
             node.properties={{"KeyCode",input_enum_json("KeyCode",e.key_item)},{"UserInputType",input_enum_json("UserInputType",e.type_item)},
                 {"UserInputState",input_enum_json("UserInputState",4)},{"Position",{{"$vector3",{0,0,0}}}},{"Delta",{{"$vector3",{0,0,0}}}}};

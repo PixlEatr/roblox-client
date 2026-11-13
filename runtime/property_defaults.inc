@@ -12,10 +12,10 @@ Value read(lua_State* L,Node& node){
     std::string key=canonical_instance_member(std::string(raw,length),&node);
     if(key=="archivable")key="Archivable";
     if(key=="ClassName")return {key,node.class_name,false};
-    auto cls=constructors().find(node.class_name);
-    if(key=="Name"&&cls!=constructors().end()&&cls->contains("name")&&(*cls)["name"].is_string())
+    const Json* cls=cached_constructor_class(node.class_name);
+    if(key=="Name"&&cls&&cls->contains("name")&&(*cls)["name"].is_string())
         return {key,(*cls)["name"],true};
-    if(key=="Parent"&&cls!=constructors().end()&&cls->value("creatable",false))
+    if(key=="Parent"&&cls&&cls->value("creatable",false))
         return {key,nullptr,true};
     const Json* descriptor=property_descriptor(node,key);
     if(!descriptor||!descriptor->contains("value"))

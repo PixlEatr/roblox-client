@@ -1,0 +1,7 @@
+    {"CatalogSortType",kCatalogCatalogSortTypeItems,std::size(kCatalogCatalogSortTypeItems)},
+    {"CatalogSortAggregation",kCatalogCatalogSortAggregationItems,std::size(kCatalogCatalogSortAggregationItems)},
+    {"CatalogCategoryFilter",kCatalogCatalogCategoryFilterItems,std::size(kCatalogCatalogCategoryFilterItems)},
+    {"SalesTypeFilter",kCatalogSalesTypeFilterItems,std::size(kCatalogSalesTypeFilterItems)},
+    {"BundleType",kCatalogBundleTypeItems,std::size(kCatalogBundleTypeItems)},
+    {"AvatarAssetType",kCatalogAvatarAssetTypeItems,std::size(kCatalogAvatarAssetTypeItems)},
+    {"CreatorTypeFilter",kCatalogCreatorTypeFilterItems,std::size(kCatalogCreatorTypeFilterItems)},

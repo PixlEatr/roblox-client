@@ -21,9 +21,9 @@ Node* stats_child(World& world,Node& parent,const std::string& name) {
                 parent_id(world,*node)==parent.id&&instance_name(world,*node)==name)return node;
     }
     if(world.nodes.size()>=kMaxNodes)throw std::runtime_error("world node limit exceeded");
-    Node node;do{node.id="local:"+std::to_string(world.next_local_id++);}while(world.nodes.count(node.id));
+    Node node;node.id=world.allocate_local_id();
     node.class_name="StatsItem";node.name=name;node.parent=parent.id;node.server_owned=false;
-    node.attributes_known=true;node.collection_tags_known=true;
+    node.attributes.set_known(true);node.collection_tags_known=true;
     node.origins={{"Name","local"},{"ClassName","local"},{"Parent","local"}};
     std::vector<Json> entries{Json{{"kind","create"},{"node",node_record(node)}}};
     check_mutation_budget(world,entries);
@@ -77,11 +77,12 @@ int player_get_mouse(lua_State* L) {
     }
     try {
         if(world.nodes.size()>=kMaxNodes)throw std::runtime_error("world node limit exceeded");
-        Node node;do{node.id="local:"+std::to_string(world.next_local_id++);}while(world.nodes.count(node.id));
+    Node node;node.id=world.allocate_local_id();
         node.class_name="PlayerMouse";node.name="Mouse";node.server_owned=false;
         node.properties["TargetFilter"]=nullptr;
-        node.attributes_known=true;node.collection_tags_known=true;
-        node.origins=Json{{"Name","local"},{"ClassName","local"},{"Parent","local"}};
+        node.properties["Icon"]="";
+        node.attributes.set_known(true);node.collection_tags_known=true;
+        node.origins=Json{{"Name","local"},{"ClassName","local"},{"Parent","local"},{"Icon","local"},{"TargetFilter","local"}};
         std::vector<Json> mutations{Json{{"kind","create"},{"node",node_record(node)}}};check_mutation_budget(world,mutations);
         auto inserted=world.nodes.emplace(node.id,std::move(node));auto& mouse=inserted.first->second;
         world.order.push_back(mouse.id);world.client_services.player_mice[h->node->id]=mouse.id;

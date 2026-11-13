@@ -15,7 +15,7 @@ int virtual_device_id(lua_State* L,int index) {
 Node& virtual_device_object(World& w,VirtualDeviceInput& device,int type,int key) {
     if(auto* existing=find_node(w,device.node);existing&&!existing->destroyed)return *existing;
     if(w.nodes.size()>=kMaxNodes)throw std::runtime_error("input instance limit exceeded");
-    Node n;do{n.id="__virtual_device_"+std::to_string(w.next_local_id++);}while(w.nodes.count(n.id));
+    Node n;n.id=w.allocate_local_id();
     n.name="InputObject";n.class_name="InputObject";n.server_owned=false;
     n.properties={{"UserInputType",virtual_enum_value("UserInputType",type)},
         {"KeyCode",virtual_enum_value("KeyCode",key)},{"UserInputState",virtual_enum_value("UserInputState",device.state)},
@@ -41,6 +41,7 @@ void virtual_gamepad_publish(World& w,int id,int key,int state,const std::array<
 }
 void virtual_gamepad_disconnect(World& w,int id) {
     auto found=w.input.gamepads.find(id);if(found==w.input.gamepads.end())return;
+    const int old_preferred=preferred_input(w);
     const int type=w.input.gamepad_types.at(id);
     context_reserve(w,found->second.size(),found->second.size()*w.context_actions.bindings.size());
     for(auto& [key,input]:found->second)if(input.state<2||input.position!=std::array<float,3>{})
@@ -49,6 +50,7 @@ void virtual_gamepad_disconnect(World& w,int id) {
     auto* uis=find_node(w,w.services.at("UserInputService"));
     emit(w,*uis,"GamepadDisconnected",Json::array({virtual_enum_value("UserInputType",type)}));
     if(w.input.gamepads.empty()&&!w.input_capabilities.value("GamepadEnabled",false))property_events(w,*uis,"GamepadEnabled");
+    if(old_preferred!=preferred_input(w))property_events(w,*uis,"PreferredInput");
 }
 int virtual_device_send(lua_State* L) {
     auto* h=checked_handle(L,1);auto& w=*h->world;
@@ -67,9 +69,11 @@ int virtual_device_send(lua_State* L) {
                 int type=12;
                 for(;type<20;++type){bool used=false;for(auto [_,assigned]:w.input.gamepad_types)used|=assigned==type;if(!used)break;}
                 const bool enabled=input_capability(w,"GamepadEnabled");
+                const int old_preferred=preferred_input(w);
                 auto& pad=w.input.gamepads[id];w.input.gamepad_types[id]=type;w.input.navigation_gamepads.insert(type);
                 for(int key=1000;key<=1017;++key)virtual_device_object(w,pad[key],type,key);
                 if(!enabled)property_events(w,uis,"GamepadEnabled");
+                if(old_preferred!=preferred_input(w))property_events(w,uis,"PreferredInput");
                 emit(w,uis,"GamepadConnected",Json::array({virtual_enum_value("UserInputType",type)}));
             }else if(operation==1) {
                 if(w.input.tape.playing&&w.input.tape.replaying&&!w.input.tape.owned_gamepads.count(id))return 0;

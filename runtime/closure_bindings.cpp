@@ -82,7 +82,7 @@ int call_hook(lua_State* L) {
 }
 
 // A zero-capture Lua forwarding prototype keeps the target's allocation kind
-// and capacity intact when its replacement is native. It uses a real function
+// and capacity intact when the replacement cannot fit its body. It uses a real function
 // constant, so it neither depends on mutable globals nor leaks a helper name.
 Proto* forwarding_prototype(lua_State* L,int replacement,Proto* original) {
     auto* p=luaF_newproto(L);
@@ -119,8 +119,6 @@ int hookfunction(lua_State* L) {
     luaL_checktype(L,1,LUA_TFUNCTION);luaL_checktype(L,2,LUA_TFUNCTION);
     auto* target=clvalue(luaA_toobject(L,1));auto* replacement=clvalue(luaA_toobject(L,2));
     if(target->inactive||replacement->inactive)return luaL_error(L,"inactive prototypes cannot be hooked"),0;
-    if(!target->isC&&!replacement->isC&&replacement->nupvalues>target->nupvalues)
-        return luaL_error(L,"replacement needs more captured slots than the target closure"),0;
     push_closure_clone(L,1);const int previous=lua_gettop(L);
     registry_table(L,kHooks);lua_pushvalue(L,1);lua_rawget(L,-2);
     const bool first=lua_isnil(L,-1);lua_pop(L,1);
@@ -132,12 +130,22 @@ int hookfunction(lua_State* L) {
         push_closure_clone(L,2);const int route=lua_gettop(L);
         registry_table(L,kRoutes);lua_pushvalue(L,1);lua_pushvalue(L,route);lua_rawset(L,-3);lua_pop(L,2);
         target->c.f=call_hook;target->c.cont=call_continuation;
-    }else if(!replacement->isC)copy_body(L,target,replacement);
+    }else if(!replacement->isC&&replacement->nupvalues<=target->nupvalues)copy_body(L,target,replacement);
     else {
-        push_closure_clone(L,2);
-        target->l.p=forwarding_prototype(L,-1,target->l.p);
+        // A Lua forwarding body calls the supplied native closure by identity.
+        // Keeping a detached copy here made later hooks on that native target
+        // invisible to the forwarder. The saved original above remains a copy
+        // of the Lua body, so restoring the target still restores its behavior.
+        // Larger Lua capture sets live in an independent replacement closure,
+        // rather than writing beyond the original closure's allocated slots.
+        // Snapshot its body just as the direct Lua-to-Lua path does.
+        if(!replacement->isC) {
+            push_closure_clone(L,2);
+            target->l.p=forwarding_prototype(L,-1,target->l.p);lua_pop(L,1);
+            target->env=replacement->env;luaC_objbarrier(L,target,target->env);
+        }else target->l.p=forwarding_prototype(L,2,target->l.p);
         target->stacksize=target->l.p->maxstacksize;target->preload=0;
-        luaC_objbarrier(L,target,target->l.p);lua_pop(L,1);
+        luaC_objbarrier(L,target,target->l.p);
         for(int i=0;i<target->nupvalues;++i)setnilvalue(&target->l.uprefs[i]);
     }
     // Imported fastcalls are disabled in the caller's environment so a hook

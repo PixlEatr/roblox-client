@@ -41,6 +41,7 @@ Node* joint_reference(World& w,const Node& n,const char* key,bool attachment) {
 }
 struct JointEdge {Node* joint=nullptr;Node* a=nullptr;Node* b=nullptr;bool rigid=false;bool active=false;std::string unknown;};
 struct JointGraph {
+    enum class Scope { All, Rigid };
     World& w;std::vector<JointEdge> edges;
     std::unordered_map<std::string,std::vector<size_t>> incident;
     std::unordered_map<std::string,std::string> parent;
@@ -50,9 +51,11 @@ struct JointGraph {
         std::string result=id;while(parent[result]!=result)result=parent[result];
         while(parent[id]!=id){auto next=parent[id];parent[id]=result;id=next;}return result;
     }
-    explicit JointGraph(World& world,const std::vector<std::string>* selected=nullptr):w(world) {
+    explicit JointGraph(World& world,const std::vector<std::string>* selected=nullptr,
+                        Scope scope=Scope::All):w(world) {
         for(const auto& id:selected?*selected:w.order) {
-            auto& node=w.nodes.at(id);if(node.destroyed||!joint_node(w,node))continue;
+            auto& node=w.nodes.at(id);
+            if(node.destroyed||(scope==Scope::Rigid?!joint_rigid(node):!joint_node(w,node)))continue;
             JointEdge edge;edge.joint=&node;edge.rigid=joint_rigid(node);
             bool attachments=!joint_part_endpoints(w,node),inactive=false,single=false,mode_unknown=false;
             for(const char* name:{"VectorForce","Torque","LinearVelocity","AngularVelocity"})if(node.class_name==name)single=true;
@@ -183,7 +186,10 @@ void refresh_joint_events(World& w) {
 }
 bool joint_part_write(lua_State* L,World& w,Node& n,const std::string& key) {
     if(!part_transform_key(key)||!pivot_part(w,n))return false;
-    JointGraph graph(w);auto connected=graph.connected(n,true);
+    // Transform propagation and endpoint rebasing only consume rigid edges.
+    // Keep their original world order and validation, without resolving the
+    // unrelated attachment and actuator state used by general joint queries.
+    JointGraph graph(w,nullptr,JointGraph::Scope::Rigid);auto connected=graph.connected(n,true);
     if(connected.empty())return false;
     if(key=="CFrame"){if(!has_meta(L,3,kCFrameMeta))throw std::runtime_error("CFrame must be a CFrame");}
     else if(!lua_isvector(L,3))throw std::runtime_error("part transform must be a Vector3");

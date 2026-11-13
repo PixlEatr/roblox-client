@@ -1,4 +1,7 @@
 #include "physical_properties.hpp"
+#include <atomic>
+#include <cstddef>
+#include <cstdint>
 
 #include <lualib.h>
 #include <algorithm>
@@ -17,6 +20,12 @@ struct PhysicalPropertiesValue {
     float elasticity_weight;
     float acoustic_absorption;
 };
+static_assert(sizeof(PhysicalPropertiesValue) == 24, "PhysicalProperties Rust ABI mismatch");
+struct RustPhysicalPropertiesApi {
+    int32_t (*make)(const double*, size_t, PhysicalPropertiesValue*);
+    int32_t (*equal)(const PhysicalPropertiesValue*, const PhysicalPropertiesValue*);
+};
+std::atomic<const RustPhysicalPropertiesApi*> rust_api{nullptr};
 
 bool has_physical_properties_meta(lua_State* L, int index) {
     if (!lua_getmetatable(L, index)) return false;
@@ -53,6 +62,20 @@ int physical_properties_new(lua_State* L) {
     if (count != 3 && count != 5 && count != 6) {
         luaL_error(L, "PhysicalProperties.new expects 3, 5, or 6 numbers");
         return 0;
+    }
+    if (const auto* api = rust_api.load()) {
+        double arguments[6]{};
+        for (int i = 0; i < count; ++i) arguments[i] = luaL_checknumber(L, i + 1);
+        PhysicalPropertiesValue value{};
+        const int status = api->make(arguments, static_cast<size_t>(count), &value);
+        if (status == -1) { luaL_error(L, "PhysicalProperties.new expects 3, 5, or 6 numbers"); return 0; }
+        if (status > 0 && status <= 6) {
+            static const char* fields[] = {"Density", "Friction", "Elasticity", "FrictionWeight", "ElasticityWeight", "AcousticAbsorption"};
+            luaL_error(L, "PhysicalProperties.%s must be finite", fields[status - 1]); return 0;
+        }
+        if (status != 0) { luaL_error(L, "PhysicalProperties construction failed"); return 0; }
+        push_value(L, value);
+        return 1;
     }
     PhysicalPropertiesValue value{};
     value.density = checked_clamped_number(L, 1, "Density", 0.0001, 100.0);
@@ -95,6 +118,12 @@ int physical_properties_equal(lua_State* L) {
     }
     auto* a = static_cast<PhysicalPropertiesValue*>(lua_touserdata(L, 1));
     auto* b = static_cast<PhysicalPropertiesValue*>(lua_touserdata(L, 2));
+    if (const auto* api = rust_api.load()) {
+        const int result = api->equal(a, b);
+        if (result < 0) { luaL_error(L, "PhysicalProperties comparison failed"); return 0; }
+        lua_pushboolean(L, result != 0);
+        return 1;
+    }
     lua_pushboolean(L,
         a->density == b->density && a->friction == b->friction
         && a->elasticity == b->elasticity && a->friction_weight == b->friction_weight
@@ -128,6 +157,12 @@ void install_physical_properties(lua_State* L) {
     install_constructor(L);
 }
 
+extern "C" int rove_set_physical_properties_api(const RustPhysicalPropertiesApi* api) {
+    if (!api || !api->make || !api->equal) return 0;
+    const RustPhysicalPropertiesApi* expected = nullptr;
+    return rust_api.compare_exchange_strong(expected, api) || expected == api;
+}
+
 bool is_physical_properties(lua_State* L, int index) {
     return has_physical_properties_meta(L, index);
 }
@@ -153,6 +188,15 @@ bool push_physical_properties_json(lua_State* L, const nlohmann::json& value) {
         double number = fields[i].get<double>();
         if (!std::isfinite(number)) throw std::runtime_error("non-finite PhysicalProperties scalar");
         numbers[i] = static_cast<float>(std::clamp(number, minima[i], maxima[i]));
+    }
+    if (const auto* api = rust_api.load()) {
+        double components[6];
+        for (size_t i = 0; i < 6; ++i) components[i] = fields[i].get<double>();
+        PhysicalPropertiesValue result{};
+        const int status = api->make(components, 6, &result);
+        if (status != 0) throw std::runtime_error("invalid PhysicalProperties scalar");
+        push_value(L, result);
+        return true;
     }
     push_value(L, PhysicalPropertiesValue{numbers[0], numbers[1], numbers[2],
         numbers[3], numbers[4], numbers[5]});

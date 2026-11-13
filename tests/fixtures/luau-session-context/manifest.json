@@ -1,0 +1,7 @@
+{
+  "scope": "owned compiler fixture; not signed or received from a server",
+  "source_sha256": "3963a1009f45c566c0ffc27ec5560c9ec9172466223b98e838c785b9ee3776a0",
+  "bytecode_sha256": "a106eaae9963ea80c818a01ee0b5cf057b1f9c71f71b26391901425018bf17e2",
+  "compiler_sha256": "1f179263dcc45b7b99a2c03e31cee0d431c27522c4f8fa42f9b9020dc2a361a7",
+  "bytecode_version": 13
+}

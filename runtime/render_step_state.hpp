@@ -8,7 +8,7 @@
 namespace world_bindings {
 struct RenderStepBinding {
     std::string name,owner;
-    int priority=0,callback=LUA_NOREF,identity=8;
+    int priority=0,callback=LUA_NOREF,creator_ref=LUA_NOREF,identity=8;
     uint64_t sequence=0;
     bool active=true;
 };

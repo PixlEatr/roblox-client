@@ -1,2 +1,0 @@
-aioquic==1.7.1
-cryptography==46.0.3

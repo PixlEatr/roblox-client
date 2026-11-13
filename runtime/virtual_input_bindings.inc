@@ -62,7 +62,7 @@ Node* virtual_input_pointer_target(World& w,Node* target) {
     for(int depth=0;target&&gui_object(w,*target)&&depth<128;++depth,target=find_node(w,parent_id(w,*target))) {
         if(class_is_a(w,target->class_name,"GuiButton")||target->class_name=="TextBox")return target;
         if(const auto* active=property_value(w,*target,"Active");active&&*active==true)return target;
-        for(const auto& connection:w.connections)if(connection->connected&&connection->signal->node==target&&
+        for(const auto& connection:w.connections)if(connection->connected&&connection->enabled&&connection->signal->node==target&&
             (connection->signal->key=="InputBegan"||connection->signal->key=="InputEnded"))return target;
     }
     return nullptr;

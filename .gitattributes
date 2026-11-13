@@ -1,5 +1,11 @@
+* text=auto
+*.rs text eol=lf
+*.md text eol=lf
+*.luac -text
+*.bin -text
+*.rbxp -text
 ui/avatar-viewer.js -whitespace linguist-generated=true
 ui/world-viewer.js -whitespace linguist-generated=true
 vendor/** -whitespace linguist-vendored=true
+runtime/vendor/** -whitespace linguist-vendored=true
 vendor/roblox-player-scripts-745/** -text
-tests/fixtures/unc_environment.luau -whitespace

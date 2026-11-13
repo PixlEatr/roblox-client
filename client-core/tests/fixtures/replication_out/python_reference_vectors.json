@@ -1,0 +1,18 @@
+{
+  "reference": "scripts/replication_out.py",
+  "marker": {"request_hex": "8478563412", "reply_hex": "83047856341200"},
+  "guids": [
+    {"key": null, "encoded_hex": "00"},
+    {"key": [1, 7], "encoded_hex": "0107000000"},
+    {"key": [300, 305419896], "encoded_hex": "ac0278563412"},
+    {"key": [4294967295, 4294967295], "encoded_hex": "ffffffff0fffffffff"}
+  ],
+  "streaming_ready": {
+    "player": [1, 7],
+    "pause_property_id": 4660,
+    "pause_property_type": 9,
+    "player_spawned": true,
+    "spawn_region_received": true,
+    "encoded_hex": "830301070000003412000000"
+  }
+}

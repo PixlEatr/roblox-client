@@ -119,6 +119,7 @@ static const ExportEnumEntry kUsiCollisionFidelityItems[] = {
 };
 #include "input_enum_data.inc"
 #include "player_enum_data.inc"
+#include "catalog_enum_data.inc"
 // Roblox creator-docs/enums/BulkMoveMode.yaml, checked with BulkMoveTo.
 static const ExportEnumEntry kBulkMoveModeItems[] = {
     {"FireAllEvents", 0}, {"FireCFrameChanged", 1},
@@ -128,9 +129,18 @@ static const ExportEnumEntry kMeshTypeItems[] = {
     {"Brick",6},{"Prism",7},{"Pyramid",8},{"ParallelRamp",9},{"RightAngleRamp",10},{"CornerWedge",11},
 };
 constexpr int kExportEnumStride=512;
+// ContentSourceType values from the pinned 0.745 API dump.
+static const ExportEnumEntry kContentSourceTypeItems[]={{"None",0},{"Uri",1},{"Object",2},{"Opaque",3}};
+// Pinned engine API enum: Constant=0, Linear=1, Cubic=2.
+static const ExportEnumEntry kKeyInterpolationModeItems[]={{"Constant",0},{"Linear",1},{"Cubic",2}};
+// Pinned 0.745 API-Dump.json: enums/RunContext.yaml values.
+static const ExportEnumEntry kRunContextItems[]={{"Legacy",0},{"Server",1},{"Client",2},{"Plugin",3}};
 static_assert(std::size(kInputKeyCodeItems)<kExportEnumStride,"enum registry stride must fit KeyCode");
 static const ExportEnumSpec kUsiExportEnums[] = {
+    {"KeyInterpolationMode",kKeyInterpolationModeItems,std::size(kKeyInterpolationModeItems)},
+    {"ContentSourceType",kContentSourceTypeItems,std::size(kContentSourceTypeItems)},
 #include "player_enum_specs.inc"
+#include "catalog_enum_specs.inc"
     {"SecurityCapability", kUsiSecurityCapabilityItems, std::size(kUsiSecurityCapabilityItems)},
     {"Material", kUsiMaterialItems, std::size(kUsiMaterialItems)},
     {"CollisionFidelity", kUsiCollisionFidelityItems, std::size(kUsiCollisionFidelityItems)},
@@ -143,6 +153,7 @@ static const ExportEnumSpec kUsiExportEnums[] = {
     {"PlayerActions", kInputPlayerActionsItems, std::size(kInputPlayerActionsItems)},
     {"BulkMoveMode", kBulkMoveModeItems, std::size(kBulkMoveModeItems)},
     {"MeshType", kMeshTypeItems, std::size(kMeshTypeItems)},
+    {"RunContext", kRunContextItems, std::size(kRunContextItems)},
 
 
 };

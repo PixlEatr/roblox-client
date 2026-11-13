@@ -5,6 +5,7 @@ constexpr size_t kRenderBindingLimit=256;
 void retire_render_binding(lua_State* L,const std::shared_ptr<RenderStepBinding>& binding) {
     binding->active=false;
     if(binding->callback!=LUA_NOREF){lua_unref(L,binding->callback);binding->callback=LUA_NOREF;}
+    if(binding->creator_ref!=LUA_NOREF){lua_unref(L,binding->creator_ref);binding->creator_ref=LUA_NOREF;}
 }
 void clear_render_owner(lua_State* L,World& w,const std::string& owner) {
     auto& bindings=w.render_steps.bindings;
@@ -32,9 +33,13 @@ int render_dispatch_bridge(lua_State* L) {
             while(frame.group_index<frame.group.size()) {
                 auto binding=frame.group[frame.group_index];
                 if(!binding->active){++frame.group_index;continue;}
-                if(w.scheduler->callback_capacity()==0){lua_pushboolean(L,false);return 1;}
+                // An admitted frame must be able to finish even if an earlier
+                // binding filled the ordinary ready queue. The dispatcher
+                // serializes CPU-sliced bindings; retain the total task limit
+                // here and leave the ready-queue gate on new frame admission.
+                if(w.scheduler->invocation_capacity()==0){lua_pushboolean(L,false);return 1;}
                 ++frame.group_index;
-                w.scheduler->callback_now(L,binding->callback,[&](lua_State* child){lua_pushnumber(child,frame.dt);return 1;},binding->owner,binding->identity);
+                w.scheduler->callback_now(L,binding->callback,[&](lua_State* child){lua_pushnumber(child,frame.dt);return 1;},binding->owner,binding->identity,binding->creator_ref);
                 return 1;
             }
             // Snapshot one priority group at a time. Newly bound higher
@@ -92,7 +97,9 @@ int run_service_bind_render(lua_State* L) {
         auto binding=std::make_shared<RenderStepBinding>();
         binding->name.assign(name,length);binding->priority=static_cast<int>(priority);
         binding->owner=w.scheduler->owner(L);binding->identity=SourceScheduler::identity(L);binding->sequence=w.render_steps.next_sequence++;
-        binding->callback=lua_ref(L,4);w.render_steps.bindings.push_back(std::move(binding));return 0;
+        binding->callback=lua_ref(L,4);
+        lua_pushthread(L);binding->creator_ref=lua_ref(L,-1);lua_pop(L,1);
+        w.render_steps.bindings.push_back(std::move(binding));return 0;
     }catch(const std::exception& error){luaL_error(L,"BindToRenderStep: %s",error.what());return 0;}
 }
 int run_service_unbind_render(lua_State* L) {

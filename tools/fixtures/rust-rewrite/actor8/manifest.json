@@ -1,0 +1,19 @@
+{
+  "format": 1,
+  "fixture": "actor8",
+  "passive_part_count": 2000,
+  "actor_count": 8,
+  "lua_hold_ms": 3000,
+  "snapshot_bytes": 431129,
+  "snapshot_sha256": "1fdd47a722d23804c5e4579aa6da8ad90a3c9506098eb81b51a359dd81b88aab",
+  "script_bytes": 571,
+  "script_sha256": "e4f379902bdbd641c3073e0d72b00d324342efc62378ba0c20d5eb834ad3f53a",
+  "expected": {
+    "ok": true,
+    "values": [
+      2000,
+      0.25
+    ]
+  },
+  "measurement_note": "Generate before invoking the process-tree RSS sampler."
+}

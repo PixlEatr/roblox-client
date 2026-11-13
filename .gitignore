@@ -1,21 +1,14 @@
+# local stuff stays local
 /secrets/
 /outputs/
-/ida/
-/.venv/
-/runtime/build/
-/rust-client/target/
-/animation-codec/target/
-/rust port/
 /dist/
-/rove exports/
-/references/
-/vendor/Tovek/
-/vendor/LuauDecompiler/
-/vendor/decompiler-installation.json
+target/
+build/
 node_modules/
 __pycache__/
-*.py[cod]
+.venv/
 .DS_Store
+*.py[cod]
 *.log
 *.pcap
 *.pcapng
@@ -23,9 +16,12 @@ __pycache__/
 *.idb
 .env
 .env.*
+roblox-cookie*.txt
+discord-bot-token*.txt
+private-server-link*.txt
+/.rove-platform.json
+
+# only the public verification map belongs here
 /inputs/*
 !/inputs/bytecode-signature-v1-public.bin
 !/inputs/bytecode-signature-v1-public.json
-/tests/fixtures/sunc/suite.luau
-
-/.rove-platform.json

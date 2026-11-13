@@ -102,7 +102,7 @@ Json render_snapshot(World& w) {
     bool global_wheel_receiver=false;
     auto* player_mouse=local_player_mouse(w);
     for(const auto& connection:w.connections) {
-        if(!connection->connected||!connection->signal||!connection->signal->node)continue;
+        if(!connection->connected||!connection->enabled||!connection->signal||!connection->signal->node)continue;
         const auto& key=connection->signal->key;const auto& id=connection->signal->node->id;
         if(connection->signal->node->class_name=="UserInputService"&&(key=="InputChanged"||key=="LastInputTypeChanged"))global_wheel_receiver=true;
         if(connection->signal->node==player_mouse&&(key=="WheelForward"||key=="WheelBackward"))global_wheel_receiver=true;
@@ -547,7 +547,7 @@ void render_gui_action(World& w,const Json& action) {
         }
         if(wheel) {
             if(wheel_input_id.empty()) {
-                do{wheel_input_id="__local_input_"+std::to_string(w.next_local_id++);}while(w.nodes.count(wheel_input_id));
+                wheel_input_id=w.allocate_local_id();
                 w.input.continuous[3]=wheel_input_id;
             }
             const auto& id=wheel_input_id;
@@ -611,6 +611,7 @@ void render_gui_action(World& w,const Json& action) {
         if(class_is_a(w,n->class_name,"GuiButton")) {
             emit(w,*n,down?"MouseButton1Down":"MouseButton1Up",Json::array({x,y}));
             if(!down&&interactable&&surface_visible(w,*n)){emit(w,*n,"MouseButton1Click");emit(w,*n,"Activated",Json::array({input,1}));}
+            queue_context_input(w,n->id,0,0,down?0:2,false);
         }
         if(!down){w.gui_pointer_target.clear();w.gui_pointer_input.clear();}
     }else if(kind=="click"&&action.size()==2&&class_is_a(w,n->class_name,"GuiButton")) {
@@ -630,6 +631,7 @@ void render_gui_action(World& w,const Json& action) {
         emit(w,*n,"MouseButton1Down",Json::array({x,y}));
         emit(w,*n,"MouseButton1Up",Json::array({x,y}));
         emit(w,*n,"MouseButton1Click");emit(w,*n,"Activated",Json::array({Json{{"$ref",id}},1}));
+        queue_context_input(w,n->id,0,0,2,false);
     }else if(kind=="text"&&action.size()==3&&n->class_name=="TextBox"&&action.contains("text")&&action["text"].is_string()&&action["text"].get<std::string>().size()<=4096) {
         if(!textbox_editable(w,*n))throw std::runtime_error("TextBox is read-only");
         write_textbox(w,*n,action["text"]);

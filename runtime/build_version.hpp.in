@@ -1,0 +1,3 @@
+#pragma once
+
+#define ROVE_BUILD_VERSION "@ROVE_BUILD_VERSION@"

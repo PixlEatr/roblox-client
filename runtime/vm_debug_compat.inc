@@ -70,11 +70,12 @@ int vm_setstack(lua_State* L) {
     if(index<1||index>frame->top-frame->base){luaL_error(L,"stack index out of range");return 0;}
     luaC_threadbarrier(L);setobj2s(L,frame->base+index-1,luaA_toobject(L,3));return 0;
 }
-struct VMObjects {lua_State* L;std::vector<GCObject*> objects;Proto* prototype=nullptr;bool tables=false;};
+struct VMObjects {lua_State* L;std::vector<GCObject*> objects;Proto* prototype=nullptr;bool tables=false;bool threads=false;};
 bool vm_visit(void* raw,lua_Page*,GCObject* object) {
     auto& state=*static_cast<VMObjects*>(raw);
     if(isdead(state.L->global,object))return false;
-    bool wanted=state.prototype?(object->gch.tt==LUA_TFUNCTION&&!object->cl.isC&&!object->cl.inactive&&!object->cl.preload&&object->cl.l.p==state.prototype):
+    bool wanted=state.threads?(object->gch.tt==LUA_TTHREAD&& &object->th!=state.L):
+        state.prototype?(object->gch.tt==LUA_TFUNCTION&&!object->cl.isC&&!object->cl.inactive&&!object->cl.preload&&object->cl.l.p==state.prototype):
         object->gch.tt==LUA_TFUNCTION||object->gch.tt==LUA_TUSERDATA||(state.tables&&object->gch.tt==LUA_TTABLE);
     if(wanted)state.objects.push_back(object);return false;
 }
@@ -86,9 +87,23 @@ int vm_getgc(lua_State* L) {
     PauseGC pause(L);VMObjects state{L,{},nullptr,lua_toboolean(L,1)!=0};luaM_visitgco(L,&state,vm_visit);
     lua_createtable(L,state.objects.size(),0);int i=0;for(auto* object:state.objects){push_gc_object(L,object);lua_rawseti(L,-2,++i);}return 1;
 }
+int vm_getallthreads(lua_State* L) {
+    // Visit this state's GC heap, so threads retained through Lua stacks or
+    // tables are included without crossing into another Actor's VM. The
+    // currently executing coroutine is omitted; the VM's special main state
+    // is not a GC-page object and is therefore omitted as well.
+    PauseGC pause(L);VMObjects state{L,{},nullptr,false,true};luaM_visitgco(L,&state,vm_visit);
+    lua_createtable(L,state.objects.size(),0);int index=0;
+    for(auto* object:state.objects){push_gc_object(L,object);lua_rawseti(L,-2,++index);}
+    return 1;
+}
 void push_prototype(lua_State* L,Closure* parent,Proto* p,bool active) {
-    PauseGC pause(L);VMObjects state{L,{},p,false};luaM_visitgco(L,&state,vm_visit);
+    PauseGC pause(L);
     if(active) {
+        // Only active lookup needs to discover existing closures. Inactive
+        // handles already have their Proto; enumerating the heap for each
+        // getprotos entry adds unrelated work and discards every result.
+        VMObjects state{L,{},p,false};luaM_visitgco(L,&state,vm_visit);
         lua_createtable(L,state.objects.size(),0);int index=0;
         for(auto* object:state.objects){push_gc_object(L,object);lua_rawseti(L,-2,++index);}
     } else {
@@ -113,5 +128,21 @@ int vm_namecall(lua_State* L){const char* name=lua_namecallatom(L,nullptr);if(na
 void install_vm_debug(lua_State* L) {
     lua_getglobal(L,"debug");
     for(auto item:{std::pair<const char*,lua_CFunction>{"getconstant",vm_constant},{"getconstants",vm_constants},{"setconstant",vm_setconstant},{"getstack",vm_getstack},{"setstack",vm_setstack},{"getproto",vm_getproto},{"getprotos",vm_getprotos}}){lua_pushcfunction(L,item.second,item.first);lua_setfield(L,-2,item.first);}lua_pop(L,1);
-    for(auto item:{std::pair<const char*,lua_CFunction>{"getgc",vm_getgc},{"filtergc",vm_filtergc},{"getfunctionhash",vm_functionhash},{"isexecutorclosure",vm_ownclosure},{"checkclosure",vm_ownclosure},{"isourclosure",vm_ownclosure},{"getnamecallmethod",vm_namecall}}){lua_pushcfunction(L,item.second,item.first);lua_setglobal(L,item.first);}
+    lua_getglobal(L,"debug");
+    auto alias=[&](const char* name,const char* target){lua_getfield(L,-1,target);lua_setfield(L,-2,name);};
+    for(auto item:{std::pair<const char*,const char*>{"getconst","getconstant"},{"getconsts","getconstants"},
+                   {"setconst","setconstant"},{"setconsts","setconstant"},
+                   {"getupval","getupvalue"},{"getupvals","getupvalues"},
+                   {"setupval","setupvalue"},{"setupvals","setupvalue"},
+                   {"getfuncinfo","getinfo"},{"getfunctioninfo","getinfo"},
+                   {"getreg","getregistry"},{"setcallstack","setstack"}})
+        alias(item.first,item.second);
+    for(auto item:{std::pair<const char*,const char*>{"getmetatable","getrawmetatable"},
+                   {"getrawmetatable","getrawmetatable"},{"setmetatable","setrawmetatable"},
+                   {"setrawmetatable","setrawmetatable"}}) {
+        lua_getglobal(L,item.second);lua_setfield(L,-2,item.first);
+    }
+    lua_pop(L,1);
+    for(auto item:{std::pair<const char*,lua_CFunction>{"getgc",vm_getgc},{"filtergc",vm_filtergc},{"getfunctionhash",vm_functionhash},{"isexecutorclosure",vm_ownclosure},{"checkclosure",vm_ownclosure},{"isourclosure",vm_ownclosure},{"getnamecallmethod",vm_namecall},{"getallthreads",vm_getallthreads}}){lua_pushcfunction(L,item.second,item.first);lua_setglobal(L,item.first);}
+    lua_getglobal(L,"getallthreads");lua_setglobal(L,"getthreads");
 }

@@ -8,11 +8,21 @@
 // SecurityCapabilities here is deliberately a serializable value container only.
 // It never changes script identity, access checks, or engine permissions.
 constexpr const char* kUsiSecurityCapabilitiesMeta="WorldSnapshot.USSI.SecurityCapabilities";
-constexpr int kUsiSecurityCapabilityKind=0;
+static_assert(std::size(kUsiSecurityCapabilityItems)<=64,"SecurityCapabilities mask must fit its enum items");
+static int usi_security_capability_kind() {
+    // The shared enum registry grows as engine bindings are added. Resolve by
+    // enum identity instead of assuming this group occupies its original slot.
+    static const int kind=[]() {
+        for(size_t i=0;i<std::size(kUsiExportEnums);++i)
+            if(!std::strcmp(kUsiExportEnums[i].name,"SecurityCapability"))return static_cast<int>(i);
+        throw std::logic_error("SecurityCapability enum is missing from the registry");
+    }();
+    return kind;
+}
 struct UsiSecurityCapabilitiesValue { uint64_t words[1]; };
 static UsiExportItemRef* usi_check_security_capability(lua_State* L,int index) {
     auto* item=static_cast<UsiExportItemRef*>(luaL_checkudata(L,index,kUsiExportItemMeta));
-    if(item->kind!=kUsiSecurityCapabilityKind) luaL_error(L,"Enum.SecurityCapability item required");
+    if(item->kind!=usi_security_capability_kind()) luaL_error(L,"Enum.SecurityCapability item required");
     return item;
 }
 static int usi_security_capabilities_readonly(lua_State* L) { luaL_error(L,"SecurityCapabilities values are immutable");return 0; }
@@ -26,7 +36,7 @@ static int usi_security_capabilities_new(lua_State* L) {
 static int usi_security_capabilities_tostring(lua_State* L) {
     auto* value=static_cast<UsiSecurityCapabilitiesValue*>(luaL_checkudata(L,1,kUsiSecurityCapabilitiesMeta));
     std::string out;
-    const auto& caps=kUsiExportEnums[kUsiSecurityCapabilityKind];
+    const auto& caps=kUsiExportEnums[usi_security_capability_kind()];
     for(size_t i=0;i<caps.count;++i) if(value->words[0]&(uint64_t(1)<<i)) { if(!out.empty())out += " | "; out += caps.items[i].name; }
     lua_pushlstring(L,out.data(),out.size());return 1;
 }
@@ -46,7 +56,7 @@ static bool push_ussi_security_capabilities_json(lua_State* L,const Json& value)
     const auto& list=value["$securityCapabilities"];
     if(!list.is_array())throw std::runtime_error("invalid SecurityCapabilities payload");
     std::vector<int> indices;indices.reserve(list.size());
-    const auto& caps=kUsiExportEnums[kUsiSecurityCapabilityKind];
+    const auto& caps=kUsiExportEnums[usi_security_capability_kind()];
     for(const auto& item:list) {
         if(!item.is_object()||!item.contains("name")||!item["name"].is_string()||!item.contains("value")||!item["value"].is_number_integer())throw std::runtime_error("invalid SecurityCapability item");
         int found=-1;for(size_t i=0;i<caps.count;++i)if(item["value"]==caps.items[i].value&&item["name"]==caps.items[i].name){found=(int)i;break;}
@@ -59,7 +69,7 @@ static bool push_ussi_security_capabilities_json(lua_State* L,const Json& value)
 }
 static bool capture_ussi_security_capabilities(lua_State* L,int index,Json& out) {
     if(!has_meta(L,index,kUsiSecurityCapabilitiesMeta))return false;
-    auto* value=static_cast<UsiSecurityCapabilitiesValue*>(lua_touserdata(L,index));Json list=Json::array();const auto& caps=kUsiExportEnums[kUsiSecurityCapabilityKind];
+    auto* value=static_cast<UsiSecurityCapabilitiesValue*>(lua_touserdata(L,index));Json list=Json::array();const auto& caps=kUsiExportEnums[usi_security_capability_kind()];
     for(size_t i=0;i<caps.count;++i)if(value->words[0]&(uint64_t(1)<<i))list.push_back(Json{{"name",caps.items[i].name},{"value",caps.items[i].value}});
     out=Json{{"$securityCapabilities",std::move(list)}};return true;
 }

@@ -51,6 +51,7 @@ int compat_setreadonly(lua_State* L) {
 }
 int compat_registry(lua_State* L) {lua_pushvalue(L,LUA_REGISTRYINDEX);return 1;}
 #include "memory_categories.inc"
+#include "profiler_compat.inc"
 #include "filesystem_compat.inc"
 void install_local_compat(lua_State* L) {
     // Retain Luau's genuine info/traceback implementations when extending the
@@ -70,6 +71,7 @@ void install_local_compat(lua_State* L) {
     lua_pushvalue(L,-1);lua_setglobal(L,"getregistry");
     lua_setfield(L,-2,"getregistry");
     install_memory_category_bindings(L);
+    install_profiler_compat(L, debug_table);
     lua_setglobal(L,"debug");
     for(auto binding:{std::pair<const char*,lua_CFunction>{"getrawmetatable",compat_rawmetatable},{"setrawmetatable",compat_setmetatable},{"isreadonly",compat_readonly},{"setreadonly",compat_setreadonly}}) {
         lua_pushcfunction(L,binding.second,binding.first);lua_setglobal(L,binding.first);
@@ -79,8 +81,13 @@ void install_local_compat(lua_State* L) {
     ;
     std::string bytecode=Luau::compile(source);
     if(luau_load(L,"=local-workspace",bytecode.data(),bytecode.size(),0)!=0)lua_error(L);
-    mark_executor_closure(L,-1);lua_call(L,0,0);
+    mark_executor_closure(L,-1);
+    lua_getfield(L,LUA_REGISTRYINDEX,"Headless.WorkspaceAssetBridge");
+    if(!lua_istable(L,-1)){lua_pop(L,1);lua_pushnil(L);}
+    lua_call(L,1,0);
     install_filesystem_compat(L);
+    lua_getglobal(L,"getcustomassetdata");
+    lua_setfield(L,LUA_REGISTRYINDEX,"Headless.CustomAssetResolver");
     const char* drawing=
 #include "drawing_compat.inc"
     ;

@@ -1,0 +1,411 @@
+{
+  "format": "luau-bytecode-fixtures-v1",
+  "compiler": {
+    "name": "Luau",
+    "tag": "0.705",
+    "commit": "93c83a46d7c6c1b040e58e82ef167340a7db1aef",
+    "arguments": [
+      "--binary",
+      "-O1",
+      "-g1"
+    ]
+  },
+  "files": [
+    {
+      "path": "StarterPlayerScripts/PlayerModule.module.lua",
+      "source_sha256": "13129a0ea1ae1ef7923072ed3243333c1bc192b1aca591e52033f6bfe1b57d5a",
+      "bytecode_path": "bytecode-v6/StarterPlayerScripts/PlayerModule.module.lua.luac",
+      "bytecode_sha256": "f4f496fdadefb915349fa76fff0b43c25acee29ccf020171f5eb1e81ce512e20",
+      "bytecode_size": 627,
+      "bytecode_version": 6,
+      "type_version": 3
+    },
+    {
+      "path": "StarterPlayerScripts/PlayerModule.module/CameraModule.lua",
+      "source_sha256": "a81c2a5251d7136e3a8853f99b0c9a6b2df5cc67fa682dc16f5c108ebcc09e56",
+      "bytecode_path": "bytecode-v6/StarterPlayerScripts/PlayerModule.module/CameraModule.lua.luac",
+      "bytecode_sha256": "28c369640a6cd74594917c9133b1dcde0defa6a5efe59804ef2b6113b7f2c1b3",
+      "bytecode_size": 12057,
+      "bytecode_version": 6,
+      "type_version": 3
+    },
+    {
+      "path": "StarterPlayerScripts/PlayerModule.module/CameraModule/BaseCamera.lua",
+      "source_sha256": "1a20353c2dfb07603dc3ff2e5e0a1c27841ab8fd249d6affed66b841fea47cdf",
+      "bytecode_path": "bytecode-v6/StarterPlayerScripts/PlayerModule.module/CameraModule/BaseCamera.lua.luac",
+      "bytecode_sha256": "ad476853c3ce0947c403f87e5facaf26e4db5536c12717c9bf8cfe166e66693b",
+      "bytecode_size": 14364,
+      "bytecode_version": 6,
+      "type_version": 3
+    },
+    {
+      "path": "StarterPlayerScripts/PlayerModule.module/CameraModule/BaseOcclusion.lua",
+      "source_sha256": "3d1dfa19839c0ce10f92376966ef3dd89ce4a48021454b5bd65fc7e28d139c5a",
+      "bytecode_path": "bytecode-v6/StarterPlayerScripts/PlayerModule.module/CameraModule/BaseOcclusion.lua.luac",
+      "bytecode_sha256": "7ab64b4acd03b857290e55413d1d0713f444935eb5b3777d0cd5b7f086ead8a9",
+      "bytecode_size": 937,
+      "bytecode_version": 6,
+      "type_version": 3
+    },
+    {
+      "path": "StarterPlayerScripts/PlayerModule.module/CameraModule/CameraInput.lua",
+      "source_sha256": "b61702cc5be3b9f2deee830d3a949892d3e65175ee8df4ea239056e1b94ef1d7",
+      "bytecode_path": "bytecode-v6/StarterPlayerScripts/PlayerModule.module/CameraModule/CameraInput.lua.luac",
+      "bytecode_sha256": "11d7a2ad3a67d6c25a0303d759fd2e27375f46c4c90256524360b04f466f880f",
+      "bytecode_size": 11409,
+      "bytecode_version": 6,
+      "type_version": 3
+    },
+    {
+      "path": "StarterPlayerScripts/PlayerModule.module/CameraModule/CameraToggleStateController.lua",
+      "source_sha256": "52390fb6a110501707b8cb0ca5d5b2a03d68a707a57e2706c2f11fe196689e78",
+      "bytecode_path": "bytecode-v6/StarterPlayerScripts/PlayerModule.module/CameraModule/CameraToggleStateController.lua.luac",
+      "bytecode_sha256": "b2f7e49e67a378519297f3a977fd140ca4082f12c1a97857ab361b039920a1f7",
+      "bytecode_size": 1837,
+      "bytecode_version": 6,
+      "type_version": 3
+    },
+    {
+      "path": "StarterPlayerScripts/PlayerModule.module/CameraModule/CameraUI.lua",
+      "source_sha256": "b299edf3a783387c9278b32a19b2b0f389f742b20aa0b2874dfd0b4408e413e8",
+      "bytecode_path": "bytecode-v6/StarterPlayerScripts/PlayerModule.module/CameraModule/CameraUI.lua.luac",
+      "bytecode_sha256": "d04dcddad337634ea1892fc4ea6741cd4ab1fa34110ea33c74cb738b1a045a6a",
+      "bytecode_size": 573,
+      "bytecode_version": 6,
+      "type_version": 3
+    },
+    {
+      "path": "StarterPlayerScripts/PlayerModule.module/CameraModule/CameraUtils.lua",
+      "source_sha256": "d0f3e906706d19fea0cc9ef21be55ac5c90bc734e92f566652966a8986f099e9",
+      "bytecode_path": "bytecode-v6/StarterPlayerScripts/PlayerModule.module/CameraModule/CameraUtils.lua.luac",
+      "bytecode_sha256": "3e57d94985005a593f78c2a8658e31df1fe4b0e801bd183ed1a37a66e27dcb92",
+      "bytecode_size": 5529,
+      "bytecode_version": 6,
+      "type_version": 3
+    },
+    {
+      "path": "StarterPlayerScripts/PlayerModule.module/CameraModule/ClassicCamera.lua",
+      "source_sha256": "bd14f6cec23a4f601ba11de0357cd5eb872f083d40de2097e128434f833a2c52",
+      "bytecode_path": "bytecode-v6/StarterPlayerScripts/PlayerModule.module/CameraModule/ClassicCamera.lua.luac",
+      "bytecode_sha256": "ae9d51e74fc861a9805d979803f8a84405ace321a0c0a7674e06c68e861584d1",
+      "bytecode_size": 4996,
+      "bytecode_version": 6,
+      "type_version": 3
+    },
+    {
+      "path": "StarterPlayerScripts/PlayerModule.module/CameraModule/Invisicam.lua",
+      "source_sha256": "9e64da1bee850e6f3935f6ee404719c93f7a386b6b718777a605652f1b0df504",
+      "bytecode_path": "bytecode-v6/StarterPlayerScripts/PlayerModule.module/CameraModule/Invisicam.lua.luac",
+      "bytecode_sha256": "646ef834a9323af980cef53be8189eb4d7974080ebdd8ed428dbb514c5f9bb2b",
+      "bytecode_size": 12023,
+      "bytecode_version": 6,
+      "type_version": 3
+    },
+    {
+      "path": "StarterPlayerScripts/PlayerModule.module/CameraModule/LegacyCamera.lua",
+      "source_sha256": "a70c2648ce4aa7952abde3bc8ce874066ff7bd901d0593ee314eab09f6c1d6ac",
+      "bytecode_path": "bytecode-v6/StarterPlayerScripts/PlayerModule.module/CameraModule/LegacyCamera.lua.luac",
+      "bytecode_sha256": "3c6168ba6a5f27c12305d3b32c77dfab514c1ae0faaa52c194bd923ef309f03f",
+      "bytecode_size": 2473,
+      "bytecode_version": 6,
+      "type_version": 3
+    },
+    {
+      "path": "StarterPlayerScripts/PlayerModule.module/CameraModule/MouseLockController.lua",
+      "source_sha256": "769bd21e9f7775e825385eaac928803eb1a55db118e4616d452a65032e7c3e6a",
+      "bytecode_path": "bytecode-v6/StarterPlayerScripts/PlayerModule.module/CameraModule/MouseLockController.lua.luac",
+      "bytecode_sha256": "b1e484c8334c94667e284af54a97c4477bb1dc5f9a6d2655163ede9707c06565",
+      "bytecode_size": 4742,
+      "bytecode_version": 6,
+      "type_version": 3
+    },
+    {
+      "path": "StarterPlayerScripts/PlayerModule.module/CameraModule/OrbitalCamera.lua",
+      "source_sha256": "a473caf471a21f1634af2ea8a949be18bb79911337e329927cd03e0b774adb70",
+      "bytecode_path": "bytecode-v6/StarterPlayerScripts/PlayerModule.module/CameraModule/OrbitalCamera.lua.luac",
+      "bytecode_sha256": "972fb49b3a5f4706860388d4b048cc3c31ceda964cb781683cbf498de9acb465",
+      "bytecode_size": 7583,
+      "bytecode_version": 6,
+      "type_version": 3
+    },
+    {
+      "path": "StarterPlayerScripts/PlayerModule.module/CameraModule/Poppercam.lua",
+      "source_sha256": "7a021cfbbcb0851312e0fe26917c3e0721088c0a72e84ca65074247198afb4b7",
+      "bytecode_path": "bytecode-v6/StarterPlayerScripts/PlayerModule.module/CameraModule/Poppercam.lua.luac",
+      "bytecode_sha256": "d9e1d71416423f349f49fd5083b978abd526fdb750fe5632a604a056ab20fc9d",
+      "bytecode_size": 2491,
+      "bytecode_version": 6,
+      "type_version": 3
+    },
+    {
+      "path": "StarterPlayerScripts/PlayerModule.module/CameraModule/TransparencyController.lua",
+      "source_sha256": "5dde017f99bdad91c648e19b690c2aac6daf89b0ba3d4eb27b343df3b02eab71",
+      "bytecode_path": "bytecode-v6/StarterPlayerScripts/PlayerModule.module/CameraModule/TransparencyController.lua.luac",
+      "bytecode_sha256": "a89b63d40a41c2cfda7f2e62e75e7c1823e881e8aaa19537a90ab3a3a3dcaa2f",
+      "bytecode_size": 4525,
+      "bytecode_version": 6,
+      "type_version": 3
+    },
+    {
+      "path": "StarterPlayerScripts/PlayerModule.module/CameraModule/VRBaseCamera.lua",
+      "source_sha256": "fdc20d9e2444b0d7eecc5bdab57f4bdc0870d9ec4921d3f00f4ee34f47055079",
+      "bytecode_path": "bytecode-v6/StarterPlayerScripts/PlayerModule.module/CameraModule/VRBaseCamera.lua.luac",
+      "bytecode_sha256": "ad0f6080d277df527778e4b964fa663cfcf6356086b74e70d443049ba99f24d2",
+      "bytecode_size": 8440,
+      "bytecode_version": 6,
+      "type_version": 3
+    },
+    {
+      "path": "StarterPlayerScripts/PlayerModule.module/CameraModule/VRCamera.lua",
+      "source_sha256": "cf8fd045609f1c12a2e18e8e521e8af5d210bc40623789e693d8e681f1c332ac",
+      "bytecode_path": "bytecode-v6/StarterPlayerScripts/PlayerModule.module/CameraModule/VRCamera.lua.luac",
+      "bytecode_sha256": "655e45ac09087e7beca3743371e6714161b270cc446a8d0be91b436c16fce6bf",
+      "bytecode_size": 9794,
+      "bytecode_version": 6,
+      "type_version": 3
+    },
+    {
+      "path": "StarterPlayerScripts/PlayerModule.module/CameraModule/VRCameraTeleportDetector.lua",
+      "source_sha256": "4ef245eeaf61396d333617cf06d6146f4b9da2dd29227e4d4256a32f6c23cb4c",
+      "bytecode_path": "bytecode-v6/StarterPlayerScripts/PlayerModule.module/CameraModule/VRCameraTeleportDetector.lua.luac",
+      "bytecode_sha256": "b1d66a79d446f914511f9b86280b3ba14b2e042380843aabd1df1b7a2e2a3b05",
+      "bytecode_size": 350,
+      "bytecode_version": 6,
+      "type_version": 3
+    },
+    {
+      "path": "StarterPlayerScripts/PlayerModule.module/CameraModule/VRVehicleCamera.lua",
+      "source_sha256": "c4b9bab2ef8dd0ec16b24bf3cb29015c4a423d70845f15c8da348bc026864690",
+      "bytecode_path": "bytecode-v6/StarterPlayerScripts/PlayerModule.module/CameraModule/VRVehicleCamera.lua.luac",
+      "bytecode_sha256": "67cd6fa930776870730a7997c5f89ae0aa73391a6b410354fcce8f1570a9f8c4",
+      "bytecode_size": 7802,
+      "bytecode_version": 6,
+      "type_version": 3
+    },
+    {
+      "path": "StarterPlayerScripts/PlayerModule.module/CameraModule/VehicleCamera.lua",
+      "source_sha256": "4876bbb259d2b9857808f9e995c4925d879246962f3ef0dbc50655be078df2cd",
+      "bytecode_path": "bytecode-v6/StarterPlayerScripts/PlayerModule.module/CameraModule/VehicleCamera.lua.luac",
+      "bytecode_sha256": "7b852955943ee0702e0c62355cdd5bd0f8461013334c3e7f98270076e182d2ad",
+      "bytecode_size": 4796,
+      "bytecode_version": 6,
+      "type_version": 3
+    },
+    {
+      "path": "StarterPlayerScripts/PlayerModule.module/CameraModule/VehicleCamera/VehicleCameraConfig.lua",
+      "source_sha256": "26710edb25934e40368703e728ce60206945a6836a3d2c7a5f243e21b139adc4",
+      "bytecode_path": "bytecode-v6/StarterPlayerScripts/PlayerModule.module/CameraModule/VehicleCamera/VehicleCameraConfig.lua.luac",
+      "bytecode_sha256": "8ba8c4d5849350bf8a3fbbd470adf5def71632ba6f446f21cdcf80945ef7c7ed",
+      "bytecode_size": 781,
+      "bytecode_version": 6,
+      "type_version": 3
+    },
+    {
+      "path": "StarterPlayerScripts/PlayerModule.module/CameraModule/VehicleCamera/VehicleCameraCore.lua",
+      "source_sha256": "cf98ab29e62da463420d7cc67da5f9694cd5e59be884c7bb01680c68a7e292f1",
+      "bytecode_path": "bytecode-v6/StarterPlayerScripts/PlayerModule.module/CameraModule/VehicleCamera/VehicleCameraCore.lua.luac",
+      "bytecode_sha256": "835bee2ab1e6384721558db238e6dd6d94828ffc48bf75d0f199c85f4772084f",
+      "bytecode_size": 3761,
+      "bytecode_version": 6,
+      "type_version": 3
+    },
+    {
+      "path": "StarterPlayerScripts/PlayerModule.module/CameraModule/ZoomController.lua",
+      "source_sha256": "07b53a8fd0784966d0cc317c02bb28cdd7fc717d6e209bb5df6e9313776dd392",
+      "bytecode_path": "bytecode-v6/StarterPlayerScripts/PlayerModule.module/CameraModule/ZoomController.lua.luac",
+      "bytecode_sha256": "7c0abaa9cc8ec1e0841b7a7fad97ce77f3aee0674e0a955eb1fd6bd99e379042",
+      "bytecode_size": 2209,
+      "bytecode_version": 6,
+      "type_version": 3
+    },
+    {
+      "path": "StarterPlayerScripts/PlayerModule.module/CameraModule/ZoomController/Popper.lua",
+      "source_sha256": "eddf4de66006c0876f06de4ede9a605d934a51b320eef86aa6840e391b4c5750",
+      "bytecode_path": "bytecode-v6/StarterPlayerScripts/PlayerModule.module/CameraModule/ZoomController/Popper.lua.luac",
+      "bytecode_sha256": "87bb4b12d4852a3d1efc995baac70f29f5f8e961a42a49bbef03416fb95088d4",
+      "bytecode_size": 7634,
+      "bytecode_version": 6,
+      "type_version": 3
+    },
+    {
+      "path": "StarterPlayerScripts/PlayerModule.module/CommonUtils/CameraWrapper.lua",
+      "source_sha256": "d993a671c2bdc74fac47bb6611d7d6a413641daa14ccf24d11847c4c54e08580",
+      "bytecode_path": "bytecode-v6/StarterPlayerScripts/PlayerModule.module/CommonUtils/CameraWrapper.lua.luac",
+      "bytecode_sha256": "f2b5320b780596474bf385a91a3fcef3ddb72b426ce9e1686f5da9a32719943c",
+      "bytecode_size": 1542,
+      "bytecode_version": 6,
+      "type_version": 3
+    },
+    {
+      "path": "StarterPlayerScripts/PlayerModule.module/CommonUtils/CharacterUtil.lua",
+      "source_sha256": "756b3929ce50589f24f46b28341324983956646476e0463e69c984d81f9ab787",
+      "bytecode_path": "bytecode-v6/StarterPlayerScripts/PlayerModule.module/CommonUtils/CharacterUtil.lua.luac",
+      "bytecode_sha256": "2e0c9b4bededbad344d2424cba4e2233f08d456d7824c56bfe640046d11d5794",
+      "bytecode_size": 2700,
+      "bytecode_version": 6,
+      "type_version": 3
+    },
+    {
+      "path": "StarterPlayerScripts/PlayerModule.module/CommonUtils/ConnectionUtil.lua",
+      "source_sha256": "0d3fb518e0ba5a43e5bdd8debd2942dea6ddd44aa5f30492e2f232099c9b0d3e",
+      "bytecode_path": "bytecode-v6/StarterPlayerScripts/PlayerModule.module/CommonUtils/ConnectionUtil.lua.luac",
+      "bytecode_sha256": "50a407b9713b9d8c5e5fec791c1cceb863bf416d6982ff0c6ea3fc74723c1726",
+      "bytecode_size": 771,
+      "bytecode_version": 6,
+      "type_version": 3
+    },
+    {
+      "path": "StarterPlayerScripts/PlayerModule.module/CommonUtils/FlagUtil.lua",
+      "source_sha256": "92ba4f1d338c82aae9da0b61ab3a634d7026a6cab567715da63147b27b03e12e",
+      "bytecode_path": "bytecode-v6/StarterPlayerScripts/PlayerModule.module/CommonUtils/FlagUtil.lua.luac",
+      "bytecode_sha256": "a8e0b60d840464c0ea88a43600e832fb764133a8e3a6788d1e19f0a11613d7b2",
+      "bytecode_size": 244,
+      "bytecode_version": 6,
+      "type_version": 3
+    },
+    {
+      "path": "StarterPlayerScripts/PlayerModule.module/ControlModule.lua",
+      "source_sha256": "8144eaa4cd1cd7999d7ff90b563e2ea7d97e93b515ad208daea95dad6d539324",
+      "bytecode_path": "bytecode-v6/StarterPlayerScripts/PlayerModule.module/ControlModule.lua.luac",
+      "bytecode_sha256": "b9c05b6e1e686c5403eef240e8c70b93164f16b4bf46ebf29ce416df3215e9ce",
+      "bytecode_size": 13830,
+      "bytecode_version": 6,
+      "type_version": 3
+    },
+    {
+      "path": "StarterPlayerScripts/PlayerModule.module/ControlModule/AvatarAbilitiesInterface.lua",
+      "source_sha256": "7e189d04683b8b07606f601afc18f814cc0f0536afda25dbbd6a04b02b535dc0",
+      "bytecode_path": "bytecode-v6/StarterPlayerScripts/PlayerModule.module/ControlModule/AvatarAbilitiesInterface.lua.luac",
+      "bytecode_sha256": "6f37c7603dd65546f07cb58210c11e1d375bafad4d9057e616816c73d6ee0d2a",
+      "bytecode_size": 1383,
+      "bytecode_version": 6,
+      "type_version": 3
+    },
+    {
+      "path": "StarterPlayerScripts/PlayerModule.module/ControlModule/BaseCharacterController.lua",
+      "source_sha256": "654bb2b85f8e5bfc4634e36b5d8ff0ef96952d69c9f3055c870695a4cb47c606",
+      "bytecode_path": "bytecode-v6/StarterPlayerScripts/PlayerModule.module/ControlModule/BaseCharacterController.lua.luac",
+      "bytecode_sha256": "133f996592e4cfe2279f5c08287c81fe3235d21bdd0e7bfc0baf2fe2c6fbcbe2",
+      "bytecode_size": 943,
+      "bytecode_version": 6,
+      "type_version": 3
+    },
+    {
+      "path": "StarterPlayerScripts/PlayerModule.module/ControlModule/ClickToMoveController.lua",
+      "source_sha256": "1ce9fcaf53173a75ceb239737e08cdcdac6cb8736b876759aaaa749b78ce7434",
+      "bytecode_path": "bytecode-v6/StarterPlayerScripts/PlayerModule.module/ControlModule/ClickToMoveController.lua.luac",
+      "bytecode_sha256": "ba304320d46c2b0bf3ca10ff2f37fc41da099b3fafcb8afe55d7b398a2de1110",
+      "bytecode_size": 26866,
+      "bytecode_version": 6,
+      "type_version": 3
+    },
+    {
+      "path": "StarterPlayerScripts/PlayerModule.module/ControlModule/ClickToMoveDisplay.lua",
+      "source_sha256": "a07c2f8b68d210047628d72284ea41800e989c62c3cd0aed84e109b0da8816c9",
+      "bytecode_path": "bytecode-v6/StarterPlayerScripts/PlayerModule.module/ControlModule/ClickToMoveDisplay.lua.luac",
+      "bytecode_sha256": "5f1776734e7f45185c5bb32fd75fefceb44f1195e7b67a28049ed3f088c3a6c3",
+      "bytecode_size": 11172,
+      "bytecode_version": 6,
+      "type_version": 3
+    },
+    {
+      "path": "StarterPlayerScripts/PlayerModule.module/ControlModule/DynamicThumbstick.lua",
+      "source_sha256": "f7474142263ee3d91ed53a1acaec99ebe884f58d4309fc9f1a569a0b333484fb",
+      "bytecode_path": "bytecode-v6/StarterPlayerScripts/PlayerModule.module/ControlModule/DynamicThumbstick.lua.luac",
+      "bytecode_sha256": "c596a6a0f17be78bd63f7e2e5eadf2c0d55ac9af91f439dfc0b4d6146f232c97",
+      "bytecode_size": 15283,
+      "bytecode_version": 6,
+      "type_version": 3
+    },
+    {
+      "path": "StarterPlayerScripts/PlayerModule.module/ControlModule/Gamepad.lua",
+      "source_sha256": "0dee35daf27affb46a4698f5fe426cec6e0e64090c49d095d76cc7151657f34d",
+      "bytecode_path": "bytecode-v6/StarterPlayerScripts/PlayerModule.module/ControlModule/Gamepad.lua.luac",
+      "bytecode_sha256": "8d9624b5a5091d2cd11552fc4475409d3b3f27c95ecca9baf4cf97f24b8c9fcb",
+      "bytecode_size": 5327,
+      "bytecode_version": 6,
+      "type_version": 3
+    },
+    {
+      "path": "StarterPlayerScripts/PlayerModule.module/ControlModule/Keyboard.lua",
+      "source_sha256": "3c85c462f8c03bf90e91c92e682283152e24b57686319e3158c3aadb13575b6b",
+      "bytecode_path": "bytecode-v6/StarterPlayerScripts/PlayerModule.module/ControlModule/Keyboard.lua.luac",
+      "bytecode_sha256": "7aad302ced95700c03f8b021c9277275d4e33d9cf8a5160ab4e9447877586171",
+      "bytecode_size": 4015,
+      "bytecode_version": 6,
+      "type_version": 3
+    },
+    {
+      "path": "StarterPlayerScripts/PlayerModule.module/ControlModule/PathDisplay.lua",
+      "source_sha256": "a88072ed4536fd774e46535ce3e3d29f18815c5ecbd228e8f2c1376e550ca86e",
+      "bytecode_path": "bytecode-v6/StarterPlayerScripts/PlayerModule.module/ControlModule/PathDisplay.lua.luac",
+      "bytecode_sha256": "a68b6144d1df537ee517708ea806ff7140ad9b9efdcc88f53527fd627027468a",
+      "bytecode_size": 2890,
+      "bytecode_version": 6,
+      "type_version": 3
+    },
+    {
+      "path": "StarterPlayerScripts/PlayerModule.module/ControlModule/TouchJump.lua",
+      "source_sha256": "82d2df20ed1bb3d542697aa42d6c678e9403d5a438c0bf5e1f6bfaabaae932ca",
+      "bytecode_path": "bytecode-v6/StarterPlayerScripts/PlayerModule.module/ControlModule/TouchJump.lua.luac",
+      "bytecode_sha256": "428a336ba2c7649800ee06cd62ceaabbbd477622dc5db5ffcfece7a51e61a4bd",
+      "bytecode_size": 6178,
+      "bytecode_version": 6,
+      "type_version": 3
+    },
+    {
+      "path": "StarterPlayerScripts/PlayerModule.module/ControlModule/TouchThumbstick.lua",
+      "source_sha256": "9689e7187a7c769404eb729182c5db1e8bb9239ef50d3e1971bbdfb1c95877a4",
+      "bytecode_path": "bytecode-v6/StarterPlayerScripts/PlayerModule.module/ControlModule/TouchThumbstick.lua.luac",
+      "bytecode_sha256": "0e73170fae5f13d5825e31366ed95897bda8363b40ff7e83c2ddc65774d9c34f",
+      "bytecode_size": 6968,
+      "bytecode_version": 6,
+      "type_version": 3
+    },
+    {
+      "path": "StarterPlayerScripts/PlayerModule.module/ControlModule/VRNavigation.lua",
+      "source_sha256": "5baefc826079477cd97dc3c237b4e1c646fc1453aa8cfe3156acb127a06d0a26",
+      "bytecode_path": "bytecode-v6/StarterPlayerScripts/PlayerModule.module/ControlModule/VRNavigation.lua.luac",
+      "bytecode_sha256": "50aa800506edbd16a3e0ce8a0af3f46437a96073be2549180850227c4ec49e14",
+      "bytecode_size": 9965,
+      "bytecode_version": 6,
+      "type_version": 3
+    },
+    {
+      "path": "StarterPlayerScripts/PlayerModule.module/ControlModule/VehicleController.lua",
+      "source_sha256": "93358c26896338c0f82a28e1049c10ab8fb02bc9cd3bc56626fb3f99019c1b5d",
+      "bytecode_path": "bytecode-v6/StarterPlayerScripts/PlayerModule.module/ControlModule/VehicleController.lua.luac",
+      "bytecode_sha256": "be0331c6e4c8b7e42434a7bc41288b5069b0e2285adfae38453b34a049a2deb5",
+      "bytecode_size": 3669,
+      "bytecode_version": 6,
+      "type_version": 3
+    },
+    {
+      "path": "StarterPlayerScripts/PlayerScriptsLoader.lua",
+      "source_sha256": "74e366eca58f34c81a40564c46b55ab692c35f7a884f532720119b705606edc0",
+      "bytecode_path": "bytecode-v6/StarterPlayerScripts/PlayerScriptsLoader.lua.luac",
+      "bytecode_sha256": "45c9e183a6051d890265e7efd63bdccda7450db7c469ceb88ca3273102e7722c",
+      "bytecode_size": 147,
+      "bytecode_version": 6,
+      "type_version": 3
+    },
+    {
+      "path": "StarterPlayerScriptsCommon/RbxCharacterSounds.lua",
+      "source_sha256": "d78bf08c5edf3f3ca63e55ae6dde69c33491a715c8bef14fb472135db7213887",
+      "bytecode_path": "bytecode-v6/StarterPlayerScriptsCommon/RbxCharacterSounds.lua.luac",
+      "bytecode_sha256": "fefea712778c7dd77cf3121833fede26e082d27c5b47ed73d5dd96b00b4d16d9",
+      "bytecode_size": 9122,
+      "bytecode_version": 6,
+      "type_version": 3
+    },
+    {
+      "path": "StarterPlayerScriptsCommon/RbxCharacterSounds/AtomicBinding.lua",
+      "source_sha256": "c604d4b42778ce7fe58812e2880596102c00474cadbaa35264f65d5c897588e8",
+      "bytecode_path": "bytecode-v6/StarterPlayerScriptsCommon/RbxCharacterSounds/AtomicBinding.lua.luac",
+      "bytecode_sha256": "f6d72d399dca6e048663625e036efaffe5b1d674abc66f970c75b8a2fb368744",
+      "bytecode_size": 3988,
+      "bytecode_version": 6,
+      "type_version": 3
+    }
+  ]
+}

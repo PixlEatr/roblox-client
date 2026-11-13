@@ -58,7 +58,13 @@ pub fn encode_position(input: [f64; 3]) -> Result<Vec<u8>, PhysicsCodecError> {
     let vector = checked_vector(input)?;
     let maximum = vector.iter().fold(0.0_f32, |m, x| m.max(x.abs()));
     let exponent = frexp_exponent_clamped(maximum, 31);
-    let width = if exponent <= 4 { 10 } else if exponent <= 10 { 16 } else { 21 };
+    let width = if exponent <= 4 {
+        10
+    } else if exponent <= 10 {
+        16
+    } else {
+        21
+    };
     let scale = (1_i32 << width) - 1;
     let [x, y, z] = vector.map(|v| quantize(v, exponent, scale));
     let header = ((exponent as u8) << 3)
@@ -94,9 +100,7 @@ pub fn encode_velocity(input: [f64; 3]) -> Result<Vec<u8>, PhysicsCodecError> {
     let exponent = frexp_exponent_clamped(maximum, 14);
     let [x, y, z] = vector.map(|v| quantize(v, exponent, 2047));
     let header = (((exponent as u32) << 4) | ((z as u32) & 15)) + 16;
-    let body = ((x as u32) << 20)
-        | (((y as u32) & 4095) << 8)
-        | (((z as u32) >> 4) & 255);
+    let body = ((x as u32) << 20) | (((y as u32) & 4095) << 8) | (((z as u32) >> 4) & 255);
     let mut out = vec![header as u8];
     out.extend_from_slice(&body.to_le_bytes());
     Ok(out)
@@ -129,7 +133,11 @@ mod tests {
             ([1024.0, -256.0, 128.0], "5a0007008000000200"),
         ];
         for (input, expected) in cases {
-            assert_eq!(encode_position(input).unwrap(), bytes(expected), "{input:?}");
+            assert_eq!(
+                encode_position(input).unwrap(),
+                bytes(expected),
+                "{input:?}"
+            );
         }
     }
 
@@ -154,7 +162,11 @@ mod tests {
             ([-1.0, -2.0, -3.0], "31a0000ce0"),
         ];
         for (input, expected) in cases {
-            assert_eq!(encode_velocity(input).unwrap(), bytes(expected), "{input:?}");
+            assert_eq!(
+                encode_velocity(input).unwrap(),
+                bytes(expected),
+                "{input:?}"
+            );
         }
     }
 
@@ -167,14 +179,27 @@ mod tests {
             [1.0e9, 0.0, 0.0],
             [-1.0e9, 0.0, 0.0],
         ] {
-            assert_eq!(encode_position(input), Err(PhysicsCodecError::InvalidVector));
-            assert_eq!(encode_velocity(input), Err(PhysicsCodecError::InvalidVector));
+            assert_eq!(
+                encode_position(input),
+                Err(PhysicsCodecError::InvalidVector)
+            );
+            assert_eq!(
+                encode_velocity(input),
+                Err(PhysicsCodecError::InvalidVector)
+            );
         }
     }
 
     #[test]
     fn largest_allowed_values_stay_within_codec_widths() {
-        for value in [-999_999_999.0, -16_384.0, -0.001, 0.001, 16_384.0, 999_999_999.0] {
+        for value in [
+            -999_999_999.0,
+            -16_384.0,
+            -0.001,
+            0.001,
+            16_384.0,
+            999_999_999.0,
+        ] {
             let vector = [value, -value, value / 3.0];
             let position = encode_position(vector).unwrap();
             let velocity = encode_velocity(vector).unwrap();

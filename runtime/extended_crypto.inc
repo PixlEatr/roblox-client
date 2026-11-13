@@ -197,10 +197,59 @@ int lz4_compress(lua_State* L) {
         lua_pushlstring(L,output.data(),count);return 1;
     }catch(const std::exception& e){luaL_error(L,"lz4compress: %s",e.what());return 0;}
 }
+constexpr size_t kLz4OutputLimit=256*1024;
+constexpr size_t kLz4InputLimit=kLz4OutputLimit+kLz4OutputLimit/255+32;
+size_t lz4_decoded_size(const std::string& input) {
+    if(input.empty())return 0;
+    size_t cursor=0,decoded=0,last_match_start=0;bool saw_match=false;
+    auto extended_length=[&](size_t base) {
+        size_t length=base;
+        while(true) {
+            if(cursor>=input.size())throw std::runtime_error("truncated LZ4 length");
+            const size_t extension=static_cast<unsigned char>(input[cursor++]);
+            if(extension>kLz4OutputLimit-length)throw std::runtime_error("LZ4 output exceeds 256 KiB");
+            length+=extension;
+            if(extension!=255)return length;
+        }
+    };
+    while(cursor<input.size()) {
+        const unsigned char token=static_cast<unsigned char>(input[cursor++]);
+        const size_t literal_length=(token>>4)==15?extended_length(15):size_t(token>>4);
+        if(literal_length>input.size()-cursor)throw std::runtime_error("truncated LZ4 literals");
+        if(literal_length>kLz4OutputLimit-decoded)throw std::runtime_error("LZ4 output exceeds 256 KiB");
+        decoded+=literal_length;cursor+=literal_length;
+        if(cursor==input.size()) {
+            if(saw_match&&(literal_length<5||decoded-last_match_start<12))
+                throw std::runtime_error("LZ4 block violates terminal literal constraints");
+            return decoded;
+        }
+        if(input.size()-cursor<2)throw std::runtime_error("truncated LZ4 match offset");
+        const size_t offset=static_cast<unsigned char>(input[cursor])|
+            (size_t(static_cast<unsigned char>(input[cursor+1]))<<8);
+        cursor+=2;
+        if(offset==0||offset>decoded)throw std::runtime_error("invalid LZ4 match offset");
+        saw_match=true;last_match_start=decoded;
+        const size_t low_nibble=token&15;
+        const size_t match_length=low_nibble==15?extended_length(19):low_nibble+4;
+        if(match_length>kLz4OutputLimit-decoded)throw std::runtime_error("LZ4 output exceeds 256 KiB");
+        decoded+=match_length;
+    }
+    throw std::runtime_error("LZ4 block is missing its final literal sequence");
+}
 int lz4_decompress(lua_State* L) {
-    int size=luaL_checkinteger(L,2);if(size<0||size>256*1024){luaL_error(L,"decompressed size must be 0..262144");return 0;}
     try {
-        auto input=crypt_string(L,1);if(input.empty()&&size==0){lua_pushliteral(L,"");return 1;}
+        size_t input_length=0;const char* input_data=luaL_checklstring(L,1,&input_length);
+        if(input_length>kLz4InputLimit)throw std::runtime_error("LZ4 input exceeds limit");
+        std::string input(input_data,input_length);
+        const size_t decoded_size=lz4_decoded_size(input);
+        int size;
+        if(lua_isnoneornil(L,2))size=static_cast<int>(decoded_size);
+        else {
+            size=luaL_checkinteger(L,2);
+            if(size<0||size>int(kLz4OutputLimit))throw std::runtime_error("decompressed size must be 0..262144");
+            if(size!=decoded_size)throw std::runtime_error("malformed LZ4 data or incorrect decompressed size");
+        }
+        if(size==0){lua_pushliteral(L,"");return 1;}
         // One extra byte detects declared sizes smaller than actual output.
         std::string output(size+1,'\0');
 #ifdef __APPLE__

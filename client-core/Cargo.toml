@@ -1,0 +1,32 @@
+[package]
+name = "rove-client-core"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.88"
+publish = false
+
+[lib]
+crate-type = ["rlib", "cdylib"]
+
+[features]
+default = []
+transport = ["dep:tokio", "dep:quinn", "dep:rustls", "dep:sha2", "dep:bytes", "dep:wtransport"]
+transport-test = ["transport", "wtransport/self-signed"]
+
+[dependencies]
+serde = "=1.0.229"
+serde_json = { version = "=1.0.154", features = ["float_roundtrip"] }
+zstd = "=0.13.1"
+blake2 = "=0.10.6"
+libc = "=0.2.191"
+tokio = { version = "=1.50.0", optional = true, features = ["rt", "net", "macros", "sync", "time", "io-util"] }
+quinn = { version = "=0.11.12", optional = true, default-features = false, features = ["runtime-tokio", "rustls-ring"] }
+rustls = { version = "=0.23.37", optional = true, default-features = false, features = ["ring", "std"] }
+sha2 = { version = "=0.10.9", optional = true }
+bytes = { version = "=1.11.0", optional = true }
+wtransport = { path = "../vendor/wtransport", optional = true, default-features = false, features = ["ring", "quinn"] }
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = true

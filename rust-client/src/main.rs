@@ -1,17 +1,17 @@
-#[cfg(unix)]
-use std::os::unix::net::UnixStream;
 #[cfg(windows)]
 use std::net::TcpStream;
+#[cfg(unix)]
+use std::os::unix::net::UnixStream;
 // Cargo attaches build.rs native link metadata to the package library target.
 extern crate headless_luau;
 
 mod codecs;
 mod decompiler;
-mod network;
 mod host_io;
-mod test_limits;
 mod native;
+mod network;
 mod session;
+mod test_limits;
 
 use serde_json::{json, Value};
 use std::{
@@ -107,10 +107,13 @@ fn parse(arguments: &[String]) -> Result<Options, String> {
         return Err("source file is required".into());
     }
     if !(1..=test_limits::time_ms()).contains(&result.timeout_ms) {
-        return Err(format!("timeout must be 1..{} ms",test_limits::time_ms()));
+        return Err(format!("timeout must be 1..{} ms", test_limits::time_ms()));
     }
     if !(8..=test_limits::memory_mb()).contains(&result.memory_mb) {
-        return Err(format!("memory cap must be 8..{} MiB", test_limits::memory_mb()));
+        return Err(format!(
+            "memory cap must be 8..{} MiB",
+            test_limits::memory_mb()
+        ));
     }
     if result.arguments.len() > 64 {
         return Err("at most 64 numeric arguments are supported".into());
@@ -227,12 +230,20 @@ fn submit(options: &Options) -> Result<Value, String> {
 
 fn console_request(socket: &PathBuf, request: &Value) -> Result<Value, String> {
     #[cfg(windows)]
-    let endpoint: Value = serde_json::from_slice(&read_file(socket, 1024)?).map_err(|e| e.to_string())?;
+    let endpoint: Value =
+        serde_json::from_slice(&read_file(socket, 1024)?).map_err(|e| e.to_string())?;
     #[cfg(windows)]
     let request = {
-        let token=endpoint.get("token").and_then(Value::as_str).ok_or("invalid console token")?;
-        if token.len()!=64 || !token.bytes().all(|c| c.is_ascii_hexdigit()) {return Err("invalid console token".into());}
-        let mut authenticated=request.clone();authenticated["_console_token"]=json!(token);authenticated
+        let token = endpoint
+            .get("token")
+            .and_then(Value::as_str)
+            .ok_or("invalid console token")?;
+        if token.len() != 64 || !token.bytes().all(|c| c.is_ascii_hexdigit()) {
+            return Err("invalid console token".into());
+        }
+        let mut authenticated = request.clone();
+        authenticated["_console_token"] = json!(token);
+        authenticated
     };
     let mut frame = serde_json::to_vec(&request).map_err(|e| e.to_string())?;
     frame.push(b'\n');
@@ -242,9 +253,16 @@ fn console_request(socket: &PathBuf, request: &Value) -> Result<Value, String> {
     let deadline = Instant::now() + Duration::from_secs(8);
     #[cfg(windows)]
     let mut stream = {
-        let port=endpoint.get("port").and_then(Value::as_u64).filter(|p| *p>0 && *p<=65535).ok_or("invalid console port")?;
-        TcpStream::connect_timeout(&std::net::SocketAddr::from(([127,0,0,1],port as u16)),Duration::from_secs(8))
-            .map_err(|e|format!("cannot connect to client script console: {e}"))?
+        let port = endpoint
+            .get("port")
+            .and_then(Value::as_u64)
+            .filter(|p| *p > 0 && *p <= 65535)
+            .ok_or("invalid console port")?;
+        TcpStream::connect_timeout(
+            &std::net::SocketAddr::from(([127, 0, 0, 1], port as u16)),
+            Duration::from_secs(8),
+        )
+        .map_err(|e| format!("cannot connect to client script console: {e}"))?
     };
     #[cfg(unix)]
     let mut stream = UnixStream::connect(socket)

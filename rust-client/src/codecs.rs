@@ -38,9 +38,13 @@ unsafe extern "system" {
     fn GetProcAddress(handle: *mut c_void, symbol: *const c_char) -> *mut c_void;
 }
 #[cfg(windows)]
-unsafe fn dlopen(filename: *const c_char, _flag: c_int) -> *mut c_void { LoadLibraryA(filename) }
+unsafe fn dlopen(filename: *const c_char, _flag: c_int) -> *mut c_void {
+    LoadLibraryA(filename)
+}
 #[cfg(windows)]
-unsafe fn dlsym(handle: *mut c_void, symbol: *const c_char) -> *mut c_void { GetProcAddress(handle,symbol) }
+unsafe fn dlsym(handle: *mut c_void, symbol: *const c_char) -> *mut c_void {
+    GetProcAddress(handle, symbol)
+}
 
 fn zstd() -> Option<&'static Zstd> {
     static ZSTD: OnceLock<Option<Zstd>> = OnceLock::new();

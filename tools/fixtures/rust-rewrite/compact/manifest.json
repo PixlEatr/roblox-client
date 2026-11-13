@@ -1,0 +1,19 @@
+{
+  "format": 1,
+  "fixture": "compact",
+  "passive_part_count": 64,
+  "actor_count": 0,
+  "lua_hold_ms": 3000,
+  "snapshot_bytes": 15377,
+  "snapshot_sha256": "1079f47f38e94572853f1429eb3245550153a000d1d6d82aa6c6de3e9ad5c703",
+  "script_bytes": 569,
+  "script_sha256": "651a5b4566fbab2f977c10d13d62b22aaa3e1be9a1083edb20cd813c83caa48e",
+  "expected": {
+    "ok": true,
+    "values": [
+      64,
+      0.25
+    ]
+  },
+  "measurement_note": "Generate before invoking the process-tree RSS sampler."
+}

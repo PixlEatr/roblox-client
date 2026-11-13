@@ -10,15 +10,122 @@
 #setup-account-form label{display:block;font-size:12px;font-weight:600;margin-bottom:8px}#setup-session{box-sizing:border-box;width:100%;min-height:45px;border:1px solid #626c7d;border-radius:9px;background:#191c22;color:#fff;padding:11px;font:inherit;font-size:13px}#setup-session:focus-visible{outline:2px solid #a0c8ff;outline-offset:3px}
 #setup-connect{min-height:42px;width:100%}.setup-footer{display:flex;gap:12px;justify-content:space-between;padding-top:8px}.setup-footer button{min-height:43px}#setup-status:empty{display:none}#setup-status{font-size:13px;line-height:1.5;color:#9edbb9;margin:0 0 16px}.setup-error{color:#ffbcad!important}#setup-dialog [hidden]{display:none!important}#setup-dialog button:disabled{opacity:.45;cursor:not-allowed}
 @media(max-width:520px){#setup-dialog{padding:25px}#setup-checks{grid-template-columns:1fr}.setup-footer{flex-wrap:wrap}.setup-footer button{flex:1}}
-#rove-loading{position:fixed;inset:0;z-index:1000;display:grid;place-items:center;padding:24px;background:radial-gradient(ellipse at 50% 24%,#25365c 0,transparent 52%),#11141c;color:#f5f7fd}
-#rove-loading[hidden]{display:none}
-.rove-loading-content{width:min(100%,380px);padding:42px 28px;text-align:center;border:1px solid #6c82b43d;border-radius:28px;background:#171d2be8;box-shadow:0 24px 80px #080d1b99}
-.rove-loading-mark{display:grid;place-items:center;width:64px;height:64px;margin:0 auto 24px;border:1px solid #759cff7a;border-radius:20px;background:linear-gradient(145deg,#445ee8,#293773);box-shadow:0 10px 28px #335fff45;color:#fff;font-size:32px;font-weight:800}
-.rove-loading-brand{margin:0 0 14px;color:#e2eaff;font-size:12px;font-weight:800;letter-spacing:.18em}
-.rove-loading-brand span{margin-left:8px;padding-left:10px;border-left:1px solid #61708e;color:#a5b4d3;font-weight:600}
-#rove-loading-title{margin:0;font-size:clamp(24px,5vw,30px);line-height:1.2;letter-spacing:-.03em}
-#rove-loading-detail{min-height:40px;margin:12px 0 20px;color:#b9c4df;font-size:14px;line-height:1.45}
-.rove-loading-track{position:relative;overflow:hidden;width:100%;height:4px;border-radius:4px;background:#34405a}
-.rove-loading-track::after{content:"";position:absolute;inset:0 auto 0 0;width:40%;border-radius:inherit;background:linear-gradient(90deg,#5e82ff,#a4c4ff);animation:rove-load 1.45s ease-in-out infinite alternate}
-@keyframes rove-load{from{transform:translateX(-75%)}to{transform:translateX(225%)}}
-@media(prefers-reduced-motion:reduce){.rove-loading-track::after{animation:none;transform:translateX(75%)}}
+/* The splash mark and animation are adapted from RoALT.
+
+MIT License
+
+Copyright (c) 2026 inspectsoftware
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+*/
+#rove-loading {
+ position: fixed;
+ inset: 0;
+ z-index: 1000;
+ display: flex;
+ flex-direction: column;
+ align-items: center;
+ justify-content: center;
+ gap: 22px;
+ padding: 24px;
+ overflow: auto;
+ background: #0a0a0a;
+ color: #ededed;
+ text-align: center;
+ transition: opacity 220ms ease-out, display 220ms allow-discrete;
+}
+#rove-loading[hidden] { display: none; opacity: 0; pointer-events: none; }
+#rove-loading::after {
+ content: "";
+ position: absolute;
+ inset: 0;
+ pointer-events: none;
+ background: repeating-linear-gradient(0deg, #ffffff12 0 1px, transparent 1px 3px);
+ opacity: 0;
+}
+.rove-splash-mark { position: relative; flex: none; width: 120px; height: 120px; }
+.rove-splash-square {
+ position: absolute;
+ top: 7px;
+ left: 7px;
+ width: 60px;
+ height: 60px;
+ border-radius: 10px;
+ background: #5e82ff;
+ box-shadow: 0 0 18px #5e82ff4d;
+}
+.rove-splash-tile { position: absolute; inset: 0; width: 100%; height: 100%; }
+.rove-splash-red, .rove-splash-cyan { opacity: 0; mix-blend-mode: screen; }
+.rove-splash-word { margin: 0; font-size: 20px; font-weight: 800; letter-spacing: .12em; }
+.rove-splash-status { min-height: 44px; }
+#rove-loading-title, #rove-loading-detail { margin: 0; }
+#rove-loading-title { color: #c5c5c5; font-size: 13px; font-weight: 650; }
+#rove-loading-detail { margin-top: 5px; color: #969696; font-size: 12px; line-height: 1.45; }
+
+@media (prefers-reduced-motion: no-preference) {
+ #rove-loading:not([hidden]) :is(.rove-splash-square, .rove-splash-tile, .rove-splash-red, .rove-splash-cyan, .rove-splash-core, .rove-splash-word),
+ #rove-loading:not([hidden])::after {
+  animation-duration: 1.85s;
+  animation-fill-mode: both;
+ }
+ #rove-loading:not([hidden]) .rove-splash-square { animation-name: rove-splash-square; }
+ #rove-loading:not([hidden]) .rove-splash-tile { animation-name: rove-splash-tile; }
+ #rove-loading:not([hidden]) .rove-splash-red { animation-name: rove-splash-channel; --channel-offset: -12px; }
+ #rove-loading:not([hidden]) .rove-splash-cyan { animation-name: rove-splash-channel; --channel-offset: 12px; }
+ #rove-loading:not([hidden]) .rove-splash-core { animation-name: rove-splash-core; }
+ #rove-loading:not([hidden]) .rove-splash-word { animation-name: rove-splash-word; }
+ #rove-loading:not([hidden])::after { animation-name: rove-splash-scan; }
+}
+@media (prefers-reduced-motion: reduce) {
+ #rove-loading { transition: none; }
+}
+
+@keyframes rove-splash-square {
+ 0%, 54% { opacity: 0; transform: scale(.4); }
+ 55% { opacity: 1; transform: scale(1.18); box-shadow: 0 0 34px #5e82ffba; }
+ 61%, 100% { opacity: 1; transform: scale(1); }
+}
+@keyframes rove-splash-tile {
+ 0%, 38% { transform: translate(-17px, -17px); }
+ 41%, 46% { transform: translate(-12px, -20px); }
+ 47%, 52% { transform: translate(-22px, -14px); }
+ 54%, 59% { transform: translate(-16px, -18px); }
+ 60%, 65% { transform: translate(2px, -2px); }
+ 68%, 100% { transform: translate(0, 0); }
+}
+@keyframes rove-splash-channel {
+ 0%, 22% { opacity: 0; transform: translateX(0); }
+ 38%, 43% { opacity: .75; transform: translateX(var(--channel-offset)); }
+ 46%, 49% { opacity: .9; transform: translateX(calc(-.7 * var(--channel-offset))); }
+ 52%, 60% { opacity: .7; transform: translateX(var(--channel-offset)); }
+ 66%, 100% { opacity: 0; transform: translateX(0); }
+}
+@keyframes rove-splash-core {
+ 0%, 39%, 49%, 57%, 69%, 100% { opacity: 1; }
+ 43%, 54%, 62% { opacity: .35; }
+}
+@keyframes rove-splash-word {
+ 0%, 58% { opacity: 0; transform: translateY(7px); letter-spacing: .24em; }
+ 78%, 100% { opacity: 1; transform: translateY(0); letter-spacing: .12em; }
+}
+@keyframes rove-splash-scan {
+ 0%, 37%, 68%, 100% { opacity: 0; }
+ 42%, 53%, 62% { opacity: .54; }
+ 47%, 58% { opacity: .12; }
+}

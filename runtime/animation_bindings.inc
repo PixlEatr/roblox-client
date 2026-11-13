@@ -42,14 +42,22 @@ void install_animation_enum(lua_State* L){
 Json node_record(const Node& n);
 void check_mutation_budget(World& w,const std::vector<Json>& entries);
 void append_mutations(World& w,std::vector<Json> entries);
-Node* animation_node(World& w,const std::string& cls,const std::string& name,const std::string& parent=""){
+Node* animation_node(World& w,const std::string& cls,const std::string& name,
+                     const std::string& parent="",const Json& animation_track=Json::object()){
     if(w.nodes.size()>=kMaxNodes+1000)throw std::runtime_error("local instance limit exceeded");
-    Node node;do{node.id="local:"+std::to_string(w.next_local_id++);}while(w.nodes.count(node.id));
-    node.class_name=cls;node.name=name;node.parent=parent;node.server_owned=false;node.attributes_known=true;
+    Node node;node.id=w.allocate_local_id();
+    node.class_name=cls;node.name=name;node.parent=parent;node.server_owned=false;node.attributes.set_known(true);
     node.properties["Archivable"]=true;node.origins=Json{{"Archivable","class_default"},{"Name","local"},{"Parent","local"}};
-    std::vector<Json> entries{Json{{"kind","create"},{"node",node_record(node)}}};check_mutation_budget(w,entries);
+    Json record{{"kind","create"},{"node",node_record(node)}};
+    if(!animation_track.empty())record["animation_track"]=animation_track;
+    std::vector<Json> entries{std::move(record)};check_mutation_budget(w,entries);
     auto [it,ok]=w.nodes.emplace(node.id,std::move(node));w.order.push_back(it->first);
     append_mutations(w,std::move(entries));if(!parent.empty())parent_events(w,it->second,"",parent);return &it->second;
+}
+Json animation_track_replay_record(const AnimationTrackState& track) {
+    return Json{{"version",1},{"animator_id",track.animator},
+                {"animation_id",track.animation},{"reference",track.reference},
+                {"looped",track.looped},{"priority",track.priority}};
 }
 Node* animator_for(World& w,Node& n,bool create){
     if(n.destroyed)throw std::runtime_error("animation receiver is destroyed");
@@ -186,9 +194,10 @@ int animator_method(lua_State* L){
             std::string reference=value->get<std::string>();
             if(w.animation.tracks.size()>=AnimationState::track_limit||(!w.animation.requested.count(reference)&&w.animation.requested.size()>=128))throw std::runtime_error("animation track or asset limit exceeded");
             if(!animator)animator=animator_for(w,*h->node,true);
-            Node* node=animation_node(w,"AnimationTrack",instance_name(w,*animation->node));
             AnimationTrackState t;t.animator=animator->id;t.animation=animation->node->id;t.reference=reference;
             if(auto* clip=track_clip(w,t)){t.looped=clip->at("looped");if(!clip->at("priority").is_null())t.priority=clip->at("priority");}
+            Node* node=animation_node(w,"AnimationTrack",instance_name(w,*animation->node),"",
+                                      animation_track_replay_record(t));
             w.animation.tracks.emplace(node->id,std::move(t));
             if(w.animation.requested.insert(reference).second)w.animation.requests.push_back(Json{{"reference",reference}});
             push_node(L,w,node);return 1;

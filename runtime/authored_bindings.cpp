@@ -10,6 +10,8 @@
 #include "datetime_bindings.hpp"
 #include "sequence_bindings.hpp"
 #include "closure_bindings.hpp"
+#include "legacy_value_bindings.hpp"
+#include "rust_engine_bridge.hpp"
 #include <lualib.h>
 #include <cmath>
 #include <cstring>
@@ -25,12 +27,15 @@
 #include "direction_sets.inc"
 #include "font_values.inc"
 #include "path_waypoint.inc"
+#include "catalog_search_params.inc"
 
 namespace {
+#include "version_compat.inc"
 using Json=nlohmann::json;
 char constructors_key;
 struct Type {const char* meta;const char* tag;const char* library;};
 const Type types[]={
+    {"LocalLuau.CatalogSearchParams","$catalog_search_params","CatalogSearchParams"},
     {"LocalLuau.PathWaypoint","$path_waypoint","PathWaypoint"},
     {"LocalLuau.Font","$font","Font"},
     {"LocalLuau.Axes","$axes","Axes"},
@@ -78,12 +83,17 @@ void component(lua_State* L,const Json& value) {
 }
 }
 void install_authored_bindings(lua_State* L) {
+    install_runtime_version(L);
     world_bindings::install_geometry_value_enums(L);
+    world_bindings::install_content_values(L);
+    world_bindings::install_rotation_curve_key(L);
     integer_values::install(L);
     direction_sets::install(L);
     font_values::install(L);
     path_waypoints::install(L);
+    catalog_search_params::install(L);
     install_color3_bindings(L);install_vector2_bindings(L);install_udim_bindings(L);
+    legacy_value_bindings::install(L);
     install_range_bindings(L);install_brickcolor_bindings(L);install_datetime_bindings(L);
     install_sequence_bindings(L);install_closure_bindings(L);install_ray_bindings(L);
     spatial_values::install_spatial_values(L);install_physical_properties(L);
@@ -91,7 +101,7 @@ void install_authored_bindings(lua_State* L) {
     for(const auto& type:types){lua_getglobal(L,type.library);lua_setfield(L,-2,type.library);}
     lua_pushlightuserdata(L,&constructors_key);lua_pushvalue(L,-2);lua_rawset(L,LUA_REGISTRYINDEX);lua_pop(L,1);
 }
-bool is_authored_value(lua_State* L,int index){return world_bindings::is_tween_info(L,index)||spatial_values::is_spatial_value(L,index)||is_physical_properties(L,index)||identify(L,index)!=nullptr;}
+bool is_authored_value(lua_State* L,int index){return legacy_value_bindings::is_value(L,index)||world_bindings::is_rotation_curve_key(L,index)||world_bindings::is_content_value(L,index)||world_bindings::is_tween_info(L,index)||spatial_values::is_spatial_value(L,index)||is_physical_properties(L,index)||identify(L,index)!=nullptr;}
 bool read_authored_ray(lua_State* L,int index,std::array<double,3>& origin,
                        std::array<double,3>& direction) {
     const auto* type=identify(L,index);
@@ -101,9 +111,13 @@ bool read_authored_ray(lua_State* L,int index,std::array<double,3>& origin,
     return true;
 }
 bool capture_authored_value(lua_State* L,int index,Json& value) {
+    if(legacy_value_bindings::capture_value(L,index,value))return true;
+    if(world_bindings::capture_rotation_curve_key(L,index,value))return true;
+    if(world_bindings::capture_content_value(L,index,value))return true;
     if(world_bindings::capture_tween_info(L,index,value)||spatial_values::capture_spatial_value(L,index,value)||capture_physical_properties(L,index,value))return true;
     index=lua_absindex(L,index);const auto* type=identify(L,index);if(!type)return false;
     const std::string tag=type->tag;Json data=Json::array();
+    if(tag=="$catalog_search_params"){value=catalog_search_params::encode(*catalog_search_params::read(L,index));return true;}
     if(tag=="$path_waypoint"){value=path_waypoints::encode(*path_waypoints::read(L,index));return true;}
     if(tag=="$font"){value=font_values::encode(*font_values::read(L,index));return true;}
     else if(tag=="$axes"||tag=="$faces")data=direction_sets::read(L,index)->mask;
@@ -134,11 +148,15 @@ bool capture_authored_value(lua_State* L,int index,Json& value) {
     value=Json{{tag,std::move(data)}};return true;
 }
 bool push_authored_value(lua_State* L,const Json& value) {
+    if(legacy_value_bindings::push_value(L,value))return true;
+    if(world_bindings::push_rotation_curve_key(L,value))return true;
+    if(world_bindings::push_content_value(L,value))return true;
     if(world_bindings::push_tween_info_json(L,value)||spatial_values::push_spatial_value(L,value)||push_physical_properties_json(L,value))return true;
     if(!value.is_object()||value.size()!=1)return false;
     const Type* type=nullptr;for(const auto& candidate:types)if(value.contains(candidate.tag)){type=&candidate;break;}
     if(!type)return false;
     const auto& data=value.at(type->tag);const std::string tag=type->tag;
+    if(tag=="$catalog_search_params"){catalog_search_params::decode(L,data);return true;}
     if(tag=="$path_waypoint"){path_waypoints::decode(L,data);return true;}
     if(tag=="$font"){font_values::push(L,font_values::decode(data));return true;}
     if(tag=="$axes"||tag=="$faces") {

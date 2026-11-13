@@ -1,0 +1,32 @@
+{
+  "type27_identity": {
+    "input": {"position": [1, 2, 3], "rotation_id": 2, "packed_rotation": null},
+    "type": 27,
+    "expected": {"$cframe": {"position": [1, 2, 3], "rotation_id": 2, "packed_rotation": null, "rotation_selector": 2, "rotation": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0], "rotation_mapping": "native_745_identity"}}
+  },
+  "type27_unknown": {
+    "input": {"position": [4, 5, 6], "rotation_id": 17, "packed_rotation": null},
+    "type": 27,
+    "expected": {"$cframe": {"position": [4, 5, 6], "rotation_id": 17, "packed_rotation": null}}
+  },
+  "type51_identity": {
+    "input": {"position": [7, 8, 9], "rotation": 2},
+    "type": 51,
+    "expected": {"$cframe": {"position": [7, 8, 9], "rotation": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0], "rotation_selector": 2, "rotation_mapping": "native_745_identity"}}
+  },
+  "type57_identity": {
+    "input": {"position": [10, 11, 12], "rotation": 1},
+    "type": 57,
+    "expected": {"$cframe": {"position": [10, 11, 12], "rotation": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0], "rotation_selector": 1, "rotation_mapping": "native_745_identity"}}
+  },
+  "type51_unknown": {
+    "input": {"position": [-1, -2, -3], "rotation": 31},
+    "type": 51,
+    "expected": {"$cframe": {"position": [-1, -2, -3], "rotation": 31}}
+  },
+  "type57_unknown": {
+    "input": {"position": [-4, -5, -6], "rotation": 31},
+    "type": 57,
+    "expected": {"$cframe": {"position": [-4, -5, -6], "rotation": 31}}
+  }
+}

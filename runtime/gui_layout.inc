@@ -753,7 +753,7 @@ struct GuiLayoutPass {
         return b;
     }
     GuiBox automatic_box(Node& n,const GuiBox& base,const GuiBox& parent,double own_scale,int automatic) {
-        if(n.class_name!="Frame")throw std::runtime_error("automatic GUI sizing for this class is not implemented");
+        if(n.class_name=="ScrollingFrame")throw std::runtime_error("ScrollingFrame automatic sizing uses AutomaticCanvasSize");
         const std::array<double,7> key{base.width,base.height,base.scale,parent.width,parent.height,own_scale,double(automatic)};
         if(auto found=measure_state->automatic.find(n.id);found!=measure_state->automatic.end())
             for(const auto& cached:found->second)if(cached.key==key) {
@@ -765,6 +765,33 @@ struct GuiLayoutPass {
             auto next=base;
             if(automatic&1)next.width=std::max(base.width,extent[0]);
             if(automatic&2)next.height=std::max(base.height,extent[1]);
+            if(text_layout_node(n)&&base.scale>0) {
+                auto padding_extent=[&](const GuiBox& area) {
+                    std::array<double,2> result{};
+                    if(auto* padding=component(n,"UIPadding")) {
+                        for(const char* key:{"PaddingLeft","PaddingRight"})
+                            result[0]+=dimension(*property_value(w,*padding,key),area.width,area.scale);
+                        for(const char* key:{"PaddingTop","PaddingBottom"})
+                            result[1]+=dimension(*property_value(w,*padding,key),area.height,area.scale);
+                    }
+                    return result;
+                };
+                const auto padding=padding_extent(candidate);
+                // Discover the intrinsic width before applying a maximum.
+                // A capped X/XY control then wraps against that actual width,
+                // rather than wrapping forever against its authored minimum.
+                if(automatic&1) {
+                    auto text=text_intrinsic_size(w,n,0);
+                    next.width=std::max(next.width,text[0]*base.scale+padding[0]);
+                }
+                next=constrain(n,next,parent,own_scale);
+                if(automatic&2) {
+                    const auto available=content(n,next);
+                    const double width=text_wraps(w,n)?available.width/base.scale:0;
+                    auto text=text_intrinsic_size(w,n,width);
+                    next.height=std::max(next.height,text[1]*base.scale+padding[1]);
+                }
+            }
             next=constrain(n,next,parent,own_scale);
             if(std::abs(next.width-candidate.width)<=1e-5&&std::abs(next.height-candidate.height)<=1e-5) {
                 measure_state->automatic[n.id].push_back({key,next.width,next.height});

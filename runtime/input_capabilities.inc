@@ -26,16 +26,34 @@ bool input_capability(const World& world, const std::string& key) {
     return world.input_capabilities.value(key, false);
 }
 
+int preferred_input(const World& world) {
+    const bool keyboard_mouse=input_capability(world,"KeyboardEnabled")||input_capability(world,"MouseEnabled");
+    const bool gamepad=input_capability(world,"GamepadEnabled");
+    if(gamepad&&(!keyboard_mouse||(world.input.preferred_input_type>=12&&world.input.preferred_input_type<20)))return 1;
+    if(keyboard_mouse)return 0;
+    if(input_capability(world,"TouchEnabled"))return 2;
+    // The desktop headless backend has no device attached until a frontend
+    // supplies one. PreferredInput has no None member; keep the desktop mode
+    // without claiming KeyboardEnabled or MouseEnabled.
+    return 0;
+}
+
 void property_events(World& world, Node& node, const std::string& key);
 void cancel_disabled_inputs(World& world);
+void context_sync_button(World& world,const std::shared_ptr<ContextActionBinding>& binding);
 void update_input_capabilities(World& world, const Json& supplied) {
     auto patch = validated_input_capabilities(supplied);
+    const int old_preferred=preferred_input(world);
     std::vector<std::string> changed;
     for (auto it = patch.begin(); it != patch.end(); ++it)
         if (input_capability(world, it.key()) != it.value().get<bool>()) changed.push_back(it.key());
     for (auto it = patch.begin(); it != patch.end(); ++it) world.input_capabilities[it.key()] = it.value();
     for (auto& [id, node] : world.nodes)
-        if (node.class_name == "UserInputService" && !node.destroyed)
+        if (node.class_name == "UserInputService" && !node.destroyed) {
             for (const auto& key : changed) property_events(world, node, key);
+            if(old_preferred!=preferred_input(world))property_events(world,node,"PreferredInput");
+        }
     cancel_disabled_inputs(world);
+    for(auto& binding:world.context_actions.bindings)
+        if(binding->active)context_sync_button(world,binding);
 }

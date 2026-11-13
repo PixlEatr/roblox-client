@@ -3,10 +3,17 @@ namespace integer_values {
 constexpr const char* meta2="LocalLuau.Vector2int16";
 constexpr const char* meta3="LocalLuau.Vector3int16";
 constexpr const char* metaRegion="LocalLuau.Region3int16";
-struct Vector {int dimension;int values[3];};
-struct Region {Vector minimum,maximum;};
+using Vector = RustIntegerVector;
+using Region = RustIntegerRegion;
+static_assert(sizeof(Vector) == 16 && sizeof(Region) == 32, "integer datatype ABI mismatch");
+
+void checked_status(lua_State* L, int status) {
+    if(status == 3) luaL_error(L,"Vector2int16 division by zero");
+    else if(status != 0) luaL_error(L,"integer vector arithmetic requires matching vector types");
+}
 
 int narrow(double number) {
+    if(const auto* api=rust_engine_api())return api->narrow(number);
     // Explicit conversion avoids undefined floating-to-integer overflow. These
     // non-finite/saturation results match the arm64 Studio constructor probes.
     if(std::isnan(number)||number<=-9223372036854775808.0)return 0;
@@ -31,6 +38,11 @@ void push(lua_State* L,const Vector& value) {
 int construct(lua_State* L) {
     const int dimension=lua_tointeger(L,lua_upvalueindex(1));
     Vector result{dimension,{0,0,0}};
+    if(const auto* api=rust_engine_api()) {
+        const double numbers[3]={lua_tonumber(L,1),lua_tonumber(L,2),dimension==3?lua_tonumber(L,3):0};
+        checked_status(L,api->vector_construct(dimension,numbers,&result));
+        push(L,result);return 1;
+    }
     for(int i=0;i<dimension;++i)result.values[i]=narrow(lua_tonumber(L,i+1));
     push(L,result);return 1;
 }
@@ -56,11 +68,25 @@ int text(lua_State* L) {
 }
 int negate(lua_State* L) {
     auto* value=read(L,1);if(!value){luaL_error(L,"integer vector expected");return 0;}
+    if(const auto* api=rust_engine_api()) {
+        Vector out{};checked_status(L,api->vector_scalar(2,value,-1,0,&out));push(L,out);return 1;
+    }
     Vector out=*value;for(int i=0;i<out.dimension;++i)out.values[i]=narrow(-out.values[i]);push(L,out);return 1;
 }
 int arithmetic(lua_State* L) {
     const int op=lua_tointeger(L,lua_upvalueindex(1));
     auto* a=read(L,1);auto* b=read(L,2);
+    if(const auto* api=rust_engine_api()) {
+        Vector out{};
+        if(a&&b)checked_status(L,api->vector_binary(op,a,b,&out));
+        else if(a||(op==2&&b)) {
+            // Lua conversion happens before entering Rust; Rust cannot call
+            // Lua or longjmp through its own frames.
+            const double scalar=luaL_checknumber(L,a?2:1);
+            checked_status(L,api->vector_scalar(op,a?a:b,scalar,a?0:1,&out));
+        } else {luaL_error(L,"integer vector arithmetic requires matching vector types");return 0;}
+        push(L,out);return 1;
+    }
     if(!a&&op==2&&b){std::swap(a,b);}
     if(!a||(b&&a->dimension!=b->dimension)||((op==0||op==1)&&!b)){
         luaL_error(L,"integer vector arithmetic requires matching vector types");return 0;
@@ -86,6 +112,8 @@ int region_new(lua_State* L) {
         if(!vector||vector->dimension!=3){luaL_argerror(L,i,"Vector3int16 expected");return 0;}
         (i==1?result.minimum:result.maximum)=*vector;
     }
+    if(const auto* api=rust_engine_api())
+        checked_status(L,api->region_construct(&result.minimum,&result.maximum,&result));
     auto* value=static_cast<Region*>(lua_newuserdata(L,sizeof(Region)));*value=result;
     luaL_getmetatable(L,metaRegion);lua_setmetatable(L,-2);return 1;
 }
@@ -98,6 +126,11 @@ int region_index(lua_State* L) {
 }
 int region_equal(lua_State* L) {
     auto* a=static_cast<Region*>(luaL_checkudata(L,1,metaRegion));auto* b=static_cast<Region*>(luaL_checkudata(L,2,metaRegion));
+    if(const auto* api=rust_engine_api()) {
+        const int equal=api->region_equal(a,b);
+        if(equal<0){luaL_error(L,"invalid Region3int16 value");return 0;}
+        lua_pushboolean(L,equal);return 1;
+    }
     bool same=true;for(int i=0;i<3;++i)same=same&&a->minimum.values[i]==b->minimum.values[i]&&a->maximum.values[i]==b->maximum.values[i];
     lua_pushboolean(L,same);return 1;
 }

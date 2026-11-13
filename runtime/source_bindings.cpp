@@ -175,12 +175,24 @@ void install_source_bindings(lua_State* L, const SourceBindings* bindings,
     lua_pushvalue(L,-1);lua_setglobal(L,"base64");
     lua_newtable(L);
     lua_pushvalue(L,-2);lua_setfield(L,-2,"base64");
+    // Reuse the library closures so every spelling retains the same identity,
+    // including when a caller keeps or hooks one of these aliases.
+    lua_getfield(L,-2,"encode");
     for(const char* name:{"base64encode","base64_encode"}) {
-        push_codec(L,bindings,0);lua_pushvalue(L,-1);lua_setglobal(L,name);lua_setfield(L,-2,name);
+        lua_pushvalue(L,-1);lua_setglobal(L,name);
+        lua_pushvalue(L,-1);lua_setfield(L,-3,name);
     }
+    lua_pop(L,1);
+    lua_getfield(L,-2,"decode");
     for(const char* name:{"base64decode","base64_decode"}) {
-        push_codec(L,bindings,1);lua_pushvalue(L,-1);lua_setglobal(L,name);lua_setfield(L,-2,name);
+        lua_pushvalue(L,-1);lua_setglobal(L,name);
+        lua_pushvalue(L,-1);lua_setfield(L,-3,name);
     }
+    lua_pop(L,1);
+    lua_pushcfunction(L,lz4_compress,"lz4compress");
+    lua_pushvalue(L,-1);lua_setglobal(L,"lz4compress");lua_setfield(L,-2,"lz4compress");
+    lua_pushcfunction(L,lz4_decompress,"lz4decompress");
+    lua_pushvalue(L,-1);lua_setglobal(L,"lz4decompress");lua_setfield(L,-2,"lz4decompress");
     push_codec(L,bindings,2);lua_pushvalue(L,-1);lua_setglobal(L,"zstdcompress");lua_setfield(L,-2,"zstdcompress");
     push_codec(L,bindings,3);lua_pushvalue(L,-1);lua_setglobal(L,"zstddecompress");lua_setfield(L,-2,"zstddecompress");
     lua_pushcfunction(L,crypt_hash,"crypt.hash");lua_setfield(L,-2,"hash");
@@ -193,8 +205,6 @@ void install_source_bindings(lua_State* L, const SourceBindings* bindings,
     install_vm_debug(L);
     install_network_compat(L,bindings);
     install_host_io(L,bindings);
-    lua_pushcfunction(L,lz4_compress,"lz4compress");lua_setglobal(L,"lz4compress");
-    lua_pushcfunction(L,lz4_decompress,"lz4decompress");lua_setglobal(L,"lz4decompress");
     // These functions were installed by the executor; engine/library functions
     // inherited from the base environment keep their original classification.
     lua_pushnil(L);
@@ -208,7 +218,8 @@ void install_source_bindings(lua_State* L, const SourceBindings* bindings,
             lua_pushnil(L);
             while(lua_next(L,-2)) {
                 bool engine_debug=std::strcmp(library,"debug")==0&&lua_type(L,-2)==LUA_TSTRING&&
-                    (std::strcmp(lua_tostring(L,-2),"info")==0||std::strcmp(lua_tostring(L,-2),"traceback")==0);
+                    (std::strcmp(lua_tostring(L,-2),"info")==0||std::strcmp(lua_tostring(L,-2),"traceback")==0||
+                     std::strcmp(lua_tostring(L,-2),"profilebegin")==0||std::strcmp(lua_tostring(L,-2),"profileend")==0);
                 if(lua_isfunction(L,-1)&&!engine_debug)mark_executor_closure(L,-1);
                 lua_pop(L,1);
             }

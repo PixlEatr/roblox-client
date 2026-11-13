@@ -94,13 +94,26 @@ bool part_transform_write(lua_State* L,World& w,Node& n,const std::string& key) 
     for(auto it=after.begin();it!=after.end();++it)w.local_properties[n.id][it.key()]=it.value();
     append_mutations(w,std::move(entries));part_transform_events(w,n,before,after);return true;
 }
-bool apply_received_part_transform(World& w,Node& n,const Json& fields,uint64_t sequence) {
+bool apply_received_part_transform(World& w,Node& n,const Json& fields,uint64_t sequence,
+                                   const ValidatedDeltaView* validated=nullptr) {
     if(!pivot_part(w,n))return false;
     Json inputs=Json::object();
     for(const char* key:kPartTransformNames)if(fields.contains(key))inputs[key]=fields[key];
     if(fields.contains("ReplicationPV")&&fields["ReplicationPV"].is_object()&&fields["ReplicationPV"].contains("$cframe"))inputs["ReplicationPV"]=fields["ReplicationPV"];
     if(inputs.empty())return false;
-    auto before=previous_part_transform(w,n);auto after=prepare_part_transform(w,n,inputs);
+    auto before=previous_part_transform(w,n);
+    Json computed_after;
+    const Json* after_ptr=nullptr;
+    const Json* full_frame=nullptr;
+    if(inputs.contains("ReplicationPV"))full_frame=&inputs["ReplicationPV"];
+    else if(inputs.contains("CFrame"))full_frame=&inputs["CFrame"];
+    if(validated&&full_frame)
+        after_ptr=&validated->received_part_pose_fields(fields,*full_frame);
+    else {
+        computed_after=prepare_part_transform(w,n,inputs);
+        after_ptr=&computed_after;
+    }
+    const Json& after=*after_ptr;
     const auto* old_pv=property_value(w,n,"ReplicationPV");
     const bool pv_changed=inputs.contains("ReplicationPV")&&(!old_pv||*old_pv!=inputs["ReplicationPV"]);
     // Prepare and validate the whole transform before replacing any component.

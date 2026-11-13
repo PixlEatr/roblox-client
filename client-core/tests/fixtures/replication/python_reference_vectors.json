@@ -1,0 +1,19 @@
+{
+  "reference": ["scripts/world_replication.py::World.value", "scripts/world_snapshot.py::_encode"],
+  "vectors": [
+    {"type": 7, "wire_hex": "ac02", "compressed": false, "expected": 300},
+    {"type": 9, "wire_hex": "01", "compressed": false, "expected": true},
+    {"type": 13, "wire_hex": "0000003f fdffffff", "compressed": false, "expected": {"$udim": [0.5, -3]}},
+    {"type": 19, "wire_hex": "0000803f0000004000004040", "compressed": false, "expected": {"$color3": [1.0, 2.0, 3.0]}},
+    {"type": 20, "wire_hex": "ff8000", "compressed": false, "expected": {"$color3": [1.0, 0.5019607843137255, 0.0]}},
+    {"type": 22, "wire_hex": "0000c03f000010c000006040", "compressed": false, "expected": {"$vector3": [1.5, -2.25, 3.5]}},
+    {"type": 33, "wire_hex": "03616263", "compressed": false, "expected": "abc"},
+    {"type": 48, "wire_hex": "0000000000000000", "compressed": false, "expected": {"$datetime": 0}},
+    {"type": 56, "wire_hex": "0003616263", "compressed": false, "expected": {"$buffer_hex": "616263"}},
+    {"type": 69, "wire_hex": "00", "compressed": false, "expected": null},
+    {"type": 65, "wire_hex": "020000c03f0000000000204540", "compressed": false, "expected": {"anim_track_play_state":{"playing":true,"playback_speed":1.5,"ref_step_id_for_time_position":42.25}}, "reference_decoder":"scripts/animation_wire_codec.py"},
+    {"type": 66, "wire_hex": "00feff", "compressed": false, "expected": {"anim_track_metadata":{"looped":false,"priority":-2}}, "reference_decoder":"scripts/animation_wire_codec.py"},
+    {"type": 67, "wire_hex": "0000403f000000400000000000002740", "compressed": false, "expected": {"anim_track_weight":{"weight_target":0.75,"weighted_fade_time":2.0,"ref_step_id_for_weight":11.5}}, "reference_decoder":"scripts/animation_wire_codec.py"},
+    {"type": 68, "wire_hex": "05ac021809", "compressed": false, "expected": [-3,300,12,-5]}
+  ]
+}

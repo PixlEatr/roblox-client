@@ -40,6 +40,8 @@ struct InputState {
     std::map<std::string,InputContact> contacts;
     std::map<int,std::string> continuous;
     int last_type=22;
+    // Touch/focus events must not displace a connected keyboard or gamepad.
+    int preferred_input_type=22;
     std::array<float,2> location{},pending_delta{},frame_delta{};
     bool virtual_mouse=false;
     std::string virtual_hover;

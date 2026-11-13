@@ -3,15 +3,18 @@
 window.RoveSetup=(()=>{
  let dialog,status,busy=false,needsAccount=false;
  const byId=id=>document.getElementById(id);
+ function setPageInert(inert){
+  for(const area of document.querySelectorAll('body > header, body > aside, main'))area.inert=inert;
+ }
  function loading(title,detail){
   byId('rove-loading-title').textContent=title;
   byId('rove-loading-detail').textContent=detail;
   byId('rove-loading').hidden=false;
-  for(const area of document.querySelectorAll('body > header, body > aside, body > main'))area.inert=true;
+  setPageInert(true);
  }
  function finishLoading(){
   byId('rove-loading').hidden=true;
-  for(const area of document.querySelectorAll('body > header, body > aside, body > main'))area.inert=false;
+  setPageInert(false);
  }
  async function enter(){
   loading('Opening your account','Checking your saved Roblox session…');

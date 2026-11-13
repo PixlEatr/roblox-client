@@ -11,12 +11,28 @@
 #include <cstring>
 #include <ctime>
 #include <limits>
+#include <string>
 
 namespace {
 constexpr const char* kDateTimeMeta = "LocalLuau.DateTime";
 constexpr int64_t kMinMillis = -17987443200000LL;
 constexpr int64_t kMaxMillis = 253402300799999LL;
 struct DateTimeValue { int64_t millis; };
+struct RustDateTimeParts {
+    int64_t year;
+    uint32_t month, day, hour, minute, second, millisecond;
+    int32_t offset_seconds;
+};
+struct RustDateTimeApi {
+    uint32_t version;
+    int32_t (*format)(const RustDateTimeParts*,const uint8_t*,size_t,const uint8_t*,size_t,uint8_t*,size_t);
+};
+const RustDateTimeApi* active_rust_datetime=nullptr;
+extern "C" int local_luau_set_rust_datetime_api(const RustDateTimeApi* api) {
+    if(!api||api->version!=1||!api->format)return 0;
+    if(!active_rust_datetime){active_rust_datetime=api;return 1;}
+    return active_rust_datetime==api;
+}
 
 bool leap_year(int64_t year) {
     return year % 4 == 0 && (year % 100 != 0 || year % 400 == 0);
@@ -243,6 +259,45 @@ int push_time_components(lua_State* L,int64_t millis) {
 }
 int universal_time(lua_State* L) {return push_time_components(L,check_datetime(L,1)->millis);}
 int local_time(lua_State* L) {return push_time_components(L,check_datetime(L,1)->millis+current_local_offset());}
+int format_time(lua_State* L,bool local) {
+    if(lua_gettop(L)>3){luaL_error(L,"DateTime formatting expects format and optional locale");return 0;}
+    auto* value=check_datetime(L,1);
+    size_t format_length=0,locale_length=0;
+    const char* format=luaL_checklstring(L,2,&format_length);
+    const char* locale="en";
+    if(lua_gettop(L)>=3)locale=luaL_checklstring(L,3,&locale_length);
+    else locale_length=2;
+    const int64_t offset=local?current_local_offset():0;
+    const int64_t millis=value->millis+offset;
+    if(millis<kMinMillis||millis>kMaxMillis){luaL_error(L,"DateTime components are outside the supported 1400-9999 range");return 0;}
+    if(!active_rust_datetime){luaL_error(L,"DateTime formatting requires the Rust engine binding");return 0;}
+    const int64_t days=floor_div(millis,86400000LL);
+    int64_t remainder=millis-days*86400000LL;
+    const auto civil=civil_from_days(days);
+    RustDateTimeParts parts{civil.year,civil.month,civil.day,0,0,0,0,static_cast<int32_t>(offset/1000)};
+    parts.hour=static_cast<uint32_t>(remainder/3600000);remainder%=3600000;
+    parts.minute=static_cast<uint32_t>(remainder/60000);remainder%=60000;
+    parts.second=static_cast<uint32_t>(remainder/1000);
+    parts.millisecond=static_cast<uint32_t>(remainder%1000);
+    auto* api=active_rust_datetime;
+    const int needed=api->format(&parts,reinterpret_cast<const uint8_t*>(format),format_length,
+        reinterpret_cast<const uint8_t*>(locale),locale_length,nullptr,0);
+    if(needed<0){
+        if(needed==-3)luaL_error(L,"DateTime locale must be en or en-US");
+        else if(needed==-4)luaL_error(L,"DateTime formatted output exceeds 65536 bytes");
+        else luaL_error(L,"Invalid DateTime format");
+        return 0;
+    }
+    std::string output(static_cast<size_t>(needed),'\0');
+    const int written=api->format(&parts,reinterpret_cast<const uint8_t*>(format),format_length,
+        reinterpret_cast<const uint8_t*>(locale),locale_length,
+        reinterpret_cast<uint8_t*>(output.data()),output.size());
+    if(written!=needed){luaL_error(L,"DateTime formatting failed");return 0;}
+    lua_pushlstring(L,output.data(),output.size());
+    return 1;
+}
+int format_universal_time(lua_State* L) {return format_time(L,false);}
+int format_local_time(lua_State* L) {return format_time(L,true);}
 int to_iso_date(lua_State* L) {
     const int64_t millis=check_datetime(L,1)->millis;
     if(millis<kMinMillis||millis>kMaxMillis){luaL_error(L,"UTC DateTime is outside the supported 1400-9999 range");return 0;}
@@ -264,6 +319,8 @@ int index(lua_State* L) {
     else if(std::strcmp(key,"ToUniversalTime")==0)lua_pushcfunction(L,universal_time,"DateTime:ToUniversalTime");
     else if(std::strcmp(key,"ToLocalTime")==0)lua_pushcfunction(L,local_time,"DateTime:ToLocalTime");
     else if(std::strcmp(key,"ToIsoDate")==0)lua_pushcfunction(L,to_iso_date,"DateTime:ToIsoDate");
+    else if(std::strcmp(key,"FormatUniversalTime")==0)lua_pushcfunction(L,format_universal_time,"DateTime:FormatUniversalTime");
+    else if(std::strcmp(key,"FormatLocalTime")==0)lua_pushcfunction(L,format_local_time,"DateTime:FormatLocalTime");
     else {lua_pushnil(L);}
     return 1;
 }

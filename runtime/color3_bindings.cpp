@@ -8,10 +8,35 @@
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <cstdint>
 
 namespace {
 constexpr const char* kColorMeta = "LocalRuntime.Color3";
 struct Color { double r, g, b; };
+struct RustColor3Api {
+    uint32_t version;
+    int32_t (*from_rgb)(double,double,double,Color*);
+    int32_t (*from_hsv)(double,double,double,Color*);
+    int32_t (*from_hex)(const uint8_t*,size_t,Color*);
+    int32_t (*lerp)(const Color*,const Color*,double,Color*);
+    int32_t (*to_hsv)(const Color*,double*);
+    int32_t (*to_hex)(const Color*,uint8_t*);
+    int32_t (*equal)(const Color*,const Color*);
+};
+static_assert(sizeof(Color)==sizeof(double)*3,"Rust Color3 ABI mismatch");
+const RustColor3Api* active_rust_color3=nullptr;
+const RustColor3Api* rust_color3_api(){return active_rust_color3;}
+
+extern "C" int local_luau_set_rust_color3_api(const RustColor3Api* api) {
+    if(!api||api->version!=1||!api->from_rgb||!api->from_hsv||!api->from_hex||
+       !api->lerp||!api->to_hsv||!api->to_hex||!api->equal)return 0;
+    if(!active_rust_color3){active_rust_color3=api;return 1;}
+    return active_rust_color3==api;
+}
+
+void checked_rust_color(lua_State* L,int status,const char* error) {
+    if(status!=0)luaL_error(L,"%s",error);
+}
 
 Color* check_color(lua_State* L, int index) {
     return static_cast<Color*>(luaL_checkudata(L, index, kColorMeta));
@@ -61,9 +86,9 @@ int color_from_rgb(lua_State* L) {
         luaL_error(L, "Color3.fromRGB expects red, green, and blue");
         return 0;
     }
-    return push_color_value(L, finite_number(L, 1, "red") / 255.0,
-                            finite_number(L, 2, "green") / 255.0,
-                            finite_number(L, 3, "blue") / 255.0);
+    const double r=finite_number(L,1,"red"),g=finite_number(L,2,"green"),b=finite_number(L,3,"blue");
+    if(const auto* api=rust_color3_api()){Color result{};checked_rust_color(L,api->from_rgb(r,g,b,&result),"Color3 components must be finite");return push_color_value(L,result.r,result.g,result.b);}
+    return push_color_value(L,r/255.0,g/255.0,b/255.0);
 }
 
 Color hsv_to_rgb(double h, double s, double v) {
@@ -90,7 +115,9 @@ int color_from_hsv(lua_State* L) {
     const double h = finite_number(L, 1, "hue");
     const double s = finite_number(L, 2, "saturation");
     const double v = finite_number(L, 3, "value");
-    const Color rgb = hsv_to_rgb(h, s, v);
+    Color rgb{};
+    if(const auto* api=rust_color3_api()){checked_rust_color(L,api->from_hsv(h,s,v,&rgb),"Color3 components must be finite");}
+    else rgb=hsv_to_rgb(h,s,v);
     return push_color_value(L, rgb.r, rgb.g, rgb.b);
 }
 
@@ -104,6 +131,13 @@ int hex_nibble(char c) {
 int color_from_hex(lua_State* L) {
     size_t length = 0;
     const char* text = luaL_checklstring(L, 1, &length);
+    if(const auto* api=rust_color3_api()){
+        Color result{};
+        const int status=api->from_hex(reinterpret_cast<const uint8_t*>(text),length,&result);
+        if(status==2){luaL_error(L,"Color3.fromHex expects three or six hexadecimal digits");return 0;}
+        checked_rust_color(L,status,"Color3.fromHex expects hexadecimal digits");
+        return push_color_value(L,result.r,result.g,result.b);
+    }
     if (length && text[0] == '#') { ++text; --length; }
     std::array<int, 6> digits{};
     if (length == 3) {
@@ -143,6 +177,7 @@ int color_lerp(lua_State* L) {
     const auto* from = check_color(L, 1);
     const auto* to = check_color(L, 2);
     const double alpha = finite_number(L, 3, "alpha");
+    if(const auto* api=rust_color3_api()){Color result{};checked_rust_color(L,api->lerp(from,to,alpha,&result),"Color3 components must be finite");return push_color_value(L,result.r,result.g,result.b);}
     return push_color_value(L, from->r + (to->r - from->r) * alpha,
                             from->g + (to->g - from->g) * alpha,
                             from->b + (to->b - from->b) * alpha);
@@ -150,6 +185,7 @@ int color_lerp(lua_State* L) {
 
 int color_to_hsv(lua_State* L) {
     const auto* color = check_color(L, 1);
+    if(const auto* api=rust_color3_api()){double hsv[3]{};checked_rust_color(L,api->to_hsv(color,hsv),"Color3 components must be finite");lua_pushnumber(L,hsv[0]);lua_pushnumber(L,hsv[1]);lua_pushnumber(L,hsv[2]);return 3;}
     const double maximum = std::max({color->r, color->g, color->b});
     const double minimum = std::min({color->r, color->g, color->b});
     const double delta = maximum - minimum;
@@ -177,6 +213,7 @@ unsigned int channel_byte(double value) {
 
 int color_to_hex(lua_State* L) {
     const auto* color = check_color(L, 1);
+    if(const auto* api=rust_color3_api()){uint8_t hex[6]{};checked_rust_color(L,api->to_hex(color,hex),"Color3 components must be finite");lua_pushlstring(L,reinterpret_cast<const char*>(hex),sizeof(hex));return 1;}
     char text[7];
     std::snprintf(text, sizeof(text), "%02x%02x%02x", channel_byte(color->r),
                   channel_byte(color->g), channel_byte(color->b));
@@ -196,6 +233,7 @@ int color_equal(lua_State* L) {
     };
     const bool has_a = matches(1);
     const bool has_b = matches(2);
+    if(const auto* api=rust_color3_api()){lua_pushboolean(L,has_a&&has_b&&a&&b&&api->equal(a,b)==1);return 1;}
     lua_pushboolean(L, has_a && has_b && a && b && a->r == b->r && a->g == b->g && a->b == b->b);
     return 1;
 }

@@ -14,6 +14,22 @@ use std::{
 const REQUEST_LIMIT: usize = 608 * 1024 * 1024;
 const RESPONSE_LIMIT: usize = 1024 * 1024;
 
+#[derive(serde::Deserialize)]
+struct CommandHeader {
+    #[serde(default)]
+    op: Option<Value>,
+}
+
+fn closes_session(data: &[u8]) -> Result<bool, String> {
+    // The native engine validates the command body. These framing processes
+    // only need the operation: retaining a Value for a streamed world update
+    // duplicates its entire object tree in both the supervisor and VM worker.
+    // Unknown fields are still parsed/validated, but skipped without a DOM.
+    let header: CommandHeader =
+        serde_json::from_slice(data).map_err(|_| "invalid persistent request JSON")?;
+    Ok(header.op.as_ref().is_some_and(|op| op == "close"))
+}
+
 fn frame<R: BufRead>(reader: &mut R, limit: usize) -> Result<Option<Vec<u8>>, String> {
     let mut output = Vec::new();
     loop {
@@ -51,9 +67,7 @@ pub fn worker() -> Result<(), String> {
     let mut reader = input.lock();
     let mut session = native::Session::new();
     while let Some(data) = frame(&mut reader, REQUEST_LIMIT)? {
-        let command: Value =
-            serde_json::from_slice(&data).map_err(|_| "invalid persistent request JSON")?;
-        if command["op"] == "close" {
+        if closes_session(&data)? {
             emit(&json!({"ok":true,"values":[],"closed":true}))?;
             return Ok(());
         }
@@ -106,8 +120,7 @@ pub fn supervise() -> Result<(), String> {
     let source = io::stdin();
     let mut reader = source.lock();
     while let Some(data) = frame(&mut reader, REQUEST_LIMIT)? {
-        let command: Value =
-            serde_json::from_slice(&data).map_err(|_| "invalid persistent request JSON")?;
+        let closing = closes_session(&data)?;
         input
             .write_all(&data)
             .and_then(|_| input.write_all(b"\n"))
@@ -123,7 +136,7 @@ pub fn supervise() -> Result<(), String> {
             }
         };
         emit(&validate_result(&response, true)?)?;
-        if command["op"] == "close" {
+        if closing {
             return Ok(());
         }
     }
@@ -133,6 +146,16 @@ pub fn supervise() -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn operation_header_skips_world_fields_but_validates_json() {
+        assert!(closes_session(br#"{"snapshot":{"op":"update"},"op":"cl\u006fse"}"#).unwrap());
+        assert!(!closes_session(br#"{"op":"update","delta":{"actions":[{"op":"close"}]}}"#).unwrap());
+        assert!(!closes_session(br#"{"op":null,"source":"close"}"#).unwrap());
+        assert!(closes_session(br#"{"op":"update","delta":[invalid]}"#).is_err());
+        assert!(closes_session(br#"{"op":"close"} trailing"#).is_err());
+        let request = format!(r#"{{"op":"update","delta":{{"text":"{}"}}}}"#, "x".repeat(4 * 1024 * 1024));
+        assert!(!closes_session(request.as_bytes()).unwrap());
+    }
     #[test]
     fn frames_bound_size_and_require_terminators() {
         assert_eq!(

@@ -1,7 +1,7 @@
 // Included after the shared BindableEvent/BindableFunction value copier.
 void release_bindable_call(lua_State* L,World& w,BindableInvocation& call) {
     if(call.callee)w.scheduler->release_invocation(call.callee);
-    for(int ref:{call.caller_ref,call.arguments_ref,call.callback_ref})if(ref!=LUA_NOREF)lua_unref(L,ref);
+    for(int ref:{call.caller_ref,call.arguments_ref,call.callback_ref,call.creator_ref})if(ref!=LUA_NOREF)lua_unref(L,ref);
 }
 int invoke_bindable_continue(lua_State* L,int) {
     if(lua_type(L,1)!=LUA_TBOOLEAN){luaL_error(L,"BindableFunction resumed without a callback result");return 0;}
@@ -24,6 +24,7 @@ int invoke_bindable(lua_State* L) {
         auto bound=w.bindable_callbacks.find(call.node);
         if(bound!=w.bindable_callbacks.end()){
             lua_getref(L,bound->second.reference);call.callback_ref=lua_ref(L,-1);lua_pop(L,1);call.owner=bound->second.owner;call.identity=bound->second.identity;
+            lua_getref(L,bound->second.creator_ref);call.creator_ref=lua_ref(L,-1);lua_pop(L,1);
         }
         w.scheduler->wait_signal(L);w.bindable_invocations.push_back(call);
     }catch(const std::exception& e){release_bindable_call(L,w,call);luaL_error(L,"Invoke failed: %s",e.what());return 0;}
@@ -33,22 +34,25 @@ void set_bindable_callback(lua_State* L,World& w,Node& node) {
     if(node.destroyed)throw std::runtime_error("callback receiver is destroyed");
     if(!lua_isfunction(L,3)&&!lua_isnil(L,3))throw std::runtime_error("callback requires a function or nil");
     auto previous=w.bindable_callbacks.find(node.id);
-    int reference=LUA_NOREF;
-    if(!lua_isnil(L,3)){lua_pushvalue(L,3);reference=lua_ref(L,-1);lua_pop(L,1);}
-    if(previous!=w.bindable_callbacks.end()){lua_unref(L,previous->second.reference);w.bindable_callbacks.erase(previous);}
-    if(reference!=LUA_NOREF)w.bindable_callbacks.emplace(node.id,BindableCallback{reference,w.scheduler?w.scheduler->owner(L):"",SourceScheduler::identity(L)});
+    int reference=LUA_NOREF,creator=LUA_NOREF;
+    if(!lua_isnil(L,3)){
+        lua_pushvalue(L,3);reference=lua_ref(L,-1);lua_pop(L,1);
+        lua_pushthread(L);creator=lua_ref(L,-1);lua_pop(L,1);
+    }
+    if(previous!=w.bindable_callbacks.end()){lua_unref(L,previous->second.reference);lua_unref(L,previous->second.creator_ref);w.bindable_callbacks.erase(previous);}
+    if(reference!=LUA_NOREF)w.bindable_callbacks.emplace(node.id,BindableCallback{reference,w.scheduler?w.scheduler->owner(L):"",SourceScheduler::identity(L),creator});
 }
 void clear_owned_bindables(lua_State* L,World& w,const std::string& owner) {
     for(auto& call:w.remote_client_invocations)if(call.owner==owner&&(call.callee||call.callback_ref!=LUA_NOREF))call.cancelled=true;
     for(auto& call:w.bindable_invocations)if(call.owner==owner&&call.callback_ref!=LUA_NOREF)call.cancelled=true;
     for(auto it=w.bindable_callbacks.begin();it!=w.bindable_callbacks.end();){
-        if(it->second.owner==owner){lua_unref(L,it->second.reference);it=w.bindable_callbacks.erase(it);}else ++it;
+        if(it->second.owner==owner){lua_unref(L,it->second.reference);lua_unref(L,it->second.creator_ref);it=w.bindable_callbacks.erase(it);}else ++it;
     }
 }
 void dispatch_bindable_functions(lua_State* from,World& w,bool cleanup_callbacks=true) {
     for(auto it=w.bindable_callbacks.begin();cleanup_callbacks&&it!=w.bindable_callbacks.end();){
         auto* node=find_node(w,it->first);
-        if(!node||node->destroyed){lua_unref(from,it->second.reference);it=w.bindable_callbacks.erase(it);}else ++it;
+        if(!node||node->destroyed){lua_unref(from,it->second.reference);lua_unref(from,it->second.creator_ref);it=w.bindable_callbacks.erase(it);}else ++it;
     }
     for(auto it=w.bindable_invocations.begin();it!=w.bindable_invocations.end();) {
         auto& call=*it;
@@ -61,6 +65,7 @@ void dispatch_bindable_functions(lua_State* from,World& w,bool cleanup_callbacks
                 auto bound=w.bindable_callbacks.find(call.node);
                 if(bound==w.bindable_callbacks.end()){++it;continue;}
                 lua_getref(from,bound->second.reference);call.callback_ref=lua_ref(from,-1);lua_pop(from,1);call.owner=bound->second.owner;call.identity=bound->second.identity;
+                lua_getref(from,bound->second.creator_ref);call.creator_ref=lua_ref(from,-1);lua_pop(from,1);
             }
             if(w.scheduler->invocation_capacity()==0){++it;continue;}
             try {
@@ -68,7 +73,7 @@ void dispatch_bindable_functions(lua_State* from,World& w,bool cleanup_callbacks
                     lua_getref(target,call.arguments_ref);int table=lua_gettop(target);
                     for(int i=0;i<call.count;i++)lua_rawgeti(target,table,i+1);
                     lua_remove(target,table);return call.count;
-                },call.owner,call.identity);
+                },call.owner,call.identity,call.creator_ref);
                 lua_unref(from,call.arguments_ref);call.arguments_ref=LUA_NOREF;
                 lua_unref(from,call.callback_ref);call.callback_ref=LUA_NOREF;
             }catch(const std::exception& e){error=e.what();}

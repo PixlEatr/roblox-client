@@ -1,0 +1,23 @@
+{
+  "source": "scripts.remote_client_rpc.variant",
+  "vectors": [
+    {"value": null, "hex": "00"},
+    {"value": false, "hex": "0900"},
+    {"value": true, "hex": "0901"},
+    {"value": 1, "hex": "0c000000000000f03f"},
+    {"value": 1.5, "hex": "0c000000000000f83f"},
+    {"value": "hello", "hex": "020568656c6c6f"},
+    {"value": {"$vector3": [1.25, -2, 3]}, "hex": "160000a03f000000c000004040"},
+    {"value": {"$udim": [0.5, 8]}, "hex": "0d0000003f08000000"},
+    {"value": {"$brickcolor": 21}, "hex": "121500"},
+    {"value": {"$datetime": 0}, "hex": "300000000000000000"},
+    {"value": {"$buffer_hex": "00ff"}, "hex": "38000200ff"},
+    {"value": {"$cframe": {"position": [1, 2, 3], "rotation": [1, 0, 0, 0, 1, 0, 0, 0, 1]}}, "hex": "1b0000803f000000400000404002"},
+    {"value": {"$cframe": {"position": [1, 2, 3], "rotation": [0, 0, 1, 0, 1, 0, -1, 0, 0]}}, "hex": "1b0000803f000000400000404020"},
+    {"value": {"$udim2": [{"$udim": [0.5, 8]}, {"$udim": [1, -2]}]}, "hex": "0e0000003f080000000000803ffeffffff"},
+    {"value": {"$rect": [{"$vector2": [1, 2]}, {"$vector2": [3, 4]}]}, "hex": "280000803f000000400000404000008040"},
+    {"value": {"$remote_array": [null, 2, {"$vector2": [3, 4]}]}, "hex": "1e03000c0000000000000040150000404000008040"},
+    {"value": {"$remote_map": [["a", true], ["b", {"$remote_array": ["x"]}]]}, "hex": "1f020161090101621e01020178"},
+    {"value": {"$cframe": {"position": [0, 0, 0], "rotation": [0.7071067811865476, 0, 0.7071067811865476, 0, 1, 0, -0.7071067811865476, 0, 0.7071067811865476]}}, "hex": "1b000000000000000000000000000000000051d1"}
+  ]
+}

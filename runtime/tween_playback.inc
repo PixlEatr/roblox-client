@@ -3,6 +3,44 @@
 constexpr size_t kTweenLimit=256;
 constexpr size_t kTweenPropertyLimit=32;
 
+void record_tween_state(World& world,Node& node,const TweenPlaybackState& state,
+                        const char* command=nullptr);
+
+Json tween_playback_record(const TweenPlaybackState& t) {
+    return Json{{"version",1},{"target",t.target},{"goals",t.goals},{"starts",t.starts},
+        {"duration",t.duration},{"delay",t.delay},{"elapsed",t.elapsed},
+        {"style",t.style},{"direction",t.direction},{"repeats",t.repeats},
+        {"reverses",t.reverses},{"state",t.state}};
+}
+
+Node* tween_engine_node(World& w,const TweenPlaybackState& state) {
+    if(w.nodes.size()>=kMaxNodes+1000)throw std::runtime_error("local instance limit exceeded");
+    Node node;node.id=w.allocate_local_id();node.class_name="Tween";node.name="Tween";
+    node.server_owned=false;node.attributes.set_known(true);
+    node.properties["Archivable"]=true;
+    node.origins=Json{{"Archivable","class_default"},{"Name","local"},{"Parent","local"}};
+    Json create{{"kind","create"},{"node",node_record(node)}};
+    // A future Actor receives current engine state from ActorRuntime's
+    // snapshot, so root journals need the larger Tween payload only when
+    // there is already an Actor replica. Actor-originated creates always
+    // carry the state needed by their root and sibling replicas.
+    const bool needs_replay=!w.actor_id.empty()
+        ||(w.actor_runtime&&w.actor_runtime->actor_count()>0);
+    if(needs_replay)create["tween_playback"]=tween_playback_record(state);
+    std::vector<Json> entries{std::move(create)};
+    check_mutation_budget(w,entries);
+    auto inserted=w.nodes.emplace(node.id,std::move(node));
+    if(!inserted.second)throw std::runtime_error("local Tween ID collision");
+    w.order.push_back(inserted.first->first);
+    auto playback=w.tweens.emplace(inserted.first->first,state);
+    if(!playback.second) {
+        w.nodes.erase(inserted.first->first);w.order.pop_back();
+        throw std::runtime_error("local Tween playback ID collision");
+    }
+    append_mutations(w,std::move(entries));
+    return &inserted.first->second;
+}
+
 bool tween_active(const TweenPlaybackState& t){return t.state==1||t.state==2;}
 
 bool tween_numeric_tree(const Json& value,int depth=0) {
@@ -72,11 +110,18 @@ void tween_set(lua_State* L,World& w,Node& target,const std::string& key,const J
     }
     lua_settop(L,top);
 }
-void tween_state(World& w,Node& node,TweenPlaybackState& t,int state) {
-    if(t.state!=state){t.state=state;property_events(w,node,"PlaybackState");}
+void tween_state(World& w,Node& node,TweenPlaybackState& t,int state,
+                 const char* command=nullptr) {
+    if(t.state!=state){
+        TweenPlaybackState next=t;next.state=state;
+        record_tween_state(w,node,next,command);
+        t.state=state;property_events(w,node,"PlaybackState");
+    }
 }
-void tween_finished(lua_State* L,World& w,Node& node,TweenPlaybackState& t,int state) {
-    tween_state(w,node,t,state);
+void tween_finished(lua_State* L,World& w,Node& node,TweenPlaybackState& t,int state,
+                    bool publish=true,const char* command=nullptr) {
+    if(publish)tween_state(w,node,t,state,command);
+    else if(t.state!=state){t.state=state;property_events(w,node,"PlaybackState");}
     if(w.event_argument_refs.size()>=10000)throw std::runtime_error("Tween callback argument budget exceeded");
     lua_createtable(L,1,0);push_geometry_item(L,kTweenPlaybackState,state);lua_rawseti(L,-2,1);
     const int reference=lua_ref(L,-1);lua_pop(L,1);w.event_argument_refs.push_back(reference);
@@ -113,6 +158,9 @@ void tween_step(lua_State* L,World& w,Node& node,TweenPlaybackState& t,
     if(complete)tween_finished(L,w,node,t,4);
 }
 void advance_tweens(lua_State* L,World& w) {
+    // Actor worlds issue command/state mutations, while the root World owns
+    // every playback clock and property interpolation.
+    if(!w.actor_id.empty())return;
     const auto now=std::chrono::steady_clock::now();
     for(auto it=w.tweens.begin();it!=w.tweens.end();) {
         Node* node=find_node(w,it->first);
@@ -136,11 +184,16 @@ int tween_method(lua_State* L) {
         auto& t=found->second;
         const std::string method=lua_tostring(L,lua_upvalueindex(1));
         const auto now=std::chrono::steady_clock::now();
-        tween_step(L,w,*h->node,t,now,true);
+        // A mirror can issue API commands, but its owner's clock advances the
+        // shared target and publishes the resulting state transitions.
+        if(w.actor_id.empty())tween_step(L,w,*h->node,t,now,true);
         if(method=="Pause") {
             if(t.state==2)tween_state(w,*h->node,t,3);
         } else if(method=="Cancel") {
-            if(t.state!=0&&t.state!=5){t.elapsed=0;tween_finished(L,w,*h->node,t,5);}
+            if(t.state!=0&&t.state!=5){
+                t.elapsed=0;
+                tween_finished(L,w,*h->node,t,5,w.actor_id.empty());
+            }
         } else if(!tween_active(t)) {
             Node* target=find_node(w,t.target);
             if(!target)throw std::runtime_error("Tween target is unavailable");
@@ -160,6 +213,9 @@ int tween_method(lua_State* L) {
             }
             t.updated=now;tween_state(w,*h->node,t,t.elapsed<t.delay?1:2);
         }
+        // Treat each Actor API call as a command even when its local mirror
+        // already appears to be in that state. The root's clock is authoritative.
+        if(!w.actor_id.empty())record_tween_state(w,*h->node,t,method.c_str());
         return 0;
     }catch(const std::exception& error){luaL_error(L,"Tween playback failed: %s",error.what());return 0;}
 }
@@ -176,7 +232,7 @@ int tween_create(lua_State* L) {
         if(w.tweens.size()>=kTweenLimit)throw std::runtime_error("Tween instance budget exceeded");
         if(info->time>86400||info->delay_time>86400||info->repeat_count < -1)
             throw std::runtime_error("Tween duration/repeat count exceeds supported limits");
-        TweenPlaybackState state;state.target=target->node->id;state.goals=Json::object();
+        TweenPlaybackState state;state.target=target->node->id;state.goals=Json::object();state.starts=Json::object();
         state.duration=info->time;state.delay=info->delay_time;state.style=info->style;
         state.direction=info->direction;state.repeats=int(info->repeat_count);state.reverses=info->reverses;
         lua_pushnil(L);
@@ -194,8 +250,10 @@ int tween_create(lua_State* L) {
             if(key=="ClassName"||key=="JobId"||display_readonly_property(w,*target->node,key))throw std::runtime_error("Tween goal property is read-only");
             state.goals[key]=std::move(goal);lua_pop(L,1);
         }
-        Node* node=animation_node(w,"Tween","Tween");
-        w.tweens.emplace(node->id,std::move(state));push_node(L,w,node);return 1;
+        Node* node=tween_engine_node(w,state);
+        state.updated=std::chrono::steady_clock::now();
+        w.tweens[node->id].updated=state.updated;
+        push_node(L,w,node);return 1;
     }catch(const std::exception& error){luaL_error(L,"TweenService:Create failed: %s",error.what());return 0;}
 }
 bool tween_playback_index(lua_State* L,World& w,Node& node,const std::string& key) {

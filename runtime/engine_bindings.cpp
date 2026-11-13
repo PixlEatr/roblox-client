@@ -25,6 +25,8 @@ struct Runtime {
     // Independently measured through the public API in Studio 0.745:
     // the singleton's Instance.Name differs from its ClassName.
     Service settings{"GlobalBasicSettings", "UserSettings", "", nullptr, false, false, true};
+    Service global_settings{"GlobalSettings", "GlobalSettings", "", nullptr, false, false, true};
+    Service plugin_manager{"PluginManager", "PluginManager", "", nullptr, false, false, true};
     std::unordered_map<std::string, std::unique_ptr<Service>> services;
 };
 struct Handle { Service* value; };
@@ -85,6 +87,8 @@ int is_a(lua_State* L) {
         || std::strcmp(class_name, "Object") == 0;
     if (self->class_name == "DataModel" && std::strcmp(class_name, "ServiceProvider") == 0) result = true;
     if (self->class_name == "UserSettings" &&
+        (std::strcmp(class_name, "GenericSettings") == 0 || std::strcmp(class_name, "ServiceProvider") == 0)) result = true;
+    if (self->class_name == "GlobalSettings" &&
         (std::strcmp(class_name, "GenericSettings") == 0 || std::strcmp(class_name, "ServiceProvider") == 0)) result = true;
     if (self->class_name == "Workspace" &&
         (std::strcmp(class_name, "WorldRoot") == 0 || std::strcmp(class_name, "Model") == 0
@@ -170,6 +174,7 @@ void push_bound_method(lua_State* L, lua_CFunction fn, const char* name) {
     lua_pushvalue(L, lua_upvalueindex(1));
     lua_pushcclosurek(L, fn, name, 1, nullptr);
 }
+#include "missing_engine_globals.inc"
 int index_service(lua_State* L) {
     auto* h = handle(L, 1);
     if (!h || !h->value) { luaL_error(L, "invalid local Instance"); return 0; }
@@ -190,6 +195,13 @@ int index_service(lua_State* L) {
     else if (std::strcmp(key, "IsA") == 0) lua_pushcfunction(L, is_a, "IsA");
     else if (std::strcmp(key, "IsStudio") == 0 && self->is_run_service) lua_pushcfunction(L, is_studio, "IsStudio");
     else if (std::strcmp(key, "IsRunning") == 0 && self->is_run_service) lua_pushcfunction(L, is_running, "IsRunning");
+    else if (self->class_name == "GlobalSettings" && std::strcmp(key,"GetFFlag")==0)
+        lua_pushcfunction(L,global_settings_get_flag,"GetFFlag");
+    else if (self->class_name == "GlobalSettings" && std::strcmp(key,"GetFVariable")==0)
+        lua_pushcfunction(L,global_settings_get_variable,"GetFVariable");
+    else if (self->class_name == "PluginManager" &&
+             (std::strcmp(key,"CreatePlugin")==0||std::strcmp(key,"ExportPlace")==0||std::strcmp(key,"ExportSelection")==0))
+        lua_pushcfunction(L,plugin_manager_security_method,key);
     else lua_pushnil(L);
     return 1;
 }
@@ -246,5 +258,11 @@ void install_local_engine(lua_State* L, const LocalEngineContext& config) {
     lua_pushvalue(L, -1);
     lua_pushcclosurek(L, make_settings, "UserSettings", 1, nullptr);
     lua_setglobal(L, "UserSettings");
+    lua_pushvalue(L, -1);
+    lua_pushcclosurek(L, make_global_settings, "settings", 1, nullptr);
+    lua_setglobal(L, "settings");
+    lua_pushvalue(L, -1);
+    lua_pushcclosurek(L, make_plugin_manager, "PluginManager", 1, nullptr);
+    lua_setglobal(L, "PluginManager");
     lua_pop(L, 1);
 }

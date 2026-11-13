@@ -299,6 +299,7 @@ void queue_remote_client_invoke(lua_State* from,World& w,Node& node,const Json& 
     auto bound=w.bindable_callbacks.find(node.id);
     if(bound!=w.bindable_callbacks.end()) {
         lua_getref(from,bound->second.reference);call.callback_ref=lua_ref(from,-1);lua_pop(from,1);
+        lua_getref(from,bound->second.creator_ref);call.creator_ref=lua_ref(from,-1);lua_pop(from,1);
         call.owner=bound->second.owner;call.identity=bound->second.identity;
     }
     w.remote_client_invocations.push_back(std::move(call));
@@ -313,6 +314,7 @@ void dispatch_remote_client_functions(lua_State* from,World& w) {
                 auto bound=w.bindable_callbacks.find(call.node);
                 if(bound==w.bindable_callbacks.end()){++it;continue;}
                 lua_getref(from,bound->second.reference);call.callback_ref=lua_ref(from,-1);lua_pop(from,1);
+                lua_getref(from,bound->second.creator_ref);call.creator_ref=lua_ref(from,-1);lua_pop(from,1);
                 call.owner=bound->second.owner;call.identity=bound->second.identity;
             }
             if(w.scheduler->invocation_capacity()==0){++it;continue;}
@@ -320,7 +322,7 @@ void dispatch_remote_client_functions(lua_State* from,World& w) {
                 call.callee=w.scheduler->invoke_callback(from,call.callback_ref,[&](lua_State* target) {
                     for(const auto& value:call.arguments)push_remote_value(target,w,value);
                     return static_cast<int>(call.arguments.size());
-                },call.owner,call.identity);
+                },call.owner,call.identity,call.creator_ref);
                 lua_unref(from,call.callback_ref);call.callback_ref=LUA_NOREF;call.arguments=Json::array();
             }catch(const std::exception& e){call.error=e.what();}
         }
@@ -350,6 +352,7 @@ void dispatch_remote_client_functions(lua_State* from,World& w) {
         w.remote_client_replies.push_back(std::move(reply));
         if(call.callee)w.scheduler->release_invocation(call.callee);
         if(call.callback_ref!=LUA_NOREF)lua_unref(from,call.callback_ref);
+        if(call.creator_ref!=LUA_NOREF)lua_unref(from,call.creator_ref);
         it=w.remote_client_invocations.erase(it);
     }
 }

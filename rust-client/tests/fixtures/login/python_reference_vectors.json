@@ -1,0 +1,234 @@
+{
+  "synthetic_only": true,
+  "early_auth": {
+    "ticket": "synthetic;unused;AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8g;AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8gISIjJCUmJygpKissLS4vMDEyMzQ1Njc4OTo7PD0+P0BB;17",
+    "packet_hex": "a81121000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f2042000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f4041"
+  },
+  "feature_configuration": {
+    "packet_hex": "9300010007004578616d706c65040074727565",
+    "pairs": [
+      [
+        "Example",
+        "true"
+      ]
+    ]
+  },
+  "player_join_info_input": {
+    "UserId": 123,
+    "UserName": "synthetic",
+    "DisplayName": "Rōbot 🤖",
+    "HasVerifiedBadge": false,
+    "PartyId": "p",
+    "RandomSeed1": -4,
+    "VerifiedAMP": true,
+    "PrivateServerID": "private",
+    "PrivateServerOwnerID": 321,
+    "DomainUserId": "opaque-public-id",
+    "UserIdMode": 0,
+    "ServerClaimedTime": 12.5,
+    "APIsecurityToken": "synthetic-issued-token",
+    "Rm3Tier0CadenceSeconds": 2,
+    "ServerDMRecording": false,
+    "SuperSafeChat": true,
+    "MembershipType": 3,
+    "HasRobloxSubscription": false,
+    "AgeChecked": 7,
+    "AccountAge": 365,
+    "WhoCanWhisperChatWithMeInExperiences": 0,
+    "GameChatType": 1,
+    "CharacterAppearance": "appearance",
+    "FollowUserId": 0,
+    "MatchmakingAttributes": {
+      "region": "synthetic",
+      "flags": [
+        1,
+        false
+      ]
+    },
+    "ShowRobloxTranslations": false,
+    "TranslationDisplayMode": 0,
+    "ImageTranslationContentVariantType": 0,
+    "characterAppearanceId": 987,
+    "IsUnknownOrUnder13": false,
+    "CountryCode": "US",
+    "RobloxLocale": "en-us",
+    "UgcLocale": "en-us",
+    "RawJoinData": "raw",
+    "ClientJoinData": "client",
+    "GameJoinContext": "game",
+    "unused": "ignored"
+  },
+  "join_ticket": {
+    "synthetic": "unchanged",
+    "sequence": 2
+  },
+  "protocol_sync": {
+    "input_join": {
+      "UserId": 123,
+      "UserName": "synthetic",
+      "DisplayName": "Rōbot 🤖",
+      "HasVerifiedBadge": false,
+      "PartyId": "p",
+      "RandomSeed1": -4,
+      "VerifiedAMP": true,
+      "PrivateServerID": "private",
+      "PrivateServerOwnerID": 321,
+      "DomainUserId": "opaque-public-id",
+      "UserIdMode": 0,
+      "ServerClaimedTime": 12.5,
+      "APIsecurityToken": "synthetic-issued-token",
+      "Rm3Tier0CadenceSeconds": 2,
+      "ServerDMRecording": false,
+      "SuperSafeChat": true,
+      "MembershipType": 3,
+      "HasRobloxSubscription": false,
+      "AgeChecked": 7,
+      "AccountAge": 365,
+      "WhoCanWhisperChatWithMeInExperiences": 0,
+      "GameChatType": 1,
+      "CharacterAppearance": "appearance",
+      "FollowUserId": 0,
+      "MatchmakingAttributes": {
+        "region": "synthetic",
+        "flags": [
+          1,
+          false
+        ]
+      },
+      "ShowRobloxTranslations": false,
+      "TranslationDisplayMode": 0,
+      "ImageTranslationContentVariantType": 0,
+      "characterAppearanceId": 987,
+      "IsUnknownOrUnder13": false,
+      "CountryCode": "US",
+      "RobloxLocale": "en-us",
+      "UgcLocale": "en-us",
+      "RawJoinData": "raw",
+      "ClientJoinData": "client",
+      "GameJoinContext": "game",
+      "unused": "ignored"
+    },
+    "join_ticket": {
+      "synthetic": "unchanged",
+      "sequence": 2
+    },
+    "packet_hex": "9001240000000d0e0000fe087b22557365724964223a3132332c22557365724e616d65223a2273796e746865746963222c22446973706c61794e616d65223a2252c58d626f7420f09fa496222c2248617356657269666965644261646765223a66616c73652c2250617274794964223a2270222c2252616e646f6d5365656431223a2d342c225665726966696564414d50223a747275652c22507269766174655365727665724944223a2270726976617465222c22507269766174655365727665724f776e65724944223a3332312c22446f6d61696e557365724964223a226f70617175652d7075626c69632d6964222c225573657249644d6f6465223a302c22536572766572436c61696d656454696d65223a31322e352c224150497365637572697479546f6b656e223a2273796e7468657469632d6973737565642d746f6b656e222c22526d335469657230436164656e63655365636f6e6473223a322c22536572766572444d5265636f7264696e67223a66616c73652c2253757065725361666543686174223a747275652c224d656d6265727368697054797065223a332c22486173526f626c6f78537562736372697074696f6e223a66616c73652c22416765436865636b6564223a2237222c224163636f756e74416765223a3336352c2257686f43616e5768697370657243686174576974684d65496e457870657269656e636573223a302c2247616d654368617454797065223a312c22436861726163746572417070656172616e6365223a22617070656172616e6365222c22466f6c6c6f77557365724964223a302c224d617463686d616b696e6741747472696275746573223a7b22666c616773223a5b312c66616c73655d2c22726567696f6e223a2273796e746865746963227d2c2253686f77526f626c6f785472616e736c6174696f6e73223a66616c73652c225472616e736c6174696f6e446973706c61794d6f6465223a302c22496d6167655472616e736c6174696f6e436f6e74656e7456617269616e7454797065223a302c22436861726163746572417070656172616e63654964223a3938372c224973556e6465723133223a66616c73652c22436f756e747279526567696f6e436f6465223a225553222c224c6f63616c654964223a22656e2d7573222c224c6f63616c654964496e7465726e616c223a22656e2d7573222c22497354656c65706f72746564496e223a66616c73652c225672446576696365223a22222c22557365724167656e74537472223a22526f626c6f7850726f746f636f6c52657365617263682f302e3120286d61634f5329222c224f73506c6174666f726d223a224f5358222c224f73506c6174666f726d4e616d65223a224d61634f53222c22436c69656e74526f626c6f784368616e6e656c223a22222c225261774a6f696e44617461223a22726177222c22436c69656e744a6f696e44617461223a22636c69656e74222c2247616d654a6f696e436f6e74657874223a2267616d65222c225f5f6a6f696e5469636b6574223a227b5c2273657175656e63655c223a322c5c2273796e7468657469635c223a5c22756e6368616e6765645c227d227d5e1fcb85987b90bf9ea7b18a5e1fcb851660491178feefcb",
+    "player_info": {
+      "UserId": 123,
+      "UserName": "synthetic",
+      "DisplayName": "Rōbot 🤖",
+      "HasVerifiedBadge": false,
+      "PartyId": "p",
+      "RandomSeed1": -4,
+      "VerifiedAMP": true,
+      "PrivateServerID": "private",
+      "PrivateServerOwnerID": 321,
+      "DomainUserId": "opaque-public-id",
+      "UserIdMode": 0,
+      "ServerClaimedTime": 12.5,
+      "APIsecurityToken": "synthetic-issued-token",
+      "Rm3Tier0CadenceSeconds": 2,
+      "ServerDMRecording": false,
+      "SuperSafeChat": true,
+      "MembershipType": 3,
+      "HasRobloxSubscription": false,
+      "AgeChecked": "7",
+      "AccountAge": 365,
+      "WhoCanWhisperChatWithMeInExperiences": 0,
+      "GameChatType": 1,
+      "CharacterAppearance": "appearance",
+      "FollowUserId": 0,
+      "MatchmakingAttributes": {
+        "region": "synthetic",
+        "flags": [
+          1,
+          false
+        ]
+      },
+      "ShowRobloxTranslations": false,
+      "TranslationDisplayMode": 0,
+      "ImageTranslationContentVariantType": 0,
+      "CharacterAppearanceId": 987,
+      "IsUnder13": false,
+      "CountryRegionCode": "US",
+      "LocaleId": "en-us",
+      "LocaleIdInternal": "en-us",
+      "IsTeleportedIn": false,
+      "VrDevice": "",
+      "UserAgentStr": "RobloxProtocolResearch/0.1 (macOS)",
+      "OsPlatform": "OSX",
+      "OsPlatformName": "MacOS",
+      "ClientRobloxChannel": "",
+      "RawJoinData": "raw",
+      "ClientJoinData": "client",
+      "GameJoinContext": "game",
+      "__joinTicket": "{\"synthetic\":\"unchanged\",\"sequence\":2}"
+    },
+    "ranges": {
+      "v6": "90012400000006060000fd017b22557365724964223a3132332c22557365724e616d65223a2273796e746865746963222c22497354656c65706f72746564496e223a66616c73652c225672446576696365223a22222c22557365724167656e74537472223a22526f626c6f7850726f746f636f6c52657365617263682f302e3120286d61634f5329222c224f73506c6174666f726d223a224f5358222c224f73506c6174666f726d4e616d65223a224d61634f53222c22436c69656e74526f626c6f784368616e6e656c223a22222c225261774a6f696e44617461223a22222c22436c69656e744a6f696e44617461223a22222c2247616d654a6f696e436f6e74657874223a22227d5e1fcb85987b90bf9ea7b18a5e1fcb851660491178feefcb",
+      "v9": "90012400000009090000fd017b22557365724964223a3132332c22557365724e616d65223a2273796e746865746963222c22497354656c65706f72746564496e223a66616c73652c225672446576696365223a22222c22557365724167656e74537472223a22526f626c6f7850726f746f636f6c52657365617263682f302e3120286d61634f5329222c224f73506c6174666f726d223a224f5358222c224f73506c6174666f726d4e616d65223a224d61634f53222c22436c69656e74526f626c6f784368616e6e656c223a22222c225261774a6f696e44617461223a22222c22436c69656e744a6f696e44617461223a22222c2247616d654a6f696e436f6e74657874223a22227d5e1fcb85987b90bf9ea7b18a5e1fcb851660491178feefcb",
+      "v13_14": "9001240000000d0e0000fd017b22557365724964223a3132332c22557365724e616d65223a2273796e746865746963222c22497354656c65706f72746564496e223a66616c73652c225672446576696365223a22222c22557365724167656e74537472223a22526f626c6f7850726f746f636f6c52657365617263682f302e3120286d61634f5329222c224f73506c6174666f726d223a224f5358222c224f73506c6174666f726d4e616d65223a224d61634f53222c22436c69656e74526f626c6f784368616e6e656c223a22222c225261774a6f696e44617461223a22222c22436c69656e744a6f696e44617461223a22222c2247616d654a6f696e436f6e74657874223a22227d5e1fcb85987b90bf9ea7b18a5e1fcb851660491178feefcb"
+    }
+  },
+  "ticket": {
+    "hash_empty_seed0": 46947589,
+    "checksum_vectors": [
+      [
+        0,
+        2126276933
+      ],
+      [
+        1,
+        2705179358
+      ],
+      [
+        305419896,
+        142237176
+      ],
+      [
+        2147483647,
+        2942384042
+      ],
+      [
+        2147483648,
+        1710407009
+      ],
+      [
+        4294967295,
+        1680253933
+      ]
+    ],
+    "build_identifier": "2c2d778eadb4263fc76bf47d2f3f6717eb2afe41!5e989e8c1f7ba753cb90b13385bf8a61.",
+    "join": {
+      "UserId": 123,
+      "ClientTicket": "synthetic-issued-ticket",
+      "SessionId": "synthetic-session"
+    },
+    "packet_hex": "8af6011773796e7468657469632d6973737565642d7469636b6574240000004a326332643737386561646234323633666337366266343764326633663637313765623261666534312135653938396538633166376261373533636239306231333338356266386136312e034f5358013faacfd4039def9ca60f001173796e7468657469632d73657373696f6efeca01c0"
+  },
+  "server_id": {
+    "packet_hex": "8f00"
+  },
+  "signed_int_vectors": [
+    [
+      0,
+      "00"
+    ],
+    [
+      -1,
+      "01"
+    ],
+    [
+      1,
+      "02"
+    ],
+    [
+      -9223372036854775808,
+      "ffffffffffffffffff01"
+    ],
+    [
+      9223372036854775807,
+      "feffffffffffffffff01"
+    ]
+  ]
+}

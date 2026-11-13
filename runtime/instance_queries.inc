@@ -142,9 +142,9 @@ class Engine {
         case Filter::Tag:return collection_has(node,filter.name);
         case Filter::Property:return property(node,filter);
         case Filter::Attribute:{
-            const auto it=node.attributes.find(filter.name);
-            if(it!=node.attributes.end())return !it->is_null()&&(!filter.equality||*it==filter.value);
-            if(!node.attributes_known)throw std::runtime_error("query attribute state is unavailable in this snapshot");
+            const auto value=node.attributes.lookup(filter.name);
+            if(value)return !value->is_null()&&(!filter.equality||*value==filter.value);
+            if(!node.attributes.known())throw std::runtime_error("query attribute state is unavailable in this snapshot");
             return false;
         }
         case Filter::Not:return !matches_list(node,*filter.nested,scope);

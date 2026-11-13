@@ -1,9 +1,17 @@
 R"LOCALWORKSPACE(
+local assetBridge=...
+local workspaceAssetUri=type(assetBridge)=="table" and assetBridge.uri or nil
+local registerWorkspaceAsset=type(assetBridge)=="table" and assetBridge.register or nil
+local updateWorkspaceFile=type(assetBridge)=="table" and assetBridge.update or nil
+local resolveWorkspaceAsset=type(assetBridge)=="table" and assetBridge.resolve or nil
 local files, folders = {}, {[""]=true}
 local bytes, entries = 0, 0
 local FILE_LIMIT, TOTAL_LIMIT, ENTRY_LIMIT = 100*1024*1024, 256*1024*1024, 512
 local MIN_FILE_LIMIT, MIN_TOTAL_LIMIT = 128*1024, 1024*1024
 local MAX_FILE_LIMIT, MAX_TOTAL_LIMIT = 100*1024*1024, 256*1024*1024
+local function encodeAssetComponent(value)
+    return (value:gsub("[^%w%-%._~/]",function(c)return string.format("%%%02X",string.byte(c))end))
+end
 local blockedExtensions={}
 for extension in ("exe com scr pif cpl msc bat cmd ps1 psd1 vbs vbe js jse wsf wsh hta scf lnk zip rar 7z cab iso img xml msi msp reg inf url"):gmatch("%S+") do
     blockedExtensions[extension]=true
@@ -94,6 +102,7 @@ function writefile(p,data)
     assert(entries+#pending+(files[p]==nil and 1 or 0)<=ENTRY_LIMIT,"workspace entry limit exceeded")
     for _,sub in pending do folders[sub]=true;entries+=1 end
     reserve(p);files[p]=data;bytes=size
+    if updateWorkspaceFile then updateWorkspaceFile(p,data) end
 end
 function appendfile(p,data)
     p=path(p);assert(type(data)=="string","file contents must be a string")
@@ -109,12 +118,16 @@ end
 function delfile(p)
     p=path(p);assert(files[p]~=nil,"file does not exist")
     bytes-=#files[p];files[p]=nil;entries-=1
+    if updateWorkspaceFile then updateWorkspaceFile(p,nil) end
 end
 function delfolder(p)
     p=path(p);assert(p~="","cannot delete workspace root");assert(folders[p],"folder does not exist")
     local prefix=p.."/"
     for name,value in files do
-        if name:sub(1,#prefix)==prefix then bytes-=#value;files[name]=nil;entries-=1 end
+        if name:sub(1,#prefix)==prefix then
+            bytes-=#value;files[name]=nil;entries-=1
+            if updateWorkspaceFile then updateWorkspaceFile(name,nil) end
+        end
     end
     for name in folders do
         if name==p or name:sub(1,#prefix)==prefix then folders[name]=nil;entries-=1 end
@@ -127,12 +140,22 @@ runfile=dofile
 local assets={}
 function getcustomasset(p)
     p=path(p);assert(files[p]~=nil,"asset file does not exist")
-    local uri="rbxasset://workspace/"..p:gsub("[^%w%-%._~/]",function(c)return string.format("%%%02X",string.byte(c))end)
-    assets[uri]=p;return uri
+    local uri=workspaceAssetUri and workspaceAssetUri(p)
+        or "rbxasset://workspace/"..encodeAssetComponent(p)
+    if registerWorkspaceAsset then
+        local ok,err=pcall(registerWorkspaceAsset,p,uri,files[p])
+        if not ok then assets[uri]=nil;error(err,2) end
+    end
+    assets[uri]=p
+    return uri
 end
 function getcustomassetdata(uri)
-    assert(type(uri)=="string" and assets[uri],"unknown workspace asset")
-    return readfile(assets[uri])
+    assert(type(uri)=="string","unknown workspace asset")
+    local p=assets[uri]
+    if p then return readfile(p) end
+    local bytes=resolveWorkspaceAsset and resolveWorkspaceAsset(uri)
+    assert(bytes~=nil,"unknown workspace asset")
+    return bytes
 end
 function identifyexecutor() return "Roblox Client Research", "local-vm-1" end
 getexecutorname=identifyexecutor

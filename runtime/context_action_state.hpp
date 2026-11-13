@@ -8,8 +8,10 @@
 namespace world_bindings {
 struct ContextHotkey {std::string kind,text;int value=0;};
 struct ContextActionBinding {
-    std::string name,owner;int callback=LUA_NOREF,priority=2000,identity=8;
+    std::string name,owner;int callback=LUA_NOREF,creator_ref=LUA_NOREF,priority=2000,identity=8;
     uint64_t sequence=0;bool active=true,touch_button=false;
+    std::string button_id;
+    nlohmann::json position={{"$udim2",nlohmann::json::array({{{"$udim",{0,0}}},{{"$udim",{0,0}}}})}};
     std::vector<ContextHotkey> inputs;
     nlohmann::json metadata=nlohmann::json::object();
 };
